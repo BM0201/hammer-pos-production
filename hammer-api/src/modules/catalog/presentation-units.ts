@@ -10,14 +10,27 @@
  * un número sin etiqueta.
  */
 
+/**
+ * Abreviaturas que usaba el alta de producto viejo \u2192 la palabra que usa el
+ * resto del cat\u00e1logo. "UN" y "UNIDAD" son la misma unidad: tratarlas como
+ * distintas dejaba pasar dos presentaciones "iguales" en una fusi\u00f3n y
+ * part\u00eda el cat\u00e1logo en dos vocabularios.
+ */
+export const LEGACY_UNIT_ALIASES: Record<string, string> = {
+  UN: "UNIDAD", UND: "UNIDAD", U: "UNIDAD",
+  KG: "KILO", LB: "LIBRA", L: "LITRO", LT: "LITRO", GAL: "GALON",
+  M: "METRO", M2: "METRO CUADRADO", M3: "METRO CUBICO", QQ: "QUINTAL",
+};
+
 /** Normaliza para COMPARAR. No es lo que se guarda ni lo que se muestra. */
 export function normalizePresentationUnit(value: string): string {
-  return value
+  const normalized = value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
     .replace(/\s+/g, " ")
     .trim();
+  return LEGACY_UNIT_ALIASES[normalized] ?? normalized;
 }
 
 /** Normaliza para GUARDAR: mismo criterio, y es la forma canónica en DB. */

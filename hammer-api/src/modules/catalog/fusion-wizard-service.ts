@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import {
   createStockGroupRowsTx,
+  updateStockGroupTx,
   type CreateStockGroupInput,
 } from "@/modules/catalog/stock-group-crud";
 import {
@@ -394,6 +395,76 @@ export async function createFusionGroupTx(
   }
 
   return { groupId: createdGroup.id, groupCode: createdGroup.code, branches: results };
+}
+
+export type PresentationOfInput = {
+  /** Producto ya existente del que el nuevo es otra presentación. */
+  baseProductId: string;
+  /** Unidad de venta del producto nuevo (ej. QUINTAL). */
+  saleUnit: string;
+  /** 1 saleUnit del nuevo = factor × la unidad del producto base (ej. 1 QUINTAL = 14 VARILLA). */
+  factor: number;
+};
+
+/** El factor que pide el alta es contra el producto ELEGIDO; la fusión lo guarda contra la base (canónico). */
+export function factorAgainstCanonical(factor: number, baseMember: { conversionFactor: number } | null): number {
+  return baseMember ? factor * baseMember.conversionFactor : factor;
+}
+
+/**
+ * Alta "como presentación de otro producto" — corre dentro de la misma
+ * transacción que crea el producto: o quedan los dos, o ninguno. El
+ * producto nuevo nace sin stock, así que no hay conflicto de existencias
+ * que resolver (el motivo por el que agregar a una fusión existente solo
+ * acepta productos sin stock).
+ */
+export async function attachNewProductAsPresentationTx(
+  tx: Prisma.TransactionClient,
+  input: PresentationOfInput & { newProductId: string; actorUserId: string },
+) {
+  if (!Number.isFinite(input.factor) || input.factor <= 0) {
+    throw new Error("VALIDATION_ERROR: El factor de la presentación debe ser mayor que 0.");
+  }
+  const base = await tx.product.findUnique({ where: { id: input.baseProductId }, select: { id: true, name: true, unit: true, isActive: true } });
+  if (!base?.isActive) throw new Error("VALIDATION_ERROR: El producto base no existe o está inactivo.");
+
+  const membership = await tx.productStockGroupMember.findFirst({
+    where: { productId: base.id, isActive: true, stockGroup: { isActive: true } },
+    include: { stockGroup: { include: { products: { where: { isActive: true } } } } },
+  });
+
+  if (membership) {
+    const existing = membership.stockGroup.products.map((m) => ({
+      productId: m.productId,
+      saleUnit: m.saleUnit,
+      conversionFactor: Number(m.conversionFactor),
+      isCanonical: m.isCanonical,
+      isPackagePresentation: m.isPackagePresentation,
+    }));
+    await updateStockGroupTx(tx, membership.stockGroupId, {
+      members: [
+        ...existing,
+        {
+          productId: input.newProductId,
+          saleUnit: input.saleUnit,
+          conversionFactor: factorAgainstCanonical(input.factor, { conversionFactor: Number(membership.conversionFactor) }),
+          isCanonical: false,
+          isPackagePresentation: false,
+        },
+      ],
+    }, input.actorUserId);
+    return { stockGroupId: membership.stockGroupId, created: false };
+  }
+
+  const result = await createFusionGroupTx(tx, {
+    name: base.name,
+    actorUserId: input.actorUserId,
+    members: [
+      { productId: base.id, saleUnit: base.unit, conversionFactor: 1, isCanonical: true },
+      { productId: input.newProductId, saleUnit: input.saleUnit, conversionFactor: input.factor, isCanonical: false },
+    ],
+  });
+  return { stockGroupId: result.groupId, created: true };
 }
 
 export async function createFusionGroup(input: CreateFusionGroupInput) {

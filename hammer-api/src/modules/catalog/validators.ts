@@ -23,6 +23,12 @@ export const createProductSchema = z.object({
   allowsFraction: z.boolean().default(false),
   standardSalePrice: z.coerce.number().positive(),
   isTimber: z.boolean().default(false),
+  // Nace como otra presentación de un producto existente (ej. QUINTAL de una VARILLA).
+  presentationOf: z.object({
+    baseProductId: z.string().cuid(),
+    saleUnit: z.string().min(1).max(32),
+    factor: z.coerce.number().positive(),
+  }).optional(),
 });
 
 export const updateProductSchema = z.object({

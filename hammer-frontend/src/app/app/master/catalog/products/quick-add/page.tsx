@@ -19,6 +19,7 @@ import { useCameraAvailable } from "@/lib/client/use-camera-available";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { printProductLabels } from "@/lib/client/print-product-labels";
 import { money, qty } from "@/lib/format";
+import { COMMON_PRESENTATION_UNITS } from "@/lib/inventory/presentation-units";
 import {
   decideScanStep,
   shouldIgnoreRepeatedCode,
@@ -49,25 +50,6 @@ import {
 
 type Category = { id: string; code: string; name: string; isActive: boolean };
 
-// Mismo listado que el alta manual (catalog-inventory-admin.tsx) — unidades
-// fijas del catálogo, no texto libre.
-const UNIT_OPTIONS = [
-  { value: "UN", label: "UN — Unidad" },
-  { value: "KG", label: "KG — Kilogramo" },
-  { value: "LB", label: "LB — Libra" },
-  { value: "M", label: "M — Metro" },
-  { value: "M2", label: "M2 — Metro cuadrado" },
-  { value: "M3", label: "M3 — Metro cúbico" },
-  { value: "L", label: "L — Litro" },
-  { value: "GAL", label: "GAL — Galón" },
-  { value: "BOLSA", label: "BOLSA" },
-  { value: "SACO", label: "SACO" },
-  { value: "ROLLO", label: "ROLLO" },
-  { value: "CAJA", label: "CAJA" },
-  { value: "PAR", label: "PAR" },
-  { value: "JUEGO", label: "JUEGO" },
-];
-
 type SessionRow = {
   id: string;
   name: string;
@@ -94,7 +76,7 @@ function defaultForm(remembered: RememberedProductDefaults | null): FormState {
     sku: "",
     showSkuField: false,
     categoryId: remembered?.categoryId ?? "",
-    unit: remembered?.unit ?? "UN",
+    unit: remembered?.unit ?? "UNIDAD",
     standardSalePrice: "",
     allowsFraction: remembered?.allowsFraction ?? false,
   };
@@ -606,10 +588,12 @@ function QuickAddProductContent() {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-bold" style={{ color: "var(--color-text-secondary)" }}>Unidad</label>
-              <select className="hm-input h-11" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })}>
-                {UNIT_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-              </select>
+              <label htmlFor="quick-add-unit" className="mb-1 block text-xs font-bold" style={{ color: "var(--color-text-secondary)" }}>Se vende por</label>
+              {/* La misma lista que el alta manual y las fusiones (presentation-units.ts). */}
+              <input id="quick-add-unit" list="quick-add-units" className="hm-input h-11 uppercase" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="UNIDAD, QUINTAL, METRO…" />
+              <datalist id="quick-add-units">
+                {COMMON_PRESENTATION_UNITS.map((u) => <option key={u} value={u} />)}
+              </datalist>
             </div>
             <Input
               label="Precio de venta *"

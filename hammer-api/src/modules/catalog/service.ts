@@ -15,6 +15,8 @@ import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, typ
 import { aggregateWeightedAverageCost } from "@/modules/catalog/stock-group-crud";
 import { getVisibleProductIdsForBranch } from "@/modules/catalog/branch-visible-products-cache";
 import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
+import { canonicalizePresentationUnit } from "@/modules/catalog/presentation-units";
+import { attachNewProductAsPresentationTx, type PresentationOfInput } from "@/modules/catalog/fusion-wizard-service";
 
 /**
  * "el precio de venta no se mueva solo" — umbral de desvío contra el precio
@@ -741,6 +743,7 @@ export async function createProduct(input: {
   allowsFraction: boolean;
   standardSalePrice: number;
   isTimber: boolean;
+  presentationOf?: PresentationOfInput;
   actorUserId: string;
 }) {
   const category = await prisma.category.findUnique({
@@ -781,7 +784,8 @@ export async function createProduct(input: {
           name: input.name.trim(),
           description: input.description ?? null,
           categoryId: input.categoryId,
-          unit: input.unit.trim(),
+          // Como presentación, su unidad ES la de venta en la fusión.
+          unit: canonicalizePresentationUnit(input.presentationOf?.saleUnit ?? input.unit),
           allowsFraction: input.allowsFraction,
           standardSalePrice: new Prisma.Decimal(input.standardSalePrice),
           isTimber: input.isTimber,
@@ -793,13 +797,16 @@ export async function createProduct(input: {
           tx,
         );
       }
+      if (input.presentationOf) {
+        await attachNewProductAsPresentationTx(tx, { ...input.presentationOf, newProductId: created.id, actorUserId: input.actorUserId });
+      }
       try {
         await refreshProductStateTx(tx, [created.id]);
       } catch {
         // Nunca debe tumbar el alta real.
       }
       return created;
-    });
+    }, input.presentationOf ? { timeout: 20000, maxWait: 10000 } : undefined); // mismo margen que editar una fusión (rebuild por sucursal)
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" && isBarcodeUniqueViolation(error) && input.barcode) {
       const existing = await prisma.product.findUnique({
@@ -923,7 +930,7 @@ export async function updateProduct(productId: string, input: {
 }) {
   const previous = await prisma.product.findUnique({
     where: { id: productId },
-    select: { id: true, sku: true, categoryId: true, category: { select: { name: true } }, standardSalePrice: true, globalCost: true },
+    select: { id: true, sku: true, unit: true, categoryId: true, category: { select: { name: true } }, standardSalePrice: true, globalCost: true },
   });
   if (!previous) throw new Error("NOT_FOUND");
   // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — leído una vez,
@@ -932,6 +939,19 @@ export async function updateProduct(productId: string, input: {
   // (que compara contra el WAC — sin sentido dejarlo activo si el WAC ya
   // no es la fuente de verdad, ver Parte 2 del prompt).
   const wacEnabled = await isWacDrivesCostChainEnabled();
+
+  // En una fusión la unidad es la "se vende por" del miembro (y Product.unit
+  // la refleja): cambiarla solo acá volvería a separar los dos valores.
+  const nextUnit = input.unit !== undefined ? canonicalizePresentationUnit(input.unit) : undefined;
+  if (nextUnit !== undefined && nextUnit !== previous.unit) {
+    const member = await prisma.productStockGroupMember.findFirst({
+      where: { productId, isActive: true, stockGroup: { isActive: true } },
+      select: { stockGroup: { select: { name: true } } },
+    });
+    if (member) {
+      throw new Error(`VALIDATION_ERROR: Este producto está en la fusión "${member.stockGroup.name}" — su unidad se cambia desde Presentaciones, donde se edita junto con el factor.`);
+    }
+  }
 
   // "el ultimo costo que se meta es el que gana en las fusiones... con las
   // derivadas y la factorización equivalente al producto se ajuste" — el
@@ -1150,7 +1170,7 @@ export async function updateProduct(productId: string, input: {
         name: input.name?.trim(),
         description: input.description,
         categoryId: input.categoryId,
-        unit: input.unit?.trim(),
+        unit: nextUnit,
         allowsFraction: input.allowsFraction,
         standardSalePrice: standardSalePriceForRequested,
         isActive: input.isActive,

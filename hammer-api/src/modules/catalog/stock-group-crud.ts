@@ -1145,101 +1145,162 @@ export async function createStockGroupRowsTx(
       },
     });
   }
+  await syncMemberProductUnitsTx(tx, input.members);
 
   return { group: createdGroup, canonical };
 }
 
-export async function updateStockGroup(id: string, input: UpdateStockGroupInput, actorUserId: string) {
-  const group = await prisma.$transaction(async (tx) => {
-    const current = await tx.productStockGroup.findUnique({ where: { id } });
-    if (!current) throw new Error("NOT_FOUND: Fusión no encontrada.");
+/**
+ * Product.unit de cada miembro = su unidad de venta en la fusión. Eran dos
+ * campos que divergían (en producción: producto "UNIDAD" vendido por
+ * "QUINTAL") — la fusión manda, el producto la refleja.
+ */
+async function syncMemberProductUnitsTx(tx: Prisma.TransactionClient, members: StockGroupMemberInput[]) {
+  for (const member of members) {
+    await tx.product.update({ where: { id: member.productId }, data: { unit: canonicalizePresentationUnit(member.saleUnit) } });
+  }
+}
 
-    const data: Prisma.ProductStockGroupUpdateInput = {};
-    if (typeof input.name === "string" && input.name.trim()) data.name = input.name.trim();
-    if (typeof input.isActive === "boolean") data.isActive = input.isActive;
-    if (typeof input.packageUnit !== "undefined")
-      data.packageUnit = input.packageUnit?.trim().toUpperCase() || null;
-    if (typeof input.conversionFactorToBase !== "undefined") {
-      data.conversionFactorToBase =
-        input.conversionFactorToBase === null
-          ? null
-          : new Prisma.Decimal(input.conversionFactorToBase);
+/**
+ * Agregar un producto a una fusión que YA existe pasa por rebuild, que SUMA
+ * su stock al canónico sin preguntar — si ese stock era la misma mercadería
+ * contada en otra unidad (el caso hierro: 8 quintales = 112 varillas), queda
+ * contado dos veces. Solo se permite agregar productos sin stock; con stock,
+ * el asistente de creación es el que pregunta qué hacer en cada sucursal.
+ */
+export function findAddedMembersWithStock(
+  addedProductIds: string[],
+  balances: Array<{ productId: string; branchCode: string; quantityOnHand: number }>,
+): Array<{ productId: string; branchCode: string; quantityOnHand: number }> {
+  const added = new Set(addedProductIds);
+  return balances.filter((b) => added.has(b.productId) && b.quantityOnHand !== 0);
+}
+
+export async function updateStockGroupTx(tx: Prisma.TransactionClient, id: string, input: UpdateStockGroupInput, actorUserId: string) {
+  const current = await tx.productStockGroup.findUnique({
+    where: { id },
+    include: { products: { where: { isActive: true }, select: { productId: true, isCanonical: true } } },
+  });
+  if (!current) throw new Error("NOT_FOUND: Fusión no encontrada.");
+
+  const data: Prisma.ProductStockGroupUpdateInput = {};
+  if (typeof input.name === "string" && input.name.trim()) data.name = input.name.trim();
+  if (typeof input.isActive === "boolean") data.isActive = input.isActive;
+  if (typeof input.packageUnit !== "undefined")
+    data.packageUnit = input.packageUnit?.trim().toUpperCase() || null;
+  if (typeof input.conversionFactorToBase !== "undefined") {
+    data.conversionFactorToBase =
+      input.conversionFactorToBase === null
+        ? null
+        : new Prisma.Decimal(input.conversionFactorToBase);
+  }
+  if (typeof input.tracksPackages === "boolean") data.tracksPackages = input.tracksPackages;
+  if (typeof input.approximateFactor === "boolean") data.approximateFactor = input.approximateFactor;
+  if (typeof input.minimumClosedPackageReserve !== "undefined") {
+    data.minimumClosedPackageReserve = new Prisma.Decimal(input.minimumClosedPackageReserve ?? 1);
+  }
+  if (typeof input.autoOpenForUnitSale === "boolean") data.autoOpenForUnitSale = input.autoOpenForUnitSale;
+
+  let needsRebuild = false;
+
+  if (input.members) {
+    const canonical = validateMembers(input.members);
+    validatePackageSettings({
+      tracksPackages: input.tracksPackages ?? current.tracksPackages,
+      packageUnit: input.packageUnit ?? current.packageUnit,
+      conversionFactorToBase:
+        input.conversionFactorToBase ??
+        (current.conversionFactorToBase ? Number(current.conversionFactorToBase) : null),
+      minimumClosedPackageReserve:
+        input.minimumClosedPackageReserve ?? Number(current.minimumClosedPackageReserve),
+      members: input.members,
+    });
+    data.baseUnit = canonicalizePresentationUnit(canonical.saleUnit);
+    await assertProductsAvailable(tx, input.members, id);
+
+    // Quitar la base dejaría el stock consolidado en un producto que ya no
+    // está en la fusión — eso es desfusionar, que reasigna el stock.
+    const currentCanonicalId = current.products.find((m) => m.isCanonical)?.productId;
+    if (currentCanonicalId && !input.members.some((m) => m.productId === currentCanonicalId)) {
+      throw new Error("VALIDATION_ERROR: No se puede quitar la unidad base de la fusión. Para separarla usá Desfusionar.");
     }
-    if (typeof input.tracksPackages === "boolean") data.tracksPackages = input.tracksPackages;
-    if (typeof input.approximateFactor === "boolean") data.approximateFactor = input.approximateFactor;
-    if (typeof input.minimumClosedPackageReserve !== "undefined") {
-      data.minimumClosedPackageReserve = new Prisma.Decimal(input.minimumClosedPackageReserve ?? 1);
-    }
-    if (typeof input.autoOpenForUnitSale === "boolean") data.autoOpenForUnitSale = input.autoOpenForUnitSale;
 
-    let needsRebuild = false;
-
-    if (input.members) {
-      const canonical = validateMembers(input.members);
-      validatePackageSettings({
-        tracksPackages: input.tracksPackages ?? current.tracksPackages,
-        packageUnit: input.packageUnit ?? current.packageUnit,
-        conversionFactorToBase:
-          input.conversionFactorToBase ??
-          (current.conversionFactorToBase ? Number(current.conversionFactorToBase) : null),
-        minimumClosedPackageReserve:
-          input.minimumClosedPackageReserve ?? Number(current.minimumClosedPackageReserve),
-        members: input.members,
+    const currentIds = new Set(current.products.map((m) => m.productId));
+    const addedIds = input.members.map((m) => m.productId).filter((productId) => !currentIds.has(productId));
+    if (addedIds.length > 0) {
+      const addedBalances = await tx.inventoryBalance.findMany({
+        where: { productId: { in: addedIds } },
+        select: { productId: true, quantityOnHand: true, branch: { select: { code: true } }, product: { select: { sku: true } } },
       });
-      data.baseUnit = canonicalizePresentationUnit(canonical.saleUnit);
-      await assertProductsAvailable(tx, input.members, id);
-
-      const keepProductIds = new Set(input.members.map((m) => m.productId));
-      await tx.productStockGroupMember.updateMany({
-        where: { stockGroupId: id, productId: { notIn: Array.from(keepProductIds) } },
-        data: { isActive: false, isCanonical: false },
-      });
-
-      for (const member of input.members) {
-        await tx.productStockGroupMember.upsert({
-          where: { stockGroupId_productId: { stockGroupId: id, productId: member.productId } },
-          create: {
-            stockGroupId: id,
-            productId: member.productId,
-            saleUnit: canonicalizePresentationUnit(member.saleUnit),
-            conversionFactor: new Prisma.Decimal(member.conversionFactor),
-            isCanonical: member.isCanonical,
-            // Fusión triple: idem createStockGroupRowsTx — se respeta la
-            // bandera explícita, no se fuerza a todo no-canónico.
-            isPackagePresentation: Boolean(member.isPackagePresentation),
-          },
-          update: {
-            saleUnit: canonicalizePresentationUnit(member.saleUnit),
-            conversionFactor: new Prisma.Decimal(member.conversionFactor),
-            isCanonical: member.isCanonical,
-            isPackagePresentation: Boolean(member.isPackagePresentation),
-            isActive: true,
-          },
-        });
+      const withStock = findAddedMembersWithStock(
+        addedIds,
+        addedBalances.map((b) => ({ productId: b.productId, branchCode: b.branch.code, quantityOnHand: Number(b.quantityOnHand) })),
+      );
+      if (withStock.length > 0) {
+        const skuById = new Map(addedBalances.map((b) => [b.productId, b.product.sku]));
+        const detail = withStock.map((b) => `${skuById.get(b.productId)} (${b.quantityOnHand} en ${b.branchCode})`).join(", ");
+        throw new Error(
+          `VALIDATION_ERROR: Solo se pueden agregar productos sin stock a una fusión existente: ${detail}. ` +
+          "Dejá ese stock en 0 (ajuste o traslado) antes de agregarlo, para no contar la misma mercadería dos veces.",
+        );
       }
-      needsRebuild = true;
     }
 
-    // Structural changes that affect how stock is read also require a rebuild
-    const structuralChange =
-      typeof input.tracksPackages === "boolean" ||
-      typeof input.conversionFactorToBase !== "undefined" ||
-      typeof input.packageUnit !== "undefined";
-    if (structuralChange) needsRebuild = true;
+    const keepProductIds = new Set(input.members.map((m) => m.productId));
+    await tx.productStockGroupMember.updateMany({
+      where: { stockGroupId: id, productId: { notIn: Array.from(keepProductIds) } },
+      data: { isActive: false, isCanonical: false },
+    });
 
-    const updatedGroup = await tx.productStockGroup.update({ where: { id }, data });
-
-    if (needsRebuild) {
-      await rebuildStockGroupBalancesTx(tx, {
-        stockGroupId: id,
-        actorUserId,
-        reason: "Stock group update — members or structural settings changed",
-        mode: "UPDATE",
+    for (const member of input.members) {
+      await tx.productStockGroupMember.upsert({
+        where: { stockGroupId_productId: { stockGroupId: id, productId: member.productId } },
+        create: {
+          stockGroupId: id,
+          productId: member.productId,
+          saleUnit: canonicalizePresentationUnit(member.saleUnit),
+          conversionFactor: new Prisma.Decimal(member.conversionFactor),
+          isCanonical: member.isCanonical,
+          // Fusión triple: idem createStockGroupRowsTx — se respeta la
+          // bandera explícita, no se fuerza a todo no-canónico.
+          isPackagePresentation: Boolean(member.isPackagePresentation),
+        },
+        update: {
+          saleUnit: canonicalizePresentationUnit(member.saleUnit),
+          conversionFactor: new Prisma.Decimal(member.conversionFactor),
+          isCanonical: member.isCanonical,
+          isPackagePresentation: Boolean(member.isPackagePresentation),
+          isActive: true,
+        },
       });
     }
+    await syncMemberProductUnitsTx(tx, input.members);
+    needsRebuild = true;
+  }
 
-    return updatedGroup;
-  }, { timeout: 20000, maxWait: 10000 });
+  // Structural changes that affect how stock is read also require a rebuild
+  const structuralChange =
+    typeof input.tracksPackages === "boolean" ||
+    typeof input.conversionFactorToBase !== "undefined" ||
+    typeof input.packageUnit !== "undefined";
+  if (structuralChange) needsRebuild = true;
+
+  const updatedGroup = await tx.productStockGroup.update({ where: { id }, data });
+
+  if (needsRebuild) {
+    await rebuildStockGroupBalancesTx(tx, {
+      stockGroupId: id,
+      actorUserId,
+      reason: "Stock group update — members or structural settings changed",
+      mode: "UPDATE",
+    });
+  }
+
+  return updatedGroup;
+}
+
+export async function updateStockGroup(id: string, input: UpdateStockGroupInput, actorUserId: string) {
+  const group = await prisma.$transaction((tx) => updateStockGroupTx(tx, id, input, actorUserId), { timeout: 20000, maxWait: 10000 });
 
   await logAuditEvent({
     actorUserId,

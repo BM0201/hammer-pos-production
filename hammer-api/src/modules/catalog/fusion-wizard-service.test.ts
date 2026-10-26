@@ -60,6 +60,8 @@ function createWizardFakeTx(balancesInit: Array<{ branchId: string; productId: s
     product: {
       findMany: async (args: { where: { id: { in: string[] } } }) =>
         args.where.id.in.map((id) => ({ id, name: id, sku: id })),
+      // syncMemberProductUnitsTx — Product.unit refleja la unidad de venta del miembro.
+      update: async (args: { where: { id: string }; data: { unit: string } }) => ({ id: args.where.id, unit: args.data.unit }),
     },
     branch: {
       findMany: async () => branches,

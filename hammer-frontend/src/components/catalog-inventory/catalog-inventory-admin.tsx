@@ -22,6 +22,7 @@ import { tokenize } from "@/lib/product-search";
 import { formatSharedStock } from "@/lib/inventory/shared-stock-format";
 import { UNDO_WINDOW_MS, type BarcodeKind } from "@/lib/barcode-manager-logic";
 import { useInventoryScope } from "@/hooks/use-inventory-scope";
+import { COMMON_PRESENTATION_UNITS, normalizePresentationUnit } from "@/lib/inventory/presentation-units";
 
 // Fase 5 (prompt-flujo-velocidad.md): FusionPricingPanel solo se monta con
 // la pestaña "fusion" activa (línea ~1568) — carga diferida para que su
@@ -605,7 +606,7 @@ export function CatalogInventoryAdmin() {
 
   /* ── Inline edit state for product rows ── */
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState({ name: "", categoryId: "", sku: "", applySuggestedSku: false });
+  const [editDraft, setEditDraft] = useState({ name: "", categoryId: "", sku: "", unit: "", applySuggestedSku: false });
   const [editSkuPreview, setEditSkuPreview] = useState("");
   const [savingProduct, setSavingProduct] = useState(false);
   const [generatingSku, setGeneratingSku] = useState(false);
@@ -770,12 +771,12 @@ export function CatalogInventoryAdmin() {
   /* ── Inline product edit handlers ── */
   function startEditing(product: ProductRow) {
     setEditingProductId(product.id);
-    setEditDraft({ name: product.name, categoryId: product.category?.id ?? "", sku: product.sku, applySuggestedSku: false });
+    setEditDraft({ name: product.name, categoryId: product.category?.id ?? "", sku: product.sku, unit: product.unit, applySuggestedSku: false });
     setEditSkuPreview("");
   }
   function cancelEditing() {
     setEditingProductId(null);
-    setEditDraft({ name: "", categoryId: "", sku: "", applySuggestedSku: false });
+    setEditDraft({ name: "", categoryId: "", sku: "", unit: "", applySuggestedSku: false });
     setEditSkuPreview("");
   }
 
@@ -861,6 +862,8 @@ export function CatalogInventoryAdmin() {
       const body: Record<string, unknown> = {};
       if (editDraft.name.trim() !== product.name) body.name = editDraft.name.trim();
       if (editDraft.categoryId && editDraft.categoryId !== product.category?.id) body.categoryId = editDraft.categoryId;
+      // En una fusión la unidad se edita desde Presentaciones (el servidor también lo exige).
+      if (!product.stockConversion && editDraft.unit.trim() && normalizePresentationUnit(editDraft.unit) !== normalizePresentationUnit(product.unit)) body.unit = editDraft.unit.trim();
       if (editDraft.applySuggestedSku && editSkuPreview) {
         const hasHistory = product.totalStock !== 0 || product.inventoryBalances.length > 0;
         if (hasHistory) {
@@ -883,7 +886,7 @@ export function CatalogInventoryAdmin() {
       });
       if (!response.ok) {
         const json = await response.json().catch(() => null);
-        throw new Error(json?.message ?? "No se pudo actualizar el producto.");
+        throw new Error(json?.error?.message ?? json?.message ?? "No se pudo actualizar el producto.");
       }
       toast.success("Producto actualizado");
       cancelEditing();
@@ -901,11 +904,30 @@ export function CatalogInventoryAdmin() {
     name: "",
     sku: "",
     categoryId: "",
-    unit: "UN",
+    unit: "UNIDAD",
     standardSalePrice: "",
     description: "",
     allowsFraction: false,
   });
+  const [presentation, setPresentation] = useState<{ enabled: boolean; base: { id: string; sku: string; name: string; unit: string } | null; factor: string }>({ enabled: false, base: null, factor: "" });
+  const [baseSearch, setBaseSearch] = useState("");
+  const [baseResults, setBaseResults] = useState<Array<{ id: string; sku: string; name: string; unit: string }>>([]);
+  // Busca en el servidor (no en la página de 50 cargada) — mismo endpoint que el asistente de fusión.
+  useEffect(() => {
+    const term = baseSearch.trim();
+    if (!term) { setBaseResults([]); return; }
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      apiFetch(`/api/catalog/products?isActive=true&limit=20&q=${encodeURIComponent(term)}`, { signal: controller.signal })
+        .then((r) => r.json())
+        .then((raw) => {
+          const list = unwrapApiData(raw);
+          setBaseResults(Array.isArray(list) ? list.map((p: { id: string; sku: string; name: string; unit: string }) => ({ id: p.id, sku: p.sku, name: p.name, unit: p.unit })) : []);
+        })
+        .catch(() => {});
+    }, 300);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [baseSearch]);
   const [creating, setCreating] = useState(false);
   const [skuPreview, setSkuPreview] = useState("");
   const [skuStatus, setSkuStatus] = useState<"idle" | "checking" | "available" | "taken">("idle");
@@ -985,6 +1007,18 @@ export function CatalogInventoryAdmin() {
       toast.error("El SKU ingresado ya existe. Cambialo o déjalo vacío para generar automáticamente.");
       return;
     }
+    if (!newProduct.unit.trim()) {
+      toast.error("Indicá por qué unidad se vende (UNIDAD, QUINTAL, METRO…).");
+      return;
+    }
+    if (presentation.enabled) {
+      if (!presentation.base) { toast.error("Elegí el producto del que este es otra presentación."); return; }
+      if (!(Number(presentation.factor) > 0)) { toast.error(`Indicá cuántas ${presentation.base.unit} trae 1 ${newProduct.unit.toUpperCase()}.`); return; }
+      if (normalizePresentationUnit(newProduct.unit) === normalizePresentationUnit(presentation.base.unit)) {
+        toast.error(`Las dos presentaciones no pueden venderse por la misma unidad (${presentation.base.unit}).`);
+        return;
+      }
+    }
     setCreating(true);
     try {
       const response = await apiFetch("/api/catalog/products", {
@@ -994,18 +1028,22 @@ export function CatalogInventoryAdmin() {
           name: newProduct.name.trim(),
           sku: newProduct.sku.trim() || undefined,
           categoryId: newProduct.categoryId,
-          unit: newProduct.unit || "UN",
+          unit: newProduct.unit.trim(),
           standardSalePrice: Number(newProduct.standardSalePrice),
           description: newProduct.description.trim() || undefined,
           allowsFraction: newProduct.allowsFraction,
+          presentationOf: presentation.enabled && presentation.base
+            ? { baseProductId: presentation.base.id, saleUnit: newProduct.unit.trim(), factor: Number(presentation.factor) }
+            : undefined,
         }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         throw new Error(body?.error?.message ?? body?.message ?? "No se pudo crear el producto.");
       }
-      toast.success("Producto creado exitosamente.");
-      setNewProduct({ name: "", sku: "", categoryId: "", unit: "UN", standardSalePrice: "", description: "", allowsFraction: false });
+      toast.success(presentation.enabled ? "Producto creado y fusionado como presentación." : "Producto creado exitosamente.");
+      setNewProduct({ name: "", sku: "", categoryId: "", unit: "UNIDAD", standardSalePrice: "", description: "", allowsFraction: false });
+      setPresentation({ enabled: false, base: null, factor: "" });
       setSkuPreview("");
       setSkuStatus("idle");
       setShowCreateForm(false);
@@ -1110,6 +1148,10 @@ export function CatalogInventoryAdmin() {
 
   return (
     <section className="space-y-5">
+      {/* Sugerencias de unidad para el alta y la edición en fila (presentation-units.ts). */}
+      <datalist id="catalog-units">
+        {COMMON_PRESENTATION_UNITS.map((u) => <option key={u} value={u} />)}
+      </datalist>
       {/* ── Encabezado plano ── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -1284,27 +1326,15 @@ export function CatalogInventoryAdmin() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-[var(--color-text-secondary)] mb-1">Unidad</label>
-                  <select
-                    className="hm-input w-full"
+                  <label htmlFor="new-product-unit" className="block text-xs font-bold text-[var(--color-text-secondary)] mb-1">Se vende por *</label>
+                  <input
+                    id="new-product-unit"
+                    list="catalog-units"
+                    className="hm-input w-full uppercase"
                     value={newProduct.unit}
                     onChange={(e) => setNewProduct({ ...newProduct, unit: e.target.value })}
-                  >
-                    <option value="UN">UN — Unidad</option>
-                    <option value="KG">KG — Kilogramo</option>
-                    <option value="LB">LB — Libra</option>
-                    <option value="M">M — Metro</option>
-                    <option value="M2">M2 — Metro cuadrado</option>
-                    <option value="M3">M3 — Metro cúbico</option>
-                    <option value="L">L — Litro</option>
-                    <option value="GAL">GAL — Galón</option>
-                    <option value="BOLSA">BOLSA</option>
-                    <option value="SACO">SACO</option>
-                    <option value="ROLLO">ROLLO</option>
-                    <option value="CAJA">CAJA</option>
-                    <option value="PAR">PAR</option>
-                    <option value="JUEGO">JUEGO</option>
-                  </select>
+                    placeholder="UNIDAD, QUINTAL, METRO, LITRO…"
+                  />
                 </div>
                 <Input
                   label="Precio inicial (sucursal principal) *"
@@ -1333,6 +1363,73 @@ export function CatalogInventoryAdmin() {
                   />
                   Permite fracciones (venta por peso/medida)
                 </label>
+              </div>
+              {/* Nace fusionado: el producto nuevo es otra forma de vender un
+                  producto que ya existe (el QUINTAL de una VARILLA) y comparte
+                  su inventario — antes había que crearlo suelto y armar la
+                  fusión aparte en Presentaciones. */}
+              <div className="space-y-2.5 rounded-lg border border-[var(--color-border)] p-3">
+                <label className="inline-flex cursor-pointer select-none items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-gray-300"
+                    checked={presentation.enabled}
+                    onChange={(e) => setPresentation({ ...presentation, enabled: e.target.checked })}
+                  />
+                  Es otra presentación de un producto que ya existe (ej. el QUINTAL de una VARILLA)
+                </label>
+                {presentation.enabled && (
+                  <>
+                    {presentation.base ? (
+                      <div className="flex items-center justify-between gap-2 rounded-lg bg-[var(--color-surface-alt)] px-3 py-2 text-sm">
+                        <span><span className="font-mono text-xs text-[var(--color-text-muted)]">{presentation.base.sku}</span> {presentation.base.name} <span className="text-[var(--color-text-muted)]">· se vende por {presentation.base.unit}</span></span>
+                        <button type="button" className="text-xs font-semibold text-[var(--color-info-600)] hover:underline" onClick={() => setPresentation({ ...presentation, base: null })}>Cambiar</button>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <input
+                          className="hm-input w-full"
+                          value={baseSearch}
+                          onChange={(e) => setBaseSearch(e.target.value)}
+                          placeholder="Buscar el producto que ya existe (SKU o nombre)…"
+                          aria-label="Producto que ya existe"
+                        />
+                        {baseResults.length > 0 && (
+                          <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-lg">
+                            {baseResults.map((p) => (
+                              <button
+                                type="button"
+                                key={p.id}
+                                onClick={() => { setPresentation({ ...presentation, base: p }); setBaseSearch(""); setBaseResults([]); }}
+                                className="flex w-full items-center gap-2 border-b border-[var(--color-border)] px-2.5 py-2 text-left text-xs last:border-b-0 hover:bg-[var(--color-surface-alt)]"
+                              >
+                                <span className="min-w-[4.5rem] font-mono text-[var(--color-text-muted)]">{p.sku}</span>
+                                <span className="flex-1 truncate">{p.name}</span>
+                                <span className="text-[var(--color-text-soft)]">{p.unit}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <label className="flex flex-wrap items-center gap-1.5 text-sm">
+                      1 <b>{newProduct.unit.trim().toUpperCase() || "…"}</b> =
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        className="hm-input h-8 w-24 text-right"
+                        value={presentation.factor}
+                        onChange={(e) => setPresentation({ ...presentation, factor: e.target.value })}
+                        aria-label="Cuántas unidades del producto base trae"
+                      />
+                      <b>{presentation.base?.unit ?? "…"}</b>
+                    </label>
+                    <p className="text-xs text-[var(--color-text-muted)]">
+                      Nace sin stock propio: se vende descontando del inventario de {presentation.base?.name ?? "ese producto"}.
+                    </p>
+                  </>
+                )}
               </div>
               <div className="flex gap-3 border-t border-[var(--color-border)] pt-4">
                 <Button variant="success" onClick={handleCreateProduct} disabled={creating || skuStatus === "taken"} icon={<Save className="h-4 w-4" />}>
@@ -1589,7 +1686,24 @@ export function CatalogInventoryAdmin() {
                         </select>
                       ) : product.category?.name ?? "Sin categoria"}
                     </td>
-                    <td>{product.stockConversion?.saleUnit ?? product.unit}</td>
+                    <td>
+                      {isEditing && !product.stockConversion ? (
+                        <input
+                          list="catalog-units"
+                          className="hm-input h-8 w-32 text-xs uppercase"
+                          value={editDraft.unit}
+                          onChange={(e) => setEditDraft({ ...editDraft, unit: e.target.value })}
+                          aria-label="Se vende por"
+                        />
+                      ) : (
+                        product.stockConversion?.saleUnit ?? product.unit
+                      )}
+                      {isEditing && product.stockConversion ? (
+                        <Link href={"/app/master/inventory-fusion" as Route} className="mt-1 block text-[0.68rem] font-medium text-[var(--color-info-600)] hover:underline">
+                          En fusión: cambiar en Presentaciones
+                        </Link>
+                      ) : null}
+                    </td>
                     <td>
                       <div>{sharedStock?.primary ?? qty(product.totalStock)}</div>
                       {sharedStock ? (

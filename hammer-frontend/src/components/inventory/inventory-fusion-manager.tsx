@@ -48,6 +48,7 @@ type FusionGroup = {
   conversionFactorToBase?: number | null;
   tracksPackages?: boolean;
   approximateFactor?: boolean;
+  autoOpenForUnitSale?: boolean;
   displayConversionFactor?: number | null;
   branchStocks: BranchStockRow[];
   isActive: boolean;
@@ -925,15 +926,17 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
   );
 }
 
-/* ─────────────────────────── Editar presentaciones (Fase 3 — recarga) ─────────────────────────── */
+/* ─────────────────────────── Editar fusión (Fase 3 — recarga) ─────────────────────────── */
 //
 // Reutiliza FusionMemberRow, el mismo campo "unidad + factor" del paso 1 del
 // asistente, con la misma validación (validateMembers ya la exige en el
-// backend; acá se repite para no dejar pasar el POST y volver con un error
-// genérico). No agrega ni quita miembros — para eso ya existen Desfusionar y
-// el asistente de creación; esto es específicamente para corregir la unidad
-// y el factor de una fusión que ya existe pero quedó mal cargada (el bug de
-// piedrín: cuatro productos con unit="UNIDAD").
+// backend; acá se repite para no dejar pasar el PUT y volver con un error
+// genérico). Edita TODO lo que el PUT ya aceptaba y antes no tenía pantalla:
+// nombre de la fusión, empaques (cerrado/suelto, unidad, factor aproximado,
+// abrir solo) y qué productos la forman. Agregar solo acepta productos SIN
+// stock — el backend lo exige: con stock, sumarlo a ciegas al canónico
+// podría contar dos veces la misma mercadería (para eso está el asistente,
+// que pregunta por sucursal). La base no se quita acá: eso es Desfusionar.
 
 type EditMemberDraft = { productId: string; sku: string; name: string; saleUnit: string; conversionFactor: number; isCanonical: boolean; isPackagePresentation: boolean };
 
@@ -949,18 +952,36 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
       isPackagePresentation: Boolean(m.isPackagePresentation),
     })),
   );
+  const [groupName, setGroupName] = useState(group.name);
+  const [tracksPackages, setTracksPackages] = useState(Boolean(group.tracksPackages));
+  const [packageUnit, setPackageUnit] = useState(group.packageUnit ?? "");
+  const [approximateFactor, setApproximateFactor] = useState(Boolean(group.approximateFactor));
+  const [autoOpenForUnitSale, setAutoOpenForUnitSale] = useState(group.autoOpenForUnitSale ?? true);
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState<ProductLite[]>([]);
   const [saving, setSaving] = useState(false);
 
   const canonical = members.find((m) => m.isCanonical) ?? null;
+  const packageMember = members.find((m) => !m.isCanonical && m.isPackagePresentation) ?? null;
+  const originalCanonicalId = group.members.find((m) => m.isCanonical)?.productId ?? null;
 
-  function updateUnit(productId: string, value: string) {
-    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, saleUnit: value } : m)));
-  }
-  function updateFactor(productId: string, value: number) {
-    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, conversionFactor: value } : m)));
-  }
-  function updateName(productId: string, value: string) {
-    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, name: value } : m)));
+  useEffect(() => {
+    if (!search.trim()) { setResults([]); return; }
+    const handle = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/catalog/products?isActive=true&limit=20&q=${encodeURIComponent(search.trim())}`);
+        const raw = await readJson(res);
+        const list = unwrapApiData(raw);
+        setResults(Array.isArray(list) ? list.map((p: ProductLite) => ({ id: p.id, sku: p.sku, name: p.name, unit: p.unit })) : []);
+      } catch {
+        setResults([]);
+      }
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [search]);
+
+  function patchMember(productId: string, patch: Partial<EditMemberDraft>) {
+    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, ...patch } : m)));
   }
   function markAsBase(productId: string) {
     // Mismo criterio que en la creación: cambiar la base invalida los
@@ -968,7 +989,7 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
     // que ya no significan lo mismo.
     setMembers((prev) => prev.map((m) => (
       m.productId === productId
-        ? { ...m, isCanonical: true, conversionFactor: 1 }
+        ? { ...m, isCanonical: true, conversionFactor: 1, isPackagePresentation: false }
         : { ...m, isCanonical: false, conversionFactor: 0 }
     )));
   }
@@ -978,28 +999,46 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
       return prev.map((m) => (m.isCanonical ? m : { ...m, isPackagePresentation: !alreadyMarked && m.productId === productId }));
     });
   }
+  function addProduct(product: ProductLite) {
+    if (members.some((m) => m.productId === product.id)) {
+      showToast("info", "Ese producto ya está en la fusión.");
+      return;
+    }
+    // Factor en 0: la validación obliga a cargarlo a mano (ver addProduct del asistente).
+    setMembers((prev) => [...prev, { productId: product.id, sku: product.sku, name: product.name, saleUnit: product.unit ?? "", conversionFactor: 0, isCanonical: false, isPackagePresentation: false }]);
+    setSearch("");
+    setResults([]);
+  }
+  function removeMember(productId: string) {
+    setMembers((prev) => prev.filter((m) => m.productId !== productId));
+  }
 
   const collisions = findUnitCollisions(members);
   const duplicateFactors = findDuplicateFactors(members);
   const missingUnit = members.some((m) => !m.saleUnit.trim());
   const missingFactor = members.some((m) => !m.isCanonical && !(m.conversionFactor > 0));
-  const canSave = collisions.length === 0 && !missingUnit && !missingFactor;
+  const packageIncomplete = tracksPackages && (!packageMember || !(packageUnit.trim() || packageMember.saleUnit.trim()));
+  const canSave = members.length >= 2 && Boolean(groupName.trim()) && collisions.length === 0 && !missingUnit && !missingFactor && !packageIncomplete;
 
   async function save() {
     if (!canSave) {
-      if (collisions.length > 0) showToast("error", `Dos presentaciones no pueden venderse por la misma unidad (${collisions[0].unit}). Cambiá una.`);
+      if (members.length < 2) showToast("error", "Una fusión necesita al menos 2 presentaciones. Para separarla del todo usá Desfusionar.");
+      else if (!groupName.trim()) showToast("error", "Ingresá un nombre para la fusión.");
+      else if (collisions.length > 0) showToast("error", `Dos presentaciones no pueden venderse por la misma unidad (${collisions[0].unit}). Cambiá una.`);
       else if (missingUnit) showToast("error", "Cada presentación necesita su unidad de venta.");
-      else showToast("error", "Cada presentación necesita un factor de conversión mayor que 0.");
+      else if (missingFactor) showToast("error", "Cada presentación necesita un factor de conversión mayor que 0.");
+      else showToast("error", "Marcá cuál presentación es el empaque cerrado e indicá su unidad.");
       return;
     }
     // El nombre (Catálogo, Product.name) y la unidad/factor de venta (esta
     // fusión, ProductStockGroupMember) son y siguen siendo dos campos
-    // independientes — no hay ningún camino donde uno alimente al otro, y
-    // no se agrega ninguno acá. Lo que se corrige es tener que ir a DOS
-    // pantallas distintas para arreglar UNA presentación mal cargada (el
-    // caso real: "220 Paladas" con el nombre y el factor equivocados a la
-    // vez) — cada campo se guarda con su propio endpoint, sin mezclarse.
-    const renamed = members.filter((m) => m.name.trim() !== (group.members.find((gm) => gm.productId === m.productId)?.productName ?? ""));
+    // independientes — cada uno se guarda con su propio endpoint, sin
+    // mezclarse (el caso real: "220 Paladas" con el nombre y el factor
+    // equivocados a la vez, sin tener que ir a dos pantallas).
+    const renamed = members.filter((m) => {
+      const original = group.members.find((gm) => gm.productId === m.productId);
+      return original && m.name.trim() !== original.productName;
+    });
     if (renamed.some((m) => !m.name.trim())) {
       showToast("error", "El nombre de un producto no puede quedar vacío.");
       return;
@@ -1029,18 +1068,24 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          name: groupName.trim(),
+          tracksPackages,
+          packageUnit: tracksPackages ? (packageUnit.trim() || packageMember?.saleUnit || null) : null,
+          conversionFactorToBase: tracksPackages ? (packageMember?.conversionFactor ?? null) : null,
+          approximateFactor: tracksPackages ? approximateFactor : false,
+          autoOpenForUnitSale: tracksPackages ? autoOpenForUnitSale : false,
           members: members.map((m) => ({
             productId: m.productId,
             saleUnit: m.saleUnit,
             conversionFactor: m.conversionFactor,
             isCanonical: m.isCanonical,
-            isPackagePresentation: group.tracksPackages && m.isPackagePresentation,
+            isPackagePresentation: tracksPackages && m.isPackagePresentation,
           })),
         }),
       });
       const raw = await readJson(res);
       if (!res.ok) { showToast("error", raw?.error?.message ?? "No se pudo guardar la fusión."); return; }
-      showToast("success", "Presentaciones actualizadas.");
+      showToast("success", "Fusión actualizada.");
       onSaved();
     } catch {
       showToast("error", "Error de red al guardar.");
@@ -1050,12 +1095,14 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
   }
 
   return (
-    <ModalShell title={`Editar presentaciones — ${group.name}`} onClose={onClose} wide>
+    <ModalShell title={`Editar fusión — ${group.name}`} onClose={onClose} wide>
       <div className="space-y-4">
-        <p className="text-[12.5px] text-[var(--color-text-muted)]">
-          Corregí el nombre, la unidad de venta y el factor de cada presentación. No agrega ni quita productos de la fusión.
-        </p>
+        <Input label="Nombre de la fusión" value={groupName} onChange={(e) => setGroupName(e.target.value)} />
+
         <div className="space-y-2">
+          <p className="text-[12.5px] text-[var(--color-text-muted)]">
+            Presentaciones: nombre, unidad de venta y factor de cada una. Para quitar la unidad base usá Desfusionar.
+          </p>
           {members.map((m) => (
             <FusionMemberRow
               key={m.productId}
@@ -1066,16 +1113,32 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
               isCanonical={m.isCanonical}
               isPackagePresentation={m.isPackagePresentation}
               canonicalSaleUnit={canonical?.saleUnit ?? ""}
-              onUnitChange={(value) => updateUnit(m.productId, value)}
-              onFactorChange={(value) => updateFactor(m.productId, value)}
+              onUnitChange={(value) => patchMember(m.productId, { saleUnit: value })}
+              onFactorChange={(value) => patchMember(m.productId, { conversionFactor: value })}
               onMarkBase={() => markAsBase(m.productId)}
               onTogglePackage={() => togglePackage(m.productId)}
-              onNameChange={(value) => updateName(m.productId, value)}
+              onNameChange={(value) => patchMember(m.productId, { name: value })}
+              onRemove={m.productId === originalCanonicalId || m.isCanonical ? undefined : () => removeMember(m.productId)}
             />
           ))}
           <datalist id="presentation-units">
             {COMMON_PRESENTATION_UNITS.map((u) => <option key={u} value={u} />)}
           </datalist>
+          <div className="relative">
+            <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-soft)]">
+              <Search className="h-4 w-4" />
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Agregar otra presentación (producto sin stock)…" className="w-full bg-transparent outline-none" />
+            </div>
+            {results.length > 0 && (
+              <div className="absolute z-10 mt-1 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-lg">
+                {results.map((p) => (
+                  <button key={p.id} type="button" onClick={() => addProduct(p)} className="block w-full px-3 py-2 text-left text-[12.5px] hover:bg-[var(--color-surface-alt)]">
+                    <b>{p.sku}</b> — {p.name} <span className="text-[var(--color-text-soft)]">({p.unit})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {duplicateFactors.map((dup) => (
@@ -1083,6 +1146,34 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
             ⚠ Hay {dup.productIds.length} presentaciones con el mismo factor ({dup.factor}). Revisá que sea correcto antes de guardar.
           </p>
         ))}
+
+        <div className="space-y-2 rounded-lg border border-[var(--color-border)] p-3">
+          <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-secondary)]">
+            <input type="checkbox" checked={tracksPackages} onChange={(e) => setTracksPackages(e.target.checked)} />
+            Maneja empaques cerrados/sueltos (el sistema controla cajas cerradas + unidades sueltas por separado)
+          </label>
+          {tracksPackages && (
+            <>
+              <Input
+                label="Unidad de empaque (nombre a mostrar, ej. KILO, CAJA)"
+                value={packageUnit || packageMember?.saleUnit || ""}
+                onChange={(e) => setPackageUnit(e.target.value)}
+                placeholder="Ej: KILO, CAJA"
+              />
+              {!packageMember && (
+                <p className="text-[11.5px] text-[var(--color-warning-700)]">⚠ Marcá arriba cuál presentación es el empaque cerrado.</p>
+              )}
+              <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-secondary)]">
+                <input type="checkbox" checked={approximateFactor} onChange={(e) => setApproximateFactor(e.target.checked)} />
+                Algún factor es aproximado (ej. peso promedio por unidad) — al abrir cada empaque se registran las unidades reales
+              </label>
+              <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-secondary)]">
+                <input type="checkbox" checked={autoOpenForUnitSale} onChange={(e) => setAutoOpenForUnitSale(e.target.checked)} />
+                Abrir empaque automáticamente cuando el POS venda sueltas y no haya suficientes
+              </label>
+            </>
+          )}
+        </div>
 
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>Cancelar</Button>

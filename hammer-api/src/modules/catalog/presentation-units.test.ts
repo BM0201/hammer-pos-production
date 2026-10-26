@@ -167,3 +167,22 @@ describe("findUnitCollisions", () => {
     ]).length, 0);
   });
 });
+
+// ── Abreviaturas viejas del alta de producto = la misma unidad ──────────────
+
+describe("Abreviaturas viejas (UN, LB, M, KG...) se tratan como la palabra completa", () => {
+  it("canonicaliza al guardar", () => {
+    assert.equal(canonicalizePresentationUnit("UN"), "UNIDAD");
+    assert.equal(canonicalizePresentationUnit(" lb "), "LIBRA");
+    assert.equal(canonicalizePresentationUnit("m3"), "METRO CUBICO");
+    assert.equal(canonicalizePresentationUnit("Quintal"), "QUINTAL");
+    // Una palabra que no es alias no se toca (ni se confunde por contener uno).
+    assert.equal(canonicalizePresentationUnit("MULA"), "MULA");
+  });
+  it('"UN" y "UNIDAD" colisionan en una fusión', () => {
+    assert.equal(findUnitCollisions([
+      { productId: "p1", saleUnit: "UN" },
+      { productId: "p2", saleUnit: "Unidad" },
+    ]).length, 1);
+  });
+});

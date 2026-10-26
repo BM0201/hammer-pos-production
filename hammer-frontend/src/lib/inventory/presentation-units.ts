@@ -6,20 +6,35 @@
  * cambia la otra.
  */
 
+/** Abreviaturas viejas → palabra del catálogo (misma tabla que el backend). */
+export const LEGACY_UNIT_ALIASES: Record<string, string> = {
+  UN: "UNIDAD", UND: "UNIDAD", U: "UNIDAD",
+  KG: "KILO", LB: "LIBRA", L: "LITRO", LT: "LITRO", GAL: "GALON",
+  M: "METRO", M2: "METRO CUADRADO", M3: "METRO CUBICO", QQ: "QUINTAL",
+};
+
 /** Normaliza para COMPARAR. No es lo que se guarda ni lo que se muestra. */
 export function normalizePresentationUnit(value: string): string {
-  return value
+  const normalized = value
     .normalize("NFD")
     .replace(new RegExp("[\\u0300-\\u036f]", "g"), "")
     .toUpperCase()
     .replace(/\s+/g, " ")
     .trim();
+  return LEGACY_UNIT_ALIASES[normalized] ?? normalized;
 }
 
-/** Unidades sugeridas en el asistente. Solo sugerencias — el usuario escribe la que quiera. */
+/**
+ * LA lista de unidades del catálogo — alta de producto, alta rápida, edición
+ * y fusiones sugieren las mismas (antes el alta usaba UN/KG/L/M y las
+ * fusiones UNIDAD/KILO/LITRO/METRO, y QUINTAL no existía al crear). Sin
+ * tildes: es la forma en que se guardan (normalizePresentationUnit). Solo
+ * sugerencias — el usuario puede escribir otra.
+ */
 export const COMMON_PRESENTATION_UNITS = [
-  "UNIDAD", "LATA", "PALADA", "METRO", "METRO CUBICO", "CAMION", "VIAJE",
-  "QUINTAL", "VARILLA", "KILO", "LIBRA", "SACO", "BOLSA", "CAJA", "GALON", "LITRO",
+  "UNIDAD", "QUINTAL", "VARILLA", "METRO", "METRO CUADRADO", "METRO CUBICO",
+  "LITRO", "GALON", "CUBETA", "KILO", "LIBRA", "BOLSA", "SACO", "LATA", "PALADA",
+  "CAJA", "PAQUETE", "ROLLO", "PLIEGO", "PAR", "JUEGO", "CAMION", "VIAJE",
 ] as const;
 
 export type UnitCollision = {

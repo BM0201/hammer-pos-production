@@ -52,7 +52,7 @@ test("EditMembersModal (Editar presentaciones, la pantalla que reportó el usuar
   assert.ok(editModalIdx > -1 && wizardIdx > -1 && editModalIdx > wizardIdx, "EditMembersModal viene después del wizard en el archivo");
   const editModalSlice = c.slice(editModalIdx);
   const wizardSlice = c.slice(wizardIdx, editModalIdx);
-  assert.ok(editModalSlice.includes("onNameChange={(value) => updateName(m.productId, value)}"), "Editar presentaciones debe ofrecer renombrar");
+  assert.ok(editModalSlice.includes("onNameChange={(value) => patchMember(m.productId, { name: value })}"), "Editar presentaciones debe ofrecer renombrar");
   assert.ok(!wizardSlice.includes("onNameChange="), "el asistente de creación no debe ofrecerlo — ahí se agregan productos ya existentes, no se renombran");
 });
 
@@ -69,7 +69,8 @@ test("el nombre se guarda con SU PROPIO PATCH a /api/catalog/products/{id} — n
 test("un fallo al renombrar no bloquea guardar la unidad/factor — son independientes", () => {
   const c = read(FUSION);
   const editModalIdx = c.indexOf("function EditMembersModal");
-  const saveBody = c.slice(editModalIdx, editModalIdx + 4500);
+  const saveIdx = c.indexOf("async function save()", editModalIdx);
+  const saveBody = c.slice(saveIdx, saveIdx + 4500);
   assert.ok(/No corta acá/.test(saveBody) || saveBody.includes("renameFailures.length > 0"), "debe seguir hacia el PUT aunque el rename falle");
 });
 
