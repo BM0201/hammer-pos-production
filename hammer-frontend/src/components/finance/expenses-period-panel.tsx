@@ -120,7 +120,17 @@ export function findDuplicatePairs(rows: ExpensePeriodReport["rows"]["items"]): 
   return pairs;
 }
 
-export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string | null } = {}) {
+export function ExpensesPeriodPanel({
+  fixedBranchId,
+  refreshKey = 0,
+  onDefineBudget,
+}: {
+  fixedBranchId?: string | null;
+  /** Cambia cuando otra sección (vista clásica) modificó gastos: recarga solo los datos. */
+  refreshKey?: number;
+  /** "Sin presupuesto · Definir" — abre el formulario de presupuesto con esa categoría. */
+  onDefineBudget?: (category: string) => void;
+} = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -145,7 +155,11 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
 
   function navigate(next: Partial<ExpensePeriodUrlState>) {
     const merged: ExpensePeriodUrlState = { ...urlState, ...next };
-    const params = periodUrlParams(merged);
+    // Conserva el resto de la URL (?tab=expenses): sin eso Finanzas volvía a
+    // la pestaña Resumen cada vez que se cambiaba sucursal o período.
+    const params = new URLSearchParams(searchParams.toString());
+    for (const key of ["kind", "date", "branchId", "basis"]) params.delete(key);
+    periodUrlParams(merged).forEach((value, key) => params.set(key, value));
     router.replace(`${pathname}?${params.toString()}` as Parameters<typeof router.replace>[0], { scroll: false });
   }
 
@@ -173,7 +187,9 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
     } finally {
       setLoading(false);
     }
-  }, [urlState.kind, urlState.basis, urlState.date, effectiveBranchId, categoryFilter, rowsOffset]);
+    // refreshKey solo fuerza la recarga; no se usa dentro.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlState.kind, urlState.basis, urlState.date, effectiveBranchId, categoryFilter, rowsOffset, refreshKey]);
 
   useEffect(() => { void load(); }, [load]);
   // Cambiar de categoría/período reinicia la paginación de filas.
@@ -419,14 +435,21 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
                         <td className="px-3 py-2.5 text-right tabular-nums" data-label="Gasto">{money(cat.total)}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums" data-label="Presupuesto">
                           {cat.budgetExecutedPercent == null ? (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); router.push("/app/master/finance?tab=expenses" as Parameters<typeof router.push>[0]); }}
-                              className="text-xs hover:underline"
-                              style={{ color: "var(--color-info-700)" }}
-                            >
-                              Sin presupuesto · Definir
-                            </button>
+                            // Antes era router.push a esta misma pantalla: recargaba, borraba
+                            // sucursal/período y no abría ningún formulario. PAYROLL se
+                            // sincroniza con la nómina y "Sin clasificar" no es categoría.
+                            onDefineBudget && cat.category !== "PAYROLL" && cat.category !== "UNCLASSIFIED" ? (
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); onDefineBudget(cat.category); }}
+                                className="text-xs hover:underline"
+                                style={{ color: "var(--color-info-700)" }}
+                              >
+                                Sin presupuesto · Definir
+                              </button>
+                            ) : (
+                              <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>Sin presupuesto</span>
+                            )
                           ) : (
                             <span style={{ color: "var(--color-text-muted)" }}>{money(cat.budgetProrated)}</span>
                           )}

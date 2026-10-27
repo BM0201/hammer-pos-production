@@ -6,6 +6,7 @@ import type { Route } from "next";
 import {
   Plus,
   Trash2,
+  Pencil,
   DollarSign,
   PieChart,
   Building2,
@@ -65,10 +66,27 @@ type ExpenseCategoryStats = {
 export function ExpenseManager({
   forcedTab,
   hideTabBar = false,
-}: { forcedTab?: ExpenseManagerTab; hideTabBar?: boolean } = {}) {
+  branchId: controlledBranchId,
+  onBranchChange,
+  prefill,
+  onChanged,
+}: {
+  forcedTab?: ExpenseManagerTab;
+  hideTabBar?: boolean;
+  /** Sucursal controlada por el contenedor (Finanzas la comparte con el libro por período). */
+  branchId?: string;
+  onBranchChange?: (branchId: string) => void;
+  /** Precarga el formulario con una categoría (botón "Definir" del libro); nonce re-dispara con la misma categoría. */
+  prefill?: { category: string; nonce: number } | null;
+  /** Se llama tras crear/editar/desactivar un gasto, para que el contenedor refresque lo demás. */
+  onChanged?: () => void;
+} = {}) {
   /* ── State ── */
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [selectedBranchId, setSelectedBranchId] = useState<string>("");
+  const [internalBranchId, setInternalBranchId] = useState<string>("");
+  const isControlled = controlledBranchId !== undefined;
+  const selectedBranchId = isControlled ? controlledBranchId : internalBranchId;
+  const setSelectedBranchId = (id: string) => (isControlled ? onBranchChange?.(id) : setInternalBranchId(id));
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [summary, setSummary] = useState<ExpenseSummary | null>(null);
   const [allSummary, setAllSummary] = useState<AllBranchesSummary | null>(null);
@@ -100,7 +118,7 @@ export function ExpenseManager({
 
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
 
-  /* ── Load branches ── */
+  /* ── Load branches ── (una vez; antes se volvía a pedir en cada cambio de sucursal) */
   useEffect(() => {
     fetch("/api/branches")
       .then((r) => r.json())
@@ -108,12 +126,24 @@ export function ExpenseManager({
         const data = unwrapApiData(raw);
         const list = Array.isArray(data) ? data : [];
         setBranches(list);
-        if (list.length > 0 && !selectedBranchId) {
-          setSelectedBranchId(list[0].id);
-        }
+        if (!isControlled && list.length > 0) setInternalBranchId((current) => current || list[0].id);
       })
       .catch(console.error);
-  }, [selectedBranchId]);
+  }, [isControlled]);
+
+  /* ── Precarga desde "Definir" del libro por período ── */
+  useEffect(() => {
+    if (!prefill || !CATEGORIES.includes(prefill.category) || prefill.category === "PAYROLL") return;
+    setNewExpense({
+      category: prefill.category,
+      description: `Presupuesto ${CATEGORY_LABELS[prefill.category] ?? prefill.category}`,
+      amount: "",
+    });
+  }, [prefill]);
+
+  /* Edición en línea de un gasto recurrente */
+  const [editing, setEditing] = useState<{ id: string; description: string; amount: string } | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   /* ── Load data when branch changes ── */
   const loadBranchData = useCallback(async () => {
@@ -215,18 +245,50 @@ export function ExpenseManager({
       setNewExpense({ category: "OTHER", description: "", amount: "" });
       showToast("success", "Gasto registrado correctamente");
       loadBranchData();
+      onChanged?.();
     } catch (e) {
       showToast("error", e instanceof Error ? e.message : "Error al registrar gasto");
       console.error(e);
     }
   };
 
+  const handleSaveEdit = async () => {
+    if (!editing) return;
+    const amount = parseFloat(editing.amount);
+    if (!editing.description.trim() || !(amount > 0)) {
+      showToast("error", "Descripción y un monto mayor a 0 son obligatorios.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const res = await apiFetch(`/api/expenses/${editing.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: editing.description.trim(), amount }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error?.message ?? "No se pudo guardar el gasto");
+      }
+      setEditing(null);
+      showToast("success", "Gasto actualizado");
+      loadBranchData();
+      onChanged?.();
+    } catch (e) {
+      showToast("error", e instanceof Error ? e.message : "No se pudo guardar el gasto");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const handleDeleteExpense = async (id: string) => {
     if (!confirm("¿Desactivar este gasto?")) return;
     try {
-      await apiFetch(`/api/expenses/${id}`, { method: "DELETE" });
+      const res = await apiFetch(`/api/expenses/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
       showToast("success", "Gasto desactivado");
       loadBranchData();
+      onChanged?.();
     } catch (e) {
       showToast("error", "Error al desactivar gasto");
       console.error(e);
@@ -332,7 +394,7 @@ export function ExpenseManager({
             value={selectedBranchId}
             onChange={(e) => setSelectedBranchId(e.target.value)}
           >
-            <option value="">Seleccionar sucursal...</option>
+            {!isControlled && <option value="">Seleccionar sucursal...</option>}
             <option value="all">Todas las sucursales (consolidado)</option>
             {branches.map((b) => (
               <option key={b.id} value={b.id}>
@@ -423,7 +485,7 @@ export function ExpenseManager({
       {/* Fase 3.4 (prompt-mudanza-zona-precios.md) — aviso de mudanza, temporal
           (tres meses desde 2026-08-27, después se saca). Sin esto, la primera
           reacción de quien usaba Precios/Políticas acá es que se rompió algo. */}
-      {activeTab === "expenses" && (
+      {activeTab === "expenses" && !hideTabBar && (
         <p className="text-xs text-[var(--color-text-muted)]">
           Precios y Políticas por categoría se movieron a{" "}
           <Link href={"/app/master/pricing" as Route} className="font-medium text-[var(--color-info-700)] hover:underline">
@@ -433,7 +495,9 @@ export function ExpenseManager({
         </p>
       )}
 
-      {loading && (
+      {/* Solo en la primera carga: al recargar se deja el contenido (atenuado)
+          en vez de desmontarlo — si no, la página se encogía y el scroll saltaba arriba. */}
+      {loading && !(isAllBranches ? allSummary : summary) && (
         <div className="text-center py-8 text-[var(--color-text-muted)]">
           Cargando datos...
         </div>
@@ -442,8 +506,8 @@ export function ExpenseManager({
       {/* ══════════════════════════════════════════════════════════ */}
       {/* VISTA CONSOLIDADA: TODAS LAS SUCURSALES (solo lectura) */}
       {/* ══════════════════════════════════════════════════════════ */}
-      {activeTab === "expenses" && isAllBranches && !loading && allSummary && (
-        <div className="space-y-4">
+      {activeTab === "expenses" && isAllBranches && allSummary && (
+        <div className={`space-y-4 transition-opacity ${loading ? "opacity-60" : ""}`}>
           <div className="hm-alert hm-alert-info text-xs">
             Vista consolidada de solo lectura — para registrar, editar o borrar un gasto, selecciona una sucursal específica.
           </div>
@@ -593,8 +657,8 @@ export function ExpenseManager({
       {/* ══════════════════════════════════════════════════════════ */}
       {/* TAB: GASTOS OPERATIVOS */}
       {/* ══════════════════════════════════════════════════════════ */}
-      {activeTab === "expenses" && selectedBranchId && !isAllBranches && !loading && (
-        <div className="space-y-6">
+      {activeTab === "expenses" && selectedBranchId && !isAllBranches && (summary || !loading) && (
+        <div className={`space-y-6 transition-opacity ${loading ? "opacity-60" : ""}`}>
           {/* ── Create Expense Form ── */}
           <Card className="p-5">
             <h4 className="text-sm font-semibold text-[var(--color-text)] mb-3 flex items-center gap-2">
@@ -832,7 +896,33 @@ export function ExpenseManager({
                     </button>
                     {expandedCategories.has(cat) && (
                       <div className="border-t border-[var(--color-neutral-100)] divide-y divide-[var(--color-neutral-100)]">
-                        {data.items.map((exp) => (
+                        {data.items.map((exp) => editing?.id === exp.id ? (
+                          <div key={exp.id} className="flex flex-wrap items-center gap-2 px-5 py-2.5">
+                            <div className="min-w-[12rem] flex-1">
+                              <Input
+                                aria-label="Descripción"
+                                value={editing.description}
+                                onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+                              />
+                            </div>
+                            <div className="w-36">
+                              <Input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                aria-label="Monto mensual (C$)"
+                                value={editing.amount}
+                                onChange={(e) => setEditing({ ...editing, amount: e.target.value })}
+                              />
+                            </div>
+                            <Button size="sm" variant="primary" onClick={() => void handleSaveEdit()} disabled={savingEdit}>
+                              {savingEdit ? "Guardando..." : "Guardar"}
+                            </Button>
+                            <Button size="sm" variant="secondary" onClick={() => setEditing(null)} disabled={savingEdit}>
+                              Cancelar
+                            </Button>
+                          </div>
+                        ) : (
                           <div key={exp.id} className="flex items-center justify-between px-5 py-2.5">
                             <div>
                               <p className="text-sm text-[var(--color-text)]">{exp.description}</p>
@@ -841,6 +931,14 @@ export function ExpenseManager({
                               <span className="text-sm font-semibold text-[var(--color-text)]">
                                 {money(Number(exp.amount))}
                               </span>
+                              <button
+                                onClick={() => setEditing({ id: exp.id, description: exp.description, amount: String(Number(exp.amount)) })}
+                                className="p-1.5 rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-info-700)] hover:bg-[var(--color-surface-alt)] transition-colors"
+                                title="Editar gasto"
+                                aria-label="Editar gasto"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </button>
                               <button
                                 onClick={() => handleDeleteExpense(exp.id)}
                                 className="p-1.5 rounded-md text-[var(--color-danger-500)] hover:text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)] transition-colors"

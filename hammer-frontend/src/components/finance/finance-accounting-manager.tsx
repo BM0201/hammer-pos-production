@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { Route } from "next";
@@ -8,6 +8,7 @@ import {
   LayoutDashboard, Receipt, Users, Truck, BarChart3, ArrowRight, Info, Landmark,
 } from "lucide-react";
 import { useSession } from "@/lib/client/session";
+import { showToast } from "@/components/ui/toast";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { ExpenseManager } from "@/components/expenses/expense-manager";
 import { ExpensesPeriodPanel } from "@/components/finance/expenses-period-panel";
@@ -139,12 +140,7 @@ export function FinanceAccountingManager() {
           por mes (crear un gasto recurrente, ver el desglose del mes) sigue
           disponible abajo, colapsada — ExpenseManager no se tocó, sigue
           siendo el único lugar donde se da de alta un gasto RECURRING nuevo. */}
-      {activeTab === "expenses" && (
-        <div className="space-y-4">
-          <ExpensesPeriodPanel />
-          <ClassicExpensesSection />
-        </div>
-      )}
+      {activeTab === "expenses" && <OperatingExpensesTab />}
       {activeTab === "freight" && <ExpenseManager forcedTab="freight" hideTabBar />}
 
       {/* Planilla V2: el banner informativo (ahora descartable), el hero de costo
@@ -174,24 +170,61 @@ export function FinanceAccountingManager() {
   );
 }
 
-/** Vista clásica por mes (dar de alta un gasto recurrente, ver el desglose del mes) — colapsada bajo el libro por período. */
-function ClassicExpensesSection() {
-  const [open, setOpen] = useState(false);
+/**
+ * Libro por período + vista clásica por mes (dar de alta un gasto recurrente
+ * = presupuesto, ver el desglose del mes), con UNA sola sucursal: la del
+ * ?branchId= de la URL, que ambos leen y escriben. Lo que cambia en la vista
+ * clásica recarga solo los datos del libro (refreshKey), sin remontar nada.
+ */
+function OperatingExpensesTab() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const branchId = searchParams.get("branchId");
+  const [classicOpen, setClassicOpen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [prefill, setPrefill] = useState<{ category: string; nonce: number } | null>(null);
+  const classicRef = useRef<HTMLDivElement>(null);
+
+  function setBranch(id: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (id && id !== "all") params.set("branchId", id);
+    else params.delete("branchId");
+    router.replace(`${pathname}?${params}` as Parameters<typeof router.replace>[0], { scroll: false });
+  }
+
+  function defineBudget(category: string) {
+    setClassicOpen(true);
+    setPrefill({ category, nonce: Date.now() });
+    if (!branchId) showToast("info", "Elige la sucursal en la vista clásica: el presupuesto se define por sucursal.");
+    requestAnimationFrame(() => classicRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
   return (
-    <div className="rounded-lg" style={{ border: "0.5px solid var(--color-border)" }}>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-semibold"
-        style={{ color: "var(--color-text-muted)" }}
-      >
-        Vista clásica por mes (dar de alta un gasto recurrente, desglose mensual)
-        <span>{open ? "Ocultar" : "Mostrar"}</span>
-      </button>
-      {open && (
-        <div className="px-4 pb-4">
-          <ExpenseManager forcedTab="expenses" hideTabBar />
-        </div>
-      )}
+    <div className="space-y-4">
+      <ExpensesPeriodPanel refreshKey={refreshKey} onDefineBudget={defineBudget} />
+      <div ref={classicRef} className="scroll-mt-4 rounded-lg" style={{ border: "0.5px solid var(--color-border)" }}>
+        <button
+          onClick={() => setClassicOpen((v) => !v)}
+          className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-semibold"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          Vista clásica por mes (presupuesto: gastos recurrentes, desglose mensual)
+          <span>{classicOpen ? "Ocultar" : "Mostrar"}</span>
+        </button>
+        {classicOpen && (
+          <div className="px-4 pb-4">
+            <ExpenseManager
+              forcedTab="expenses"
+              hideTabBar
+              branchId={branchId ?? "all"}
+              onBranchChange={setBranch}
+              prefill={prefill}
+              onChanged={() => setRefreshKey((k) => k + 1)}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
