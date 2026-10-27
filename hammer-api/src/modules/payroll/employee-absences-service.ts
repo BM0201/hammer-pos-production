@@ -222,8 +222,6 @@ export async function takeRollCall(
 
 /* ── Confirmación por Master (anti "buddy punching") ───────────────────────── */
 
-export const ROLL_CALL_REVIEW_STATUSES = ["PENDING", "CONFIRMED"] as const;
-
 /**
  * Pases de asistencia PENDIENTES de confirmar por Master, con la marca de
  * cada trabajador (estado + hora de llegada) para que Master vea y corrija

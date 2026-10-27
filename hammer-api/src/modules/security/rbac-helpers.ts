@@ -44,8 +44,3 @@ export function assertBranchAccess(session: SessionPayload, branchId: string): v
     throw new Error("FORBIDDEN_BRANCH");
   }
 }
-
-/**
- * Returns true if the session has a global privileged role.
- */
-export { isPrivilegedGlobal } from "@/modules/rbac/guards";

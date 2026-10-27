@@ -6,7 +6,7 @@
  * vive en lib/scanner.ts (lo comparte con el lector de cámara) — se
  * re-exporta acá para no romper los imports existentes.
  */
-export { shouldIgnoreRepeatedCode, SCAN_REPEAT_DEBOUNCE_MS } from "@/lib/scanner";
+export { shouldIgnoreRepeatedCode } from "@/lib/scanner";
 
 export type QuickAddProductMatch = {
   id: string;

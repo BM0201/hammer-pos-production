@@ -9,7 +9,7 @@ import {
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { attachAuditToError, writePendingAuditFromError } from "@/modules/audit/service";
-import { consumeSharedStockForSaleTx, getSaleStockAvailabilityTx } from "@/modules/inventory/service";
+import { consumeSharedStockForSaleTx, getSaleStockAvailabilityBatchTx } from "@/modules/inventory/service";
 import { PAYMENT_AUDIT_EVENTS } from "@/modules/payments/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
@@ -347,22 +347,24 @@ export async function postSaleOrderPayment(input: {
 
       const uniqueProductIds = [...new Set(order.lines.map((line) => line.productId))].sort();
 
-      for (const productId of uniqueProductIds) {
+      // Lock y disponibilidad por lote, mismo orden determinista que submitDirectSale (evita deadlocks cruzados).
+      if (uniqueProductIds.length > 0) {
         await tx.$queryRaw`
           SELECT id
           FROM "InventoryBalance"
           WHERE "branchId" = ${order.branchId}
-            AND "productId" = ${productId}
+            AND "productId" = ANY(ARRAY[${Prisma.join(uniqueProductIds)}])
+          ORDER BY "productId"
           FOR UPDATE
         `;
       }
 
+      const availabilityByProductId = await getSaleStockAvailabilityBatchTx(tx, {
+        branchId: order.branchId,
+        lines: order.lines.map((line) => ({ productId: line.productId, quantity: line.quantity })),
+      });
       for (const line of order.lines) {
-        const availability = await getSaleStockAvailabilityTx(tx, {
-          branchId: order.branchId,
-          productId: line.productId,
-          quantity: line.quantity,
-        });
+        const availability = availabilityByProductId.get(line.productId)!;
         if (!availability.ok) {
           throw attachAuditToError(new Error(availability.reason ?? "INSUFFICIENT_STOCK_AT_PAYMENT"), {
             actorUserId: input.actorUserId,

@@ -76,12 +76,6 @@ export const upsertPricingConfigSchema = z.object({
 
 /* ── Suggested Price Validators ──────────────────── */
 
-export const suggestedPriceQuerySchema = z.object({
-  branchId: z.string().min(1),
-  purchaseCostPerUnit: z.number().min(0),
-  productId: z.string().optional(),
-});
-
 export const pricingSuggestionPayloadSchema = z.object({
   branchId: z.string().min(1).optional(),
   productId: z.string().optional(),

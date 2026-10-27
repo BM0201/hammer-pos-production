@@ -43,21 +43,6 @@ function isAccountantGlobal(session: SessionPayload): boolean {
 // ─── DB Queries ─────────────────────────────────────────────────
 
 /**
- * Check if a specific branch+role combo is enabled via BranchRoleConfig.
- * Returns true if no config row exists (default: enabled for backward compat).
- */
-export async function isBranchRoleEnabled(branchId: string, roleCode: RoleCode): Promise<boolean> {
-  if (!BRANCH_SCOPED_ROLES.has(roleCode)) return true;
-
-  const config = await prisma.branchRoleConfig.findUnique({
-    where: { branchId_role: { branchId, role: roleCode } },
-    select: { enabled: true },
-  });
-
-  return config?.enabled ?? true; // default: enabled
-}
-
-/**
  * Get all effective (filtered by BranchRoleConfig) branch memberships for a user.
  * Used at login to filter disabled roles out of the session token.
  */

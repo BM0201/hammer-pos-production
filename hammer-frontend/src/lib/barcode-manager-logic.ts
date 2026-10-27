@@ -75,7 +75,6 @@ export function countByIssue(rows: Array<{ issues: BarcodeIssue[] }>): Record<Ba
  * temporizador; esta función solo decide con lo que ya se juntó).
  */
 export const SHORTCUT_CONFIRM_DELAY_MS = 120;
-export const SCANNER_INTER_KEY_MS = 50;
 
 export type DigitShortcutClassification = "SHORTCUT" | "NOT_SHORTCUT";
 

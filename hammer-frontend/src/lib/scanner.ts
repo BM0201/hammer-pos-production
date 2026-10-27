@@ -374,12 +374,6 @@ export async function getActiveEngine(): Promise<ScannerEngine> {
   return (await resolveEngine()).engine;
 }
 
-/** Solo para la página de prueba (Fase 3) — fuerza una nueva resolución (p.ej. tras un error de cámara) en vez de confiar en la cache de sesión. */
-export function resetEngineCache(): void {
-  cachedEngine = null;
-  cachedEnginePromise = null;
-}
-
 // ────────────────────────────────────────────────────────────────────────
 // Handle público y arranque
 // ────────────────────────────────────────────────────────────────────────

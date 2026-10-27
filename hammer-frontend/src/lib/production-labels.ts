@@ -69,7 +69,6 @@ function lookup(list: Array<[string, string]>, code: string | null | undefined):
   return list.find(([value]) => value === code)?.[1] ?? code;
 }
 
-export const recipeTypeLabel = (code: string | null | undefined) => lookup(RECIPE_TYPES, code);
 export const recipeFamilyLabel = (code: string | null | undefined) => lookup(RECIPE_FAMILIES, code);
 
 export function batchStatus(code: string): { label: string; tone: Tone } {

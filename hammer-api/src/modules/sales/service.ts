@@ -5,7 +5,7 @@ import { logAuditEvent, attachAuditToError, writePendingAuditFromError } from "@
 import { aggregateOrderTotals, calculateLineSubtotal } from "@/modules/sales/totals";
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
-import { consumeSharedStockForSaleTx, createInventoryMovementTx, getSaleStockAvailabilityBatchTx, getSaleStockAvailabilityTx } from "@/modules/inventory/service";
+import { consumeSharedStockForSaleTx, createInventoryMovementTx, getSaleStockAvailabilityBatchTx } from "@/modules/inventory/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx, resolveOperationalDayForOperationTx } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
@@ -667,12 +667,13 @@ export async function submitSaleOrderToPendingPayment(input: {
       });
     }
 
+    // Una sola consulta batched para toda la orden (mismo patrón que submitDirectSale).
+    const availabilityByProductId = await getSaleStockAvailabilityBatchTx(tx, {
+      branchId: order.branchId,
+      lines: lines.map((line) => ({ productId: line.productId, quantity: line.quantity })),
+    });
     for (const line of lines) {
-      const availability = await getSaleStockAvailabilityTx(tx, {
-        branchId: order.branchId,
-        productId: line.productId,
-        quantity: line.quantity,
-      });
+      const availability = availabilityByProductId.get(line.productId)!;
       if (!availability.ok) {
         throw attachAuditToError(new Error(availability.reason ?? "INSUFFICIENT_STOCK"), {
           actorUserId: input.actorUserId,

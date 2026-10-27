@@ -179,7 +179,7 @@ export function AppShellRouter({
               </div>
 
               {headerMeta.title ? (
-                <div className="min-w-0">
+                <div className="hidden min-w-0 sm:block">
                   <div className="flex items-center gap-2">
                     <h1 className="truncate text-sm font-bold text-[var(--color-text)] sm:text-[0.9375rem]">
                       {headerMeta.title}
@@ -194,7 +194,7 @@ export function AppShellRouter({
                 // prompt-inventario-inicio-fix.md §1.3 — "o queda solo lo
                 // global (usuario, salir)": sin título/subtítulo acá
                 // (InventoryTopbar ya lo muestra), solo el rol.
-                <RoleBadge roleCode={session.roleCode} size="sm" />
+                <span className="hidden sm:inline-flex"><RoleBadge roleCode={session.roleCode} size="sm" /></span>
               )}
             </div>
 

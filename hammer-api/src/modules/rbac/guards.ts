@@ -83,12 +83,6 @@ export function hasBranchRole(session: SessionPayload | null, branchId: string, 
   return session.branchMemberships.some((item) => item.branchId === branchId && allowedRoles.includes(item.roleCode));
 }
 
-export function hasAnyAssignedBranch(session: SessionPayload | null): boolean {
-  if (!session) return false;
-  if (isPrivilegedGlobal(session)) return true;
-  return session.branchMemberships.length > 0;
-}
-
 export function getRoleAwareHome(roleCode: RoleCode, globalRoles?: RoleCode[]): Route {
   return resolveRoleHome(roleCode as string, (globalRoles as unknown as string[] | undefined) ?? []);
 }
