@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Copy, PackageSearch, Plus, Save, Trash2 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { tokenize } from "@/lib/product-search";
 import { money as formatMoney } from "@/lib/format";
 
 type Product = {
@@ -15,10 +14,9 @@ type Product = {
   unit: string;
   standardSalePrice?: number | string;
   category?: { name: string };
-  effectiveCost?: number | null;
-  effectivePrice?: number | null;
-  weightedAverageCost?: number | null;
-  inventoryBalance?: { quantityOnHand?: number; weightedAverageCost?: number } | null;
+  averageCost?: number | string | null;
+  globalCost?: number | string | null;
+  lastPurchaseCost?: number | string | null;
 };
 
 type RecipeInputRow = {
@@ -32,33 +30,63 @@ const emptyInput = (): RecipeInputRow => ({ inputProductId: "", quantity: "", un
 const n = (value: unknown) => typeof value === "number" ? value : Number(value ?? 0);
 const money = (value: number | null | undefined) => value == null || Number.isNaN(value) ? "-" : formatMoney(value);
 
+// Misma cadena que el costeo del lote con WAC apagado (resolveCostChain), sin
+// el costo de sucursal: la receta es global. Es solo el estimado del form.
+const estimatedCost = (product: Product | null | undefined) =>
+  n(product?.averageCost ?? product?.globalCost ?? product?.lastPurchaseCost ?? 0);
+
+async function fetchProducts(params: Record<string, string>): Promise<Product[]> {
+  const res = await apiFetch(`/api/catalog/products?${new URLSearchParams(params)}`);
+  if (!res.ok) throw new Error("No se pudo cargar productos");
+  const data = unwrapApiData(await res.json());
+  return Array.isArray(data) ? data : (data as { products?: Product[] }).products ?? [];
+}
+
+/**
+ * Busca en el servidor (no filtra una lista precargada: el catálogo tiene
+ * más productos de los que cabe traer de una vez). inStockOnly limita a lo
+ * que tiene stock en alguna sucursal — para insumos.
+ */
 function ProductPicker({
   label,
-  products,
+  selected,
   value,
   onChange,
   placeholder,
+  inStockOnly = false,
   disabled = false,
   hint,
 }: {
   label: string;
-  products: Product[];
+  selected: Product | null | undefined;
   value: string;
-  onChange: (id: string) => void;
+  onChange: (product: Product) => void;
   placeholder: string;
+  inStockOnly?: boolean;
   disabled?: boolean;
   hint?: string;
 }) {
   const [query, setQuery] = useState("");
-  const selected = products.find((product) => product.id === value);
-  const visible = products
-    .filter((product) => {
-      const tokens = tokenize(query);
-      if (tokens.length === 0) return true;
-      const text = `${product.sku} ${product.name} ${product.category?.name ?? ""}`.toUpperCase();
-      return tokens.every((token) => text.includes(token));
-    })
-    .slice(0, 10);
+  const [visible, setVisible] = useState<Product[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(false);
+
+  useEffect(() => {
+    if (disabled) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const list = await fetchProducts({ isActive: "true", q: query.trim(), limit: "20", ...(inStockOnly ? { inStockOnly: "true" } : {}) });
+        if (!cancelled) { setVisible(list); setSearchError(false); }
+      } catch {
+        if (!cancelled) setSearchError(true);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 250);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [query, inStockOnly, disabled]);
 
   return (
     <div className="space-y-2">
@@ -79,7 +107,7 @@ function ProductPicker({
             key={product.id}
             type="button"
             onClick={() => {
-              onChange(product.id);
+              onChange(product);
               setQuery(product.name);
             }}
             className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-alt)] ${value === product.id ? "bg-[var(--color-master-50)]" : ""}`}
@@ -91,7 +119,11 @@ function ProductPicker({
             <span className="text-xs text-[var(--color-text-muted)]">{product.unit}</span>
           </button>
         ))}
-        {visible.length === 0 && <p className="px-3 py-4 text-sm text-[var(--color-text-muted)]">Sin resultados.</p>}
+        {visible.length === 0 && (
+          <p className="px-3 py-4 text-sm text-[var(--color-text-muted)]">
+            {searching ? "Buscando..." : searchError ? "No se pudo buscar. Intenta de nuevo." : inStockOnly ? "Sin resultados con stock disponible." : "Sin resultados."}
+          </p>
+        )}
       </div>}
       {hint && <p className="text-xs text-[var(--color-text-muted)]">{hint}</p>}
       {selected && (
@@ -99,7 +131,7 @@ function ProductPicker({
           <div><p className="text-xs text-[var(--color-text-muted)]">SKU</p><p className="font-semibold text-[var(--color-text)]">{selected.sku}</p></div>
           <div><p className="text-xs text-[var(--color-text-muted)]">Categoria</p><p className="font-semibold text-[var(--color-text)]">{selected.category?.name ?? "-"}</p></div>
           <div><p className="text-xs text-[var(--color-text-muted)]">Unidad</p><p className="font-semibold text-[var(--color-text)]">{selected.unit}</p></div>
-          <div><p className="text-xs text-[var(--color-text-muted)]">Precio actual</p><p className="font-semibold text-[var(--color-text)]">{money(selected.effectivePrice ?? n(selected.standardSalePrice))}</p></div>
+          <div><p className="text-xs text-[var(--color-text-muted)]">Precio actual</p><p className="font-semibold text-[var(--color-text)]">{money(n(selected.standardSalePrice))}</p></div>
         </div>
       )}
     </div>
@@ -135,11 +167,17 @@ const toInput = (value: number | string | null | undefined) => value == null ? "
 export function RecipeForm({ recipeId }: { recipeId?: string }) {
   const router = useRouter();
   const isEdit = Boolean(recipeId);
-  const [products, setProducts] = useState<Product[]>([]);
+  // Productos ya vistos (elegidos en un buscador o de la receta cargada):
+  // de aquí salen unidad, costo estimado y la tarjeta del seleccionado.
+  const [productById, setProductById] = useState<Map<string, Product>>(new Map());
+  const remember = (list: Product[]) => setProductById((prev) => {
+    const next = new Map(prev);
+    for (const product of list) next.set(product.id, product);
+    return next;
+  });
   const [loadingRecipe, setLoadingRecipe] = useState(isEdit);
   const [hasBatches, setHasBatches] = useState(false);
   const [recipeMissing, setRecipeMissing] = useState(false);
-  const [loadingProducts, setLoadingProducts] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -162,24 +200,6 @@ export function RecipeForm({ recipeId }: { recipeId?: string }) {
   // prompt-produccion-materiales.md Fase 2 — opcional: si se configura, el
   // cierre de lote pregunta cuántas unidades malas sirven como esta segunda.
   const [secondGradeProductId, setSecondGradeProductId] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await apiFetch("/api/catalog/products?isActive=true&limit=500");
-        if (!res.ok) throw new Error("No se pudo cargar productos");
-        const data = unwrapApiData(await res.json());
-        const list = Array.isArray(data) ? data : (data as { products?: Product[] }).products ?? [];
-        if (!cancelled) setProducts(list);
-      } catch {
-        if (!cancelled) setError("No se pudo cargar el catalogo de productos.");
-      } finally {
-        if (!cancelled) setLoadingProducts(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
 
   useEffect(() => {
     if (!recipeId) return;
@@ -211,6 +231,11 @@ export function RecipeForm({ recipeId }: { recipeId?: string }) {
         setSecondGradeProductId(r.secondGradeProductId ?? "");
         setInputs(r.inputs.length ? r.inputs.map((i) => ({ inputProductId: i.inputProductId, quantity: toInput(i.quantity), unit: i.unit, notes: i.notes ?? "" })) : [emptyInput()]);
         setHasBatches(r.batches.length > 0);
+        // Sin filtro de activo ni de stock: la receta puede apuntar a un
+        // producto que hoy está inactivo o sin existencias.
+        const ids = [...new Set([r.finishedProductId, r.secondGradeProductId, ...r.inputs.map((i) => i.inputProductId)].filter((id): id is string => Boolean(id)))];
+        const list = await fetchProducts({ ids: ids.join(","), limit: String(ids.length) });
+        if (!cancelled) remember(list);
       } catch {
         if (!cancelled) { setError("No se pudo cargar la receta."); setRecipeMissing(true); }
       } finally {
@@ -220,14 +245,13 @@ export function RecipeForm({ recipeId }: { recipeId?: string }) {
     return () => { cancelled = true; };
   }, [recipeId]);
 
-  const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const finishedProduct = finishedProductId ? productById.get(finishedProductId) : null;
 
   const inputSummary = inputs.map((row) => {
     const product = row.inputProductId ? productById.get(row.inputProductId) : null;
     const qty = Number(row.quantity || 0);
-    const unitCost = product?.effectiveCost ?? product?.weightedAverageCost ?? product?.inventoryBalance?.weightedAverageCost ?? 0;
-    return { ...row, product, qty, unitCost: n(unitCost), total: qty * n(unitCost) };
+    const unitCost = estimatedCost(product);
+    return { ...row, product, qty, unitCost, total: qty * unitCost };
   });
   const totalCost = inputSummary.reduce((sum, row) => sum + row.total, 0);
   const overheadValue = Number(processingCostPerBatch || 0);
@@ -242,15 +266,12 @@ export function RecipeForm({ recipeId }: { recipeId?: string }) {
     ...(finishedProduct && suggestedPrice && n(finishedProduct.standardSalePrice) > 0 && n(finishedProduct.standardSalePrice) < suggestedPrice ? ["El precio actual del producto terminado podria quedar bajo costo objetivo."] : []),
   ];
 
-  const updateInput = (idx: number, field: keyof RecipeInputRow, value: string) => {
-    setInputs((prev) => prev.map((row, i) => {
-      if (i !== idx) return row;
-      if (field === "inputProductId") {
-        const product = productById.get(value);
-        return { ...row, inputProductId: value, unit: product?.unit ?? row.unit };
-      }
-      return { ...row, [field]: value };
-    }));
+  const updateInput = (idx: number, field: Exclude<keyof RecipeInputRow, "inputProductId">, value: string) => {
+    setInputs((prev) => prev.map((row, i) => i === idx ? { ...row, [field]: value } : row));
+  };
+  const selectInputProduct = (idx: number, product: Product) => {
+    remember([product]);
+    setInputs((prev) => prev.map((row, i) => i === idx ? { ...row, inputProductId: product.id, unit: product.unit } : row));
   };
 
   const validate = () => {
@@ -331,7 +352,7 @@ export function RecipeForm({ recipeId }: { recipeId?: string }) {
       </div>
 
       {error && <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3 text-sm text-[var(--color-danger-700)]">{error}</div>}
-      {(loadingProducts || loadingRecipe) && <p className="text-sm text-[var(--color-text-muted)]">Cargando...</p>}
+      {loadingRecipe && <p className="text-sm text-[var(--color-text-muted)]">Cargando...</p>}
 
       {/* El resumen lateral tiene etiquetas largas ("Precio sugerido estimado")
           — a 1024px se achica a 300px en vez de los 360px de xl+ para no
@@ -357,7 +378,7 @@ export function RecipeForm({ recipeId }: { recipeId?: string }) {
           </section>
 
           <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-sm">
-            <ProductPicker label="Producto terminado" products={products} value={finishedProductId} onChange={setFinishedProductId} placeholder="Buscar por nombre, SKU o categoria..." disabled={hasBatches} hint={hasBatches ? "La receta ya tiene lotes: el producto terminado no se puede cambiar. Desactívala y crea una nueva si hace falta." : undefined} />
+            <ProductPicker label="Producto terminado" selected={finishedProduct} value={finishedProductId} onChange={(product) => { remember([product]); setFinishedProductId(product.id); }} placeholder="Buscar por nombre, SKU o categoria..." disabled={hasBatches} hint={hasBatches ? "La receta ya tiene lotes: el producto terminado no se puede cambiar. Desactívala y crea una nueva si hace falta." : undefined} />
           </section>
 
           <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-sm">
@@ -438,7 +459,7 @@ export function RecipeForm({ recipeId }: { recipeId?: string }) {
                 const summary = inputSummary[idx];
                 return (
                   <div key={idx} className="grid gap-3 rounded-lg border border-[var(--color-border)] p-3 lg:grid-cols-[1fr_110px_110px_120px_auto] lg:items-end">
-                    <ProductPicker label="Producto" products={products} value={row.inputProductId} onChange={(id) => updateInput(idx, "inputProductId", id)} placeholder="Buscar insumo..." />
+                    <ProductPicker label="Producto" selected={selected} value={row.inputProductId} onChange={(product) => selectInputProduct(idx, product)} placeholder="Buscar insumo con stock..." inStockOnly />
                     <div>
                       <label className="block text-xs font-semibold uppercase text-[var(--color-text-muted)]">Cantidad</label>
                       <input type="number" min="0.01" step="any" value={row.quantity} onChange={(event) => updateInput(idx, "quantity", event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm" />
@@ -471,7 +492,7 @@ export function RecipeForm({ recipeId }: { recipeId?: string }) {
             </div>
             <p className="mt-1 text-xs text-[var(--color-text-muted)]">Si se configura, al cerrar un lote se puede marcar cuántas unidades malas sirven como esta segunda — entran a stock sin restar del costo de las buenas.</p>
             <div className="mt-4">
-              <ProductPicker label="Producto de segunda" products={products} value={secondGradeProductId} onChange={setSecondGradeProductId} placeholder="Buscar producto de segunda..." />
+              <ProductPicker label="Producto de segunda" selected={secondGradeProductId ? productById.get(secondGradeProductId) : null} value={secondGradeProductId} onChange={(product) => { remember([product]); setSecondGradeProductId(product.id); }} placeholder="Buscar producto de segunda..." />
             </div>
           </section>
         </div>

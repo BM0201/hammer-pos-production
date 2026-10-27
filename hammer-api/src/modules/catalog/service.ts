@@ -495,6 +495,19 @@ export async function listProducts(params: { q?: string; ids?: string[]; isActiv
   // tocar la lógica de búsqueda existente.
   if (params.ids && params.ids.length > 0) andClauses.push({ id: { in: params.ids } });
 
+  // Sin sucursal (insumos de recetas): stock en cualquier sucursal. Un
+  // derivado de fusión casi nunca tiene balance propio — su stock vive en el
+  // canónico del grupo, así que también cuenta el del canónico.
+  if (params.inStockOnly && !params.branchId) {
+    const hasStock: Prisma.InventoryBalanceListRelationFilter = { some: { quantityOnHand: { gt: 0 } } };
+    andClauses.push({
+      OR: [
+        { inventoryBalances: hasStock },
+        { stockGroupMemberships: { some: { isActive: true, stockGroup: { products: { some: { isCanonical: true, product: { inventoryBalances: hasStock } } } } } } },
+      ],
+    });
+  }
+
   if (params.q) {
     andClauses.push(
       buildProductSearchWhere<Prisma.ProductWhereInput>(params.q, ["sku", "name", "barcode", "barcodes.code", "category.name", "category.code"]),
