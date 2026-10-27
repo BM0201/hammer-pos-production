@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Edit3, Factory, Plus, Search, ToggleLeft } from "lucide-react";
+import { Edit3, Factory, Plus, Search, ToggleLeft, ToggleRight } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { tokenize } from "@/lib/product-search";
-import { money } from "@/lib/format";
 
 type RecipeInput = {
   id: string;
@@ -39,12 +39,9 @@ const FAMILIES = [
   ["STONE", "Piedra"],
   ["METAL", "Metales"],
   ["BLOCKS", "Bloques"],
+  ["PAINT", "Pintura"],
   ["GENERAL", "General"],
 ];
-
-function estimatedCost(recipe: Recipe) {
-  return recipe.inputs.reduce((sum, input) => sum + input.quantity, 0);
-}
 
 export default function RecipesPage() {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
@@ -84,12 +81,27 @@ export default function RecipesPage() {
     });
   }, [recipes, query, status, family]);
 
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const toggleActive = async (recipe: Recipe) => {
+    setTogglingId(recipe.id);
+    setError(null);
+    try {
+      const res = await apiFetch(`/api/master/production/recipes/${recipe.id}`, { method: "PATCH", body: JSON.stringify({ isActive: !recipe.isActive }) });
+      if (!res.ok) throw new Error("No se pudo cambiar el estado de la receta.");
+      setRecipes((prev) => prev.map((r) => r.id === recipe.id ? { ...r, isActive: !r.isActive } : r));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error desconocido");
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
   return (
     <section className="space-y-6">
       <div className="flex flex-col gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-sm lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-success-50)] text-[var(--color-success-700)]">
               <Factory className="h-5 w-5" />
             </div>
             <div>
@@ -110,13 +122,13 @@ export default function RecipesPage() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Buscar por nombre, codigo o producto terminado..."
-            className="w-full rounded-lg border border-[var(--color-border)] bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-[var(--color-master-500)] focus:ring-2 focus:ring-[var(--color-master-100)]"
+            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2 pl-9 pr-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-master-500)] focus:ring-2 focus:ring-[var(--color-master-100)]"
           />
         </div>
         <select
           value={status}
           onChange={(event) => setStatus(event.target.value)}
-          className="rounded-lg border border-[var(--color-border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-master-500)]"
+          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-master-500)]"
         >
           <option value="all">Todos los estados</option>
           <option value="active">Activas</option>
@@ -168,7 +180,6 @@ export default function RecipesPage() {
                   <th className="px-4 py-3 text-center">Unidad</th>
                   <th className="px-4 py-3 text-center">Rendimiento</th>
                   <th className="px-4 py-3 text-center">Insumos</th>
-                  <th className="px-4 py-3 text-right">Costo esperado</th>
                   <th className="px-4 py-3 text-right">Margen objetivo</th>
                   <th className="px-4 py-3 text-center">Estado</th>
                   <th className="px-4 py-3 text-right">Acciones</th>
@@ -186,25 +197,22 @@ export default function RecipesPage() {
                       <p className="font-medium text-[var(--color-text)]">{recipe.finishedProduct?.name ?? "-"}</p>
                       <p className="text-xs text-[var(--color-text-muted)]">{recipe.finishedProduct?.sku ?? "-"}</p>
                     </td>
-                    <td className="px-4 py-3 text-center"><span className="rounded-full bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-700">{recipe.recipeType ?? "MANUFACTURING"}</span></td>
-                    <td className="px-4 py-3 text-center"><span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">{recipe.recipeFamily ?? "GENERAL"}</span></td>
+                    <td className="px-4 py-3 text-center"><Badge variant="info">{recipe.recipeType ?? "MANUFACTURING"}</Badge></td>
+                    <td className="px-4 py-3 text-center"><Badge variant="success">{recipe.recipeFamily ?? "GENERAL"}</Badge></td>
                     <td className="px-4 py-3 text-right">{recipe.expectedQuantity.toLocaleString("es-NI")}</td>
                     <td className="px-4 py-3 text-center">{recipe.expectedUnit}</td>
                     <td className="px-4 py-3 text-center">{recipe.yieldPercent == null ? "-" : `${(recipe.yieldPercent * 100).toFixed(1)}%`}</td>
                     <td className="px-4 py-3 text-center">{recipe.inputs.length}</td>
-                    <td className="px-4 py-3 text-right">{recipe.inputs.length ? money(estimatedCost(recipe)) : "-"}</td>
                     <td className="px-4 py-3 text-right">{recipe.targetMarginPct == null ? "-" : `${(recipe.targetMarginPct * 100).toFixed(1)}%`}</td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${recipe.isActive ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                        {recipe.isActive ? "Activa" : "Inactiva"}
-                      </span>
+                      <Badge variant={recipe.isActive ? "success" : "neutral"}>{recipe.isActive ? "Activa" : "Inactiva"}</Badge>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
                         <Link title="Ver" href={`/app/master/production/recipes/${recipe.id}` as never} className="rounded-md border border-[var(--color-border)] p-2 text-[var(--color-text-muted)] hover:text-[var(--color-master-700)]"><Search className="h-4 w-4" /></Link>
-                        <Link title="Editar" href={`/app/master/production/recipes/${recipe.id}` as never} className="rounded-md border border-[var(--color-border)] p-2 text-[var(--color-text-muted)] hover:text-[var(--color-master-700)]"><Edit3 className="h-4 w-4" /></Link>
+                        <Link title="Editar" href={`/app/master/production/recipes/${recipe.id}/edit` as never} className="rounded-md border border-[var(--color-border)] p-2 text-[var(--color-text-muted)] hover:text-[var(--color-master-700)]"><Edit3 className="h-4 w-4" /></Link>
                         <Link title="Crear lote desde receta" href={`/app/master/production/batches/new?recipeId=${recipe.id}` as never} className="rounded-md border border-[var(--color-border)] p-2 text-[var(--color-text-muted)] hover:text-[var(--color-master-700)]"><Factory className="h-4 w-4" /></Link>
-                        <button title="Desactivar" disabled className="rounded-md border border-[var(--color-border)] p-2 text-[var(--color-text-soft)] disabled:opacity-45"><ToggleLeft className="h-4 w-4" /></button>
+                        <button type="button" title={recipe.isActive ? "Desactivar" : "Activar"} disabled={togglingId === recipe.id} onClick={() => void toggleActive(recipe)} className="rounded-md border border-[var(--color-border)] p-2 text-[var(--color-text-muted)] hover:text-[var(--color-master-700)] disabled:opacity-45">{recipe.isActive ? <ToggleRight className="h-4 w-4" /> : <ToggleLeft className="h-4 w-4" />}</button>
                       </div>
                     </td>
                   </tr>

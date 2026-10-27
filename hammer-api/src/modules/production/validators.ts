@@ -66,7 +66,11 @@ export const createRecipeSchema = z.object({
 
 export const updateRecipeSchema = z.object({
   name: z.string().min(2).max(200).optional(),
+  code: z.string().min(2).max(64).transform((v) => v.trim().toUpperCase()).optional(),
   description: z.string().max(500).optional().nullable(),
+  // Solo si la receta no tiene lotes (ver updateRecipe): cerrar/reversar un
+  // lote lee el producto terminado de la receta, no una foto propia.
+  finishedProductId: z.string().cuid().optional(),
   expectedQuantity: z.number().positive().optional(),
   expectedUnit: z.string().min(1).max(32).optional(),
   recipeType: recipeTypeSchema.optional(),

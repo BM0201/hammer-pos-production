@@ -119,6 +119,22 @@ export default function RecipeDetailPage() {
 
   useEffect(() => { void loadPreview(); }, [loadPreview]);
 
+  const [toggling, setToggling] = useState(false);
+  const toggleActive = async () => {
+    if (!recipe) return;
+    setToggling(true);
+    try {
+      const res = await apiFetch(`/api/master/production/recipes/${recipe.id}`, { method: "PATCH", body: JSON.stringify({ isActive: !recipe.isActive }) });
+      if (!res.ok) throw new Error();
+      setRecipe({ ...recipe, isActive: !recipe.isActive });
+      showToast("success", recipe.isActive ? "Receta desactivada." : "Receta activada.");
+    } catch {
+      showToast("error", "No se pudo cambiar el estado de la receta.");
+    } finally {
+      setToggling(false);
+    }
+  };
+
   const totalStandardCost = (preview?.totalMaterialsCost ?? 0) + (preview?.laborCost ?? 0) + (preview?.overheadCost ?? 0);
   const marginAtStandardCost = useMemo(() => {
     if (!branchPrice || branchPrice <= 0 || !preview) return null;
@@ -145,9 +161,15 @@ export default function RecipeDetailPage() {
         <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="hm-input w-44">
           {branches.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
         </select>
-        <Link href={`/app/master/production/batches/new?recipeId=${recipe.id}`}>
-          <Button variant="secondary" size="sm">Planificar lote</Button>
+        <Link href={`/app/master/production/recipes/${recipe.id}/edit` as never}>
+          <Button variant="secondary" size="sm">Editar</Button>
         </Link>
+        <Button variant="secondary" size="sm" disabled={toggling} onClick={toggleActive}>{recipe.isActive ? "Desactivar" : "Activar"}</Button>
+        {recipe.isActive && (
+          <Link href={`/app/master/production/batches/new?recipeId=${recipe.id}`}>
+            <Button variant="secondary" size="sm">Planificar lote</Button>
+          </Link>
+        )}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">

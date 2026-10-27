@@ -229,8 +229,24 @@ export async function updateRecipe(
   id: string,
   input: UpdateRecipeInput & { actorUserId: string },
 ) {
-  const existing = await prisma.productionRecipe.findUnique({ where: { id } });
+  const existing = await prisma.productionRecipe.findUnique({
+    where: { id },
+    include: { _count: { select: { batches: true } } },
+  });
   if (!existing) throw new Error("RECIPE_NOT_FOUND");
+
+  if (input.finishedProductId && input.finishedProductId !== existing.finishedProductId) {
+    if (existing._count.batches > 0) {
+      throw new Error("INVALID_INPUT: No se puede cambiar el producto terminado de una receta que ya tiene lotes. Desactívala y crea una nueva.");
+    }
+    const product = await prisma.product.findUnique({ where: { id: input.finishedProductId } });
+    if (!product) throw new Error("INVALID_INPUT: Producto terminado no encontrado");
+  }
+
+  if (input.code && input.code !== existing.code) {
+    const taken = await prisma.productionRecipe.findUnique({ where: { code: input.code }, select: { id: true } });
+    if (taken) throw new Error(`INVALID_INPUT: Ya existe otra receta con el código ${input.code}.`);
+  }
 
   if (input.inputs) {
     for (const i of input.inputs) {
@@ -261,7 +277,9 @@ export async function updateRecipe(
       where: { id },
       data: {
         name: input.name?.trim(),
+        code: input.code,
         description: input.description,
+        finishedProductId: input.finishedProductId,
         expectedQuantity: input.expectedQuantity,
         expectedUnit: input.expectedUnit?.trim(),
         recipeType: input.recipeType,
