@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import {
   ChevronLeft, ChevronRight, Building2, RefreshCw, AlertTriangle, Download, Printer,
-  ChevronDown, ChevronUp, Settings, Users, Truck, Info, ArrowUp, ArrowDown, Camera, FileWarning, Copy,
+  ChevronDown, ChevronUp, Settings, Users, Truck, Info, ArrowUp, ArrowDown, Camera, FileWarning, Copy, Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
@@ -24,6 +24,7 @@ import {
   type ExpensePeriodReport, type PeriodKind, type ExpensePeriodBasis,
 } from "@/components/finance/expenses-period.types";
 import { ExpenseConceptsModal } from "@/components/finance/expense-concepts-modal";
+import { BudgetModal } from "@/components/finance/budget-modal";
 import { ClassifyCashOutModal } from "@/components/finance/classify-cash-out-modal";
 import { ReclassifyExpenseModal } from "@/components/finance/reclassify-expense-modal";
 
@@ -120,17 +121,7 @@ export function findDuplicatePairs(rows: ExpensePeriodReport["rows"]["items"]): 
   return pairs;
 }
 
-export function ExpensesPeriodPanel({
-  fixedBranchId,
-  refreshKey = 0,
-  onDefineBudget,
-}: {
-  fixedBranchId?: string | null;
-  /** Cambia cuando otra sección (vista clásica) modificó gastos: recarga solo los datos. */
-  refreshKey?: number;
-  /** "Sin presupuesto · Definir" — abre el formulario de presupuesto con esa categoría. */
-  onDefineBudget?: (category: string) => void;
-} = {}) {
+export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string | null } = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -150,6 +141,8 @@ export function ExpensesPeriodPanel({
   const [classifyCashOutOpen, setClassifyCashOutOpen] = useState(false);
   const [reclassifyTarget, setReclassifyTarget] = useState<"bulk" | { id: string; amount: number; description: string; effectiveFrom: string } | null>(null);
   const [dismissedDuplicates, setDismissedDuplicates] = useState<Set<string>>(new Set());
+  // null = cerrado; category = categoría a abrir; add = con el formulario de alta listo ("Definir").
+  const [budgetModal, setBudgetModal] = useState<{ category: string | null; add: boolean } | null>(null);
 
   const effectiveBranchId = fixedBranchId ?? urlState.branchId;
 
@@ -187,9 +180,7 @@ export function ExpensesPeriodPanel({
     } finally {
       setLoading(false);
     }
-    // refreshKey solo fuerza la recarga; no se usa dentro.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [urlState.kind, urlState.basis, urlState.date, effectiveBranchId, categoryFilter, rowsOffset, refreshKey]);
+  }, [urlState.kind, urlState.basis, urlState.date, effectiveBranchId, categoryFilter, rowsOffset]);
 
   useEffect(() => { void load(); }, [load]);
   // Cambiar de categoría/período reinicia la paginación de filas.
@@ -315,6 +306,11 @@ export function ExpensesPeriodPanel({
           <Button variant="ghost" size="sm" onClick={() => void handlePrint()} disabled={!report} icon={<Printer className="h-3.5 w-3.5" />}>
             Imprimir
           </Button>
+          {fixedBranchId == null && (
+            <Button variant="secondary" size="sm" onClick={() => setBudgetModal({ category: null, add: false })} disabled={branches.length === 0} icon={<Wallet className="h-3.5 w-3.5" />}>
+              Presupuesto
+            </Button>
+          )}
           <Button variant="ghost" size="sm" onClick={() => setConceptsModalOpen(true)} icon={<Settings className="h-3.5 w-3.5" />}>
             Conceptos
           </Button>
@@ -438,10 +434,10 @@ export function ExpensesPeriodPanel({
                             // Antes era router.push a esta misma pantalla: recargaba, borraba
                             // sucursal/período y no abría ningún formulario. PAYROLL se
                             // sincroniza con la nómina y "Sin clasificar" no es categoría.
-                            onDefineBudget && cat.category !== "PAYROLL" && cat.category !== "UNCLASSIFIED" ? (
+                            fixedBranchId == null && branches.length > 0 && cat.category !== "PAYROLL" && cat.category !== "UNCLASSIFIED" ? (
                               <button
                                 type="button"
-                                onClick={(e) => { e.stopPropagation(); onDefineBudget(cat.category); }}
+                                onClick={(e) => { e.stopPropagation(); setBudgetModal({ category: cat.category, add: true }); }}
                                 className="text-xs hover:underline"
                                 style={{ color: "var(--color-info-700)" }}
                               >
@@ -451,7 +447,19 @@ export function ExpensesPeriodPanel({
                               <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>Sin presupuesto</span>
                             )
                           ) : (
-                            <span style={{ color: "var(--color-text-muted)" }}>{money(cat.budgetProrated)}</span>
+                            fixedBranchId == null && branches.length > 0 ? (
+                              <button
+                                type="button"
+                                title="Editar presupuesto"
+                                onClick={(e) => { e.stopPropagation(); setBudgetModal({ category: cat.category, add: false }); }}
+                                className="tabular-nums hover:underline"
+                                style={{ color: "var(--color-text-muted)" }}
+                              >
+                                {money(cat.budgetProrated)}
+                              </button>
+                            ) : (
+                              <span style={{ color: "var(--color-text-muted)" }}>{money(cat.budgetProrated)}</span>
+                            )
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-right tabular-nums" data-label="% ejecutado">{cat.budgetExecutedPercent != null ? `${cat.budgetExecutedPercent.toFixed(0)}%` : "—"}</td>
@@ -640,6 +648,16 @@ export function ExpensesPeriodPanel({
       )}
 
       {conceptsModalOpen && <ExpenseConceptsModal onClose={() => setConceptsModalOpen(false)} />}
+      {budgetModal && (
+        <BudgetModal
+          branches={branches}
+          initialBranchId={effectiveBranchId ?? null}
+          initialCategory={budgetModal.category}
+          initialAdd={budgetModal.add}
+          onClose={() => setBudgetModal(null)}
+          onChanged={() => void load()}
+        />
+      )}
       {classifyCashOutOpen && report && (
         <ClassifyCashOutModal
           start={report.period.start}

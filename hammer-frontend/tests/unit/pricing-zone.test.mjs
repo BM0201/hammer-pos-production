@@ -54,7 +54,7 @@ test("Fase 1: PricingCalculatorPanel y CategoryPoliciesPanel no importan tipos q
 });
 
 test("ExpenseManager ya no define el estado de calculadora/config que se mudó (calcResult, configForm, advancedCalc)", () => {
-  const c = read("components/expenses/expense-manager.tsx");
+  const c = read("components/expenses/freight-manager.tsx");
   assert.ok(!c.includes("useState<SuggestedPriceResult"), "calcResult ya no vive en ExpenseManager");
   assert.ok(!c.includes("[configForm, setConfigForm]"), "configForm ya no vive en ExpenseManager");
   assert.ok(!c.includes("[advancedCalc, setAdvancedCalc]"), "advancedCalc ya no vive en ExpenseManager");
@@ -115,28 +115,25 @@ test("Test 6: la zona Precios lee productId/branchId de la URL y la calculadora 
 
 // ── Fase 3: sacar de donde ya no corresponde ──────────────────────────────────
 
-// Test 1 (prompt): ExpenseManagerTab ya no acepta "pricing" ni "policies" (tipo).
-test("Test 1: ExpenseManagerTab ya no acepta \"pricing\" ni \"policies\"", () => {
-  const t = read("components/expenses/expense-manager.types.ts");
-  assert.ok(t.includes('export type ExpenseManagerTab = "expenses" | "freight";'), "el tipo debe quedar reducido a expenses | freight");
+// La vista clásica por mes (ExpenseManager forcedTab="expenses") se retiró:
+// el presupuesto se edita desde el libro por período (BudgetModal).
+test("Test 2: Gastos operativos es el libro por período con su editor de presupuesto, sin vista clásica", () => {
+  const mgr = read("components/finance/finance-accounting-manager.tsx");
+  const panel = read("components/finance/expenses-period-panel.tsx");
+  const modal = read("components/finance/budget-modal.tsx");
+  assert.ok(mgr.includes("<ExpensesPeriodPanel />") && !mgr.includes("Vista clásica"), "el tab de gastos es solo el libro");
+  assert.ok(panel.includes("<BudgetModal") && panel.includes("Sin presupuesto · Definir"), "el libro abre el presupuesto");
+  assert.ok(modal.includes('method: "POST"') && modal.includes('method: "PUT"') && modal.includes('method: "DELETE"'), "el presupuesto se crea, edita y quita");
 });
 
-// Test 2 (prompt): ExpenseManager con forcedTab="expenses" renderiza gastos igual que antes.
-test("Test 2: ExpenseManager con forcedTab=\"expenses\" sigue renderizando Gastos Operativos igual que antes", () => {
-  const c = read("components/expenses/expense-manager.tsx");
-  assert.ok(c.includes("Registrar Gasto Operativo"), "el formulario de gastos sigue intacto");
-  assert.ok(c.includes('activeTab === "expenses"'), "el tab de gastos sigue condicionado igual");
-});
-
-// Test 3 (prompt): ExpenseManager con forcedTab="freight" renderiza flete igual que antes.
-test("Test 3: ExpenseManager con forcedTab=\"freight\" sigue renderizando Flete interno igual que antes — NO se tocó (nadie pidió moverlo)", () => {
-  const c = read("components/expenses/expense-manager.tsx");
-  assert.ok(c.includes('activeTab === "freight"'), "el tab de flete sigue condicionado igual");
+// Test 3 (prompt): Flete interno (ahora FreightManager) sigue completo.
+test("Test 3: FreightManager sigue renderizando Flete interno completo — NO se tocó (nadie pidió moverlo)", () => {
+  const c = read("components/expenses/freight-manager.tsx");
   assert.ok(c.includes("Configurar ruta") && c.includes("Configurar camion") && c.includes("Crear viaje de flete interno"), "el contenido de flete sigue completo");
 });
 
 test("Fase 3.1: ExpenseManager ya no importa ni renderiza los paneles de precios/políticas — ya viven solo en la zona Precios", () => {
-  const c = read("components/expenses/expense-manager.tsx");
+  const c = read("components/expenses/freight-manager.tsx");
   assert.ok(!c.includes("PricingCalculatorPanel"), "no debe importar PricingCalculatorPanel");
   assert.ok(!c.includes("CategoryPoliciesPanel"), "no debe importar CategoryPoliciesPanel");
   assert.ok(!c.includes('"pricing"') && !c.includes('"policies"'), "no debe quedar ninguna referencia a los tabs retirados");
@@ -182,9 +179,9 @@ test("Fase 4.3: docs/PUERTAS-DE-PRECIO.md documenta quién escribe branchPrice, 
 });
 
 test("Fase 3.4: hay un aviso de mudanza (con enlace a Precios) tanto en Gastos como en Finanzas", () => {
-  const expenseMgr = read("components/expenses/expense-manager.tsx");
+  // La vista clásica (que repetía el aviso) se retiró: queda el de Finanzas.
   const financeMgr = read("components/finance/finance-accounting-manager.tsx");
-  for (const [name, content] of [["ExpenseManager", expenseMgr], ["FinanceAccountingManager", financeMgr]]) {
+  for (const [name, content] of [["FinanceAccountingManager", financeMgr]]) {
     assert.ok(content.includes("se movieron a"), `${name} debe avisar que Precios/Políticas se movieron`);
     assert.ok(content.includes('href={"/app/master/pricing"'), `${name} debe enlazar a la zona Precios`);
   }

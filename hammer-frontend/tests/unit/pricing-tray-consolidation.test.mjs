@@ -98,6 +98,6 @@ test("Parte C.3: hay una fila de chips por motivo (más costo dudoso) con el con
 test("Parte D (ya no aplica en este prompt): la zona sigue siendo la de la mudanza anterior — bandeja + calculadora + políticas + configuración, sin volver a extraer nada", () => {
   const p = read(PAGE);
   assert.ok(p.includes("PricingCalculatorPanel") && p.includes("CategoryPoliciesPanel") && p.includes("PricingConfigPanel"), "las cuatro pestañas ya existían — este prompt no las vuelve a construir");
-  const expenseMgr = read("components/expenses/expense-manager.tsx");
+  const expenseMgr = read("components/expenses/freight-manager.tsx");
   assert.ok(!expenseMgr.includes("PricingCalculatorPanel"), "Gastos ya no las muestra desde el ciclo anterior — nada que hacer acá");
 });

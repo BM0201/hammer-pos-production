@@ -1,5 +1,5 @@
 /**
- * Tipos y constantes de Gastos/Fletes (expense-manager.tsx) y de los tipos de
+ * Tipos y constantes de Gastos/Fletes (budget-modal.tsx, freight-manager.tsx) y de los tipos de
  * Precios que sus paneles mudados (components/pricing/*-panel.tsx) siguen
  * necesitando — quedaron acá en la Fase 1 (prompt-mudanza-zona-precios.md)
  * para no volver a duplicar definiciones; Precios ya no comparte lógica ni
@@ -41,21 +41,6 @@ export type ExpenseSummary = {
   byCategory: Record<string, { total: number; count: number; items: Expense[] }>;
   grandTotal: number;
   totalExpenses: number;
-};
-
-/** Resumen consolidado de /api/expenses?branchId=all&summary=true (solo lectura). */
-export type AllBranchesSummary = {
-  grandTotal: number;
-  branchesWithExpenses: number;
-  totalBranches: number;
-  topCategory: string | null;
-  byBranch: Array<{
-    branchId: string;
-    branchCode: string;
-    branchName: string;
-    byCategory: Record<string, number>;
-    total: number;
-  }>;
 };
 
 export type PricingConfig = {
@@ -249,15 +234,6 @@ export type InternalFreightTrip = {
     product: { id: string; sku: string; name: string };
   }>;
 };
-
-/**
- * Fase 3 (prompt-mudanza-zona-precios.md) — "pricing" y "policies" salieron
- * de acá: viven en la zona Precios (/app/master/pricing), que ya no comparte
- * estado con Gastos. Flete interno se queda: es costo de transporte que
- * alimenta el costo puesto, pero también es un gasto operativo, y moverlo es
- * una decisión aparte que nadie pidió.
- */
-export type ExpenseManagerTab = "expenses" | "freight";
 
 /* ── Constants ── */
 

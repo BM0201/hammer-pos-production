@@ -191,7 +191,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
   // Presupuesto inteligente: suma de los sugeridos por historial (6 meses de
   // gastos reales por categoría). Da contexto al presupuesto configurado — si
   // el configurado quedó viejo, aquí se ve cuánto debería ser y a dónde ir a
-  // actualizarlo (Gastos operativos › Presupuesto inteligente).
+  // actualizarlo (Gastos operativos › Presupuesto).
   const [suggestedBudget, setSuggestedBudget] = useState<number | null>(null);
   const loadSuggestedBudget = useCallback(async () => {
     try {
@@ -554,7 +554,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                     <p className="rounded-lg px-3 py-2 text-[11px]" style={{ background: "var(--color-warning-50, #fef3c7)", border: "0.5px solid var(--color-warning-200, #fde68a)", color: "var(--color-warning-700, #b45309)" }}>
                       El presupuesto configurado ({money(perf.expensesBudgetMonthly)}) quedó por debajo de lo que el negocio
                       gasta de verdad: el historial de los últimos 6 meses sugiere <b>{money(suggestedBudget)}</b>.
-                      Actualízalo en <b>Gastos operativos › Presupuesto inteligente</b> (botón “Usar” por categoría).
+                      Actualízalo en <b>Gastos operativos › Presupuesto</b> (botón “Usar sugerido” por categoría).
                     </p>
                   )}
                   <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>

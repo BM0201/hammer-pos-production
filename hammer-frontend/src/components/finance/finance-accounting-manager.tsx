@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { Route } from "next";
@@ -8,9 +8,8 @@ import {
   LayoutDashboard, Receipt, Users, Truck, BarChart3, ArrowRight, Info, Landmark,
 } from "lucide-react";
 import { useSession } from "@/lib/client/session";
-import { showToast } from "@/components/ui/toast";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
-import { ExpenseManager } from "@/components/expenses/expense-manager";
+import { FreightManager } from "@/components/expenses/freight-manager";
 import { ExpensesPeriodPanel } from "@/components/finance/expenses-period-panel";
 import { FinanceSummaryPanel } from "@/components/finance/finance-summary-panel";
 import { PayrollFinancePanel } from "@/components/finance/payroll-finance-panel";
@@ -21,14 +20,11 @@ import { BanksTreasuryPanel } from "@/components/finance/banks-treasury-panel";
  *
  * Reúne, en un solo lugar, lo que antes estaba disperso: proyección comercial
  * (antes en Inventario), gastos operativos, planilla, fletes y reportes.
- * Reutiliza ExpenseManager (gastos/fletes) y EmployeeManager (planilla) sin
- * duplicar lógica. Precios y márgenes se mudaron a la zona Precios
- * (/app/master/pricing) en la Fase 3 (prompt-mudanza-zona-precios.md) — ya
- * no es contabilidad, es una decisión comercial sobre el producto.
- *
- * TODO(finance-extract): mover progresivamente la lógica de ExpenseManager a
- * components/finance/{operating-expenses,freight-costs}-panel.tsx.
- * Planilla ya vive en payroll-finance-panel.tsx (Planilla V2).
+ * Gastos = ExpensesPeriodPanel (libro + presupuesto), fletes = FreightManager,
+ * planilla = payroll-finance-panel.tsx (Planilla V2). Precios y márgenes se
+ * mudaron a la zona Precios (/app/master/pricing) en la Fase 3
+ * (prompt-mudanza-zona-precios.md) — ya no es contabilidad, es una decisión
+ * comercial sobre el producto.
  */
 
 type FinanceTabKey = "summary" | "expenses" | "payroll" | "freight" | "banks" | "reports";
@@ -134,14 +130,11 @@ export function FinanceAccountingManager() {
       {/* Contenido por tab */}
       {activeTab === "summary" && <FinanceSummaryPanel />}
 
-      {/* prompt-gastos-semana-quincena.md Fase 3 — "Gastos operativos" ahora
-          abre primero el libro por período (día/semana/quincena/mes), que es
-          lo que responde "qué pasó" y "cuánto llevamos". La vista clásica
-          por mes (crear un gasto recurrente, ver el desglose del mes) sigue
-          disponible abajo, colapsada — ExpenseManager no se tocó, sigue
-          siendo el único lugar donde se da de alta un gasto RECURRING nuevo. */}
-      {activeTab === "expenses" && <OperatingExpensesTab />}
-      {activeTab === "freight" && <ExpenseManager forcedTab="freight" hideTabBar />}
+      {/* "Gastos operativos" es solo el libro por período (día/semana/
+          quincena/mes); el presupuesto (gastos fijos mensuales) se edita en
+          su botón Presupuesto. La vista clásica por mes se retiró. */}
+      {activeTab === "expenses" && <ExpensesPeriodPanel />}
+      {activeTab === "freight" && <FreightManager />}
 
       {/* Planilla V2: el banner informativo (ahora descartable), el hero de costo
           y la tabla viven dentro del panel; los tabs Calcular Nómina / Préstamos /
@@ -166,65 +159,6 @@ export function FinanceAccountingManager() {
           {/* TODO(finance-extract): finance-reports-panel.tsx con export de gastos/planilla/utilidad. */}
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * Libro por período + vista clásica por mes (dar de alta un gasto recurrente
- * = presupuesto, ver el desglose del mes), con UNA sola sucursal: la del
- * ?branchId= de la URL, que ambos leen y escriben. Lo que cambia en la vista
- * clásica recarga solo los datos del libro (refreshKey), sin remontar nada.
- */
-function OperatingExpensesTab() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const branchId = searchParams.get("branchId");
-  const [classicOpen, setClassicOpen] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [prefill, setPrefill] = useState<{ category: string; nonce: number } | null>(null);
-  const classicRef = useRef<HTMLDivElement>(null);
-
-  function setBranch(id: string) {
-    const params = new URLSearchParams(searchParams.toString());
-    if (id && id !== "all") params.set("branchId", id);
-    else params.delete("branchId");
-    router.replace(`${pathname}?${params}` as Parameters<typeof router.replace>[0], { scroll: false });
-  }
-
-  function defineBudget(category: string) {
-    setClassicOpen(true);
-    setPrefill({ category, nonce: Date.now() });
-    if (!branchId) showToast("info", "Elige la sucursal en la vista clásica: el presupuesto se define por sucursal.");
-    requestAnimationFrame(() => classicRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  }
-
-  return (
-    <div className="space-y-4">
-      <ExpensesPeriodPanel refreshKey={refreshKey} onDefineBudget={defineBudget} />
-      <div ref={classicRef} className="scroll-mt-4 rounded-lg" style={{ border: "0.5px solid var(--color-border)" }}>
-        <button
-          onClick={() => setClassicOpen((v) => !v)}
-          className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-semibold"
-          style={{ color: "var(--color-text-muted)" }}
-        >
-          Vista clásica por mes (presupuesto: gastos recurrentes, desglose mensual)
-          <span>{classicOpen ? "Ocultar" : "Mostrar"}</span>
-        </button>
-        {classicOpen && (
-          <div className="px-4 pb-4">
-            <ExpenseManager
-              forcedTab="expenses"
-              hideTabBar
-              branchId={branchId ?? "all"}
-              onBranchChange={setBranch}
-              prefill={prefill}
-              onChanged={() => setRefreshKey((k) => k + 1)}
-            />
-          </div>
-        )}
-      </div>
     </div>
   );
 }
