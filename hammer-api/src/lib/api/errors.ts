@@ -197,7 +197,7 @@ export function toApiErrorResponse(error: unknown) {
   }
 
   if (message === "PRODUCT_HAS_NO_BRANCH_PRICE") {
-    return fail("PRODUCT_HAS_NO_BRANCH_PRICE", "Este producto no tiene precio de venta asignado en esta sucursal. Asignalo en Catalogo -> Precios y costos antes de venderlo.", 422);
+    return fail("PRODUCT_HAS_NO_BRANCH_PRICE", "Este producto no tiene precio de venta asignado en esta sucursal. Asignalo en Inventario -> el producto -> Precios y costos antes de venderlo.", 422);
   }
 
   if (message && CASH_SESSION_CONFLICTS.has(message)) {

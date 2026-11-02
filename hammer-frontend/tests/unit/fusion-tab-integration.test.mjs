@@ -40,9 +40,9 @@ function read(rel) {
 
 const ADMIN = "components/catalog-inventory/catalog-inventory-admin.tsx";
 
-test("Catálogo e Inventario tiene la pestaña 'Fusiones', junto a 'Precios y costos'", () => {
+test("Catálogo e Inventario tiene la pestaña 'Fusiones'", () => {
   const c = read(ADMIN);
-  assert.match(c, /"pricing" \| "fusion"/, "el tipo Tab debe declarar fusion inmediatamente después de pricing");
+  assert.match(c, /\| "fusion" \|/, "el tipo Tab debe declarar fusion");
   assert.ok(/\{ id: "fusion", label: "Fusiones"/.test(c), "debe existir la entrada de la pestaña");
 });
 

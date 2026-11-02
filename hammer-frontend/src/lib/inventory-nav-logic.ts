@@ -143,7 +143,7 @@ export function resolveActiveNav(pathname: string, tab: string | null, extraPara
     return { groupKey: candidates[0].group.key, subsectionKey: candidates[0].sub.key };
   }
 
-  // Mismo path, ningún tab definido coincide (ej. catalog-inventory?tab=pricing,
+  // Mismo path, ningún tab definido coincide (ej. catalog-inventory?tab=summary,
   // una pestaña vieja sin subsección nueva): cae a la primera subsección de
   // CUALQUIER grupo que use ese path, para no dejar la barra sin nada activo.
   for (const group of INVENTORY_GROUPS) {
@@ -218,7 +218,7 @@ function normalize(text: string): string {
  * resueltos (la llamada a /api/master/inventory/products?q= la hace el
  * componente).
  */
-export function buildNavSearchResults(query: string, products: NavSearchProduct[]): NavSearchResultGroup[] {
+export function buildNavSearchResults(query: string, products: NavSearchProduct[], total = products.length): NavSearchResultGroup[] {
   const q = normalize(query);
   if (!q) return [];
 
@@ -226,6 +226,15 @@ export function buildNavSearchResults(query: string, products: NavSearchProduct[
   const productItems = (exactCode ? [exactCode, ...products.filter((p) => p.id !== exactCode.id)] : products)
     .slice(0, 8)
     .map((p) => ({ id: p.id, label: p.name, sublabel: p.sku, href: `/app/master/catalog-inventory/products/${p.id}` }));
+  // Más coincidencias de las que caben en el desplegable: la lista de Productos las muestra todas con el mismo texto.
+  if (total > productItems.length) {
+    productItems.push({
+      id: "all-results",
+      label: `Ver los ${total.toLocaleString("es-NI")} resultados en la lista`,
+      sublabel: "",
+      href: `/app/master/catalog-inventory?tab=products&q=${encodeURIComponent(query.trim())}`,
+    });
+  }
 
   const sectionItems = SECTION_SEARCH_ENTRIES
     .filter((entry) => entry.keywords.some((k) => normalize(k).includes(q) || q.includes(normalize(k))))

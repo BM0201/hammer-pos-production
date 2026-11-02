@@ -96,6 +96,8 @@ async function handleGet(request: Request) {
     // Agrupación por familia (ej. "Lija · 3 productos") — la pide el POS
     // para mostrar los resultados de búsqueda agrupados en vez de una lista plana.
     const group = searchParams.get("group") === "true";
+    // La madera se compra por viaje (pestaña Madera): Reposición no la ofrece en sus buscadores.
+    const excludeTimber = searchParams.get("excludeTimber") === "true";
 
     // Auditoría 2026-08-03: no se verificaba pertenencia a la sucursal
     // pedida — cualquier usuario autenticado podía consultar el catálogo
@@ -110,7 +112,7 @@ async function handleGet(request: Request) {
       return okCached(canSeeCosts ? products : redactCostFields(products), 30);
     }
 
-    const products = await listProducts({ q, ids, isActive, branchId, limit, inStockOnly, group });
+    const products = await listProducts({ q, ids, isActive, branchId, limit, inStockOnly, group, excludeTimber });
     // Search results: short TTL so new products appear within 30s
     return okCached(canSeeCosts ? products : redactCostFieldsDeep(products as unknown[]), 30);
   } catch (error) {

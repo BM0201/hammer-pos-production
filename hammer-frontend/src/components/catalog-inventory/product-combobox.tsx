@@ -1,35 +1,65 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
+import { apiFetch, unwrapApiData } from "@/lib/client/api";
 
-/**
- * Combobox de producto (búsqueda por SKU/nombre, sin librerías nuevas).
- * Extraído de purchase-orders/page.tsx (donde vivía sin exportar) para
- * reusarlo en product-barcodes-tab.tsx (Fase 2, prompt-codigos-y-duplicados.md
- * — "mover este código a otro producto") y en el asistente de unificación
- * (Fase 4, "elegir principal"). Filtra en memoria sobre una lista ya
- * cargada — igual que el original, no pide al servidor por tecla.
- */
 export type ComboboxProduct = { id: string; sku: string; name: string; unit: string };
 
+/**
+ * Busca productos en el servidor mientras se escribe. Cargar la lista completa
+ * y filtrar en el navegador topa en 1000 (listProducts) y deja productos sin
+ * poder elegirse. Usa la misma búsqueda por palabras, SKU y códigos del resto.
+ */
+export function useProductSearch(term: string, options: { branchId?: string; excludeTimber?: boolean; limit?: number } = {}) {
+  const { branchId, excludeTimber, limit = 20 } = options;
+  const [results, setResults] = useState<ComboboxProduct[]>([]);
+  useEffect(() => {
+    // Se vacía antes de buscar: Enter o un clic no deben elegir un resultado del texto anterior.
+    setResults([]);
+    const q = term.trim();
+    if (!q) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      const params = new URLSearchParams({ isActive: "true", limit: String(limit), q });
+      if (branchId) params.set("branchId", branchId);
+      if (excludeTimber) params.set("excludeTimber", "true");
+      apiFetch(`/api/catalog/products?${params}`, { signal: controller.signal })
+        .then((res) => res.json())
+        .then((raw) => {
+          const data = unwrapApiData(raw);
+          setResults(Array.isArray(data) ? data : []);
+        })
+        .catch(() => {});
+    }, 250);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [term, branchId, excludeTimber, limit]);
+  return results;
+}
+
+/** Combobox de producto (búsqueda por SKU/nombre/código, sin librerías nuevas). */
+
 export function ProductCombobox({
-  products,
   value,
   onSelect,
   placeholder = "Buscar por SKU o nombre...",
   excludeId,
+  branchId,
 }: {
-  products: ComboboxProduct[];
   value: ComboboxProduct | null;
   onSelect: (product: ComboboxProduct) => void;
   placeholder?: string;
   /** Oculta un producto de los resultados (ej. el propio producto que se está editando). */
   excludeId?: string;
+  /** Búsqueda en servidor: solo productos visibles en esta sucursal. */
+  branchId?: string;
 }) {
   const [query, setQuery] = useState(value ? `${value.sku} — ${value.name}` : "");
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const blurTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // El texto del producto ya elegido no es una búsqueda.
+  const results = useProductSearch(value && query === `${value.sku} — ${value.name}` ? "" : query, { branchId });
 
   useEffect(() => {
     setQuery(value ? `${value.sku} — ${value.name}` : "");
@@ -37,12 +67,7 @@ export function ProductCombobox({
 
   useEffect(() => () => { if (blurTimeout.current) clearTimeout(blurTimeout.current); }, []);
 
-  const filtered = useMemo(() => {
-    const pool = excludeId ? products.filter((p) => p.id !== excludeId) : products;
-    const q = query.trim().toLowerCase();
-    const base = !q ? pool : pool.filter((p) => p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q));
-    return base.slice(0, 30);
-  }, [products, query, excludeId]);
+  const filtered = excludeId ? results.filter((p) => p.id !== excludeId) : results;
 
   function selectProduct(p: ComboboxProduct) {
     onSelect(p);

@@ -17,6 +17,7 @@ import {
   ArrowRight,
   ChevronDown,
 } from "lucide-react";
+import { ProductCombobox, type ComboboxProduct } from "@/components/catalog-inventory/product-combobox";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -27,7 +28,6 @@ import {
   type Branch,
   type ApplyPreviewRow,
   type ExpenseSummary,
-  type ProductOption,
   type PricingProductContext,
   type CommercialAlert,
   type CategoryPolicyRow,
@@ -88,7 +88,7 @@ export function PricingCalculatorPanel({
   const [ivaPercent, setIvaPercent] = useState("15");
   const [calcMode, setCalcMode] = useState<"SIMPLE" | "ADVANCED">(initialProductId ? "ADVANCED" : "SIMPLE");
   const [includeTaxInCost, setIncludeTaxInCost] = useState(true);
-  const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
+  const [selectedProduct, setSelectedProduct] = useState<ComboboxProduct | null>(null);
   const [selectedProductId, setSelectedProductId] = useState(initialProductId ?? "");
   const [productContext, setProductContext] = useState<PricingProductContext | null>(null);
   const [calcCostTouched, setCalcCostTouched] = useState(false);
@@ -166,17 +166,6 @@ export function PricingCalculatorPanel({
     loadBranchData();
   }, [loadBranchData]);
 
-  useEffect(() => {
-    if (!branchId) return;
-    fetch(`/api/catalog/products?isActive=true&branchId=${branchId}`)
-      .then((res) => res.json())
-      .then((raw) => {
-        const data = unwrapApiData(raw);
-        setProductOptions(Array.isArray(data) ? data.map((item: ProductOption) => ({ id: item.id, sku: item.sku, name: item.name })) : []);
-      })
-      .catch(() => setProductOptions([]));
-  }, [branchId]);
-
   /* ── Handlers ── */
 
   const handleSaveConfig = async () => {
@@ -248,6 +237,8 @@ export function PricingCalculatorPanel({
       if (!res.ok) throw new Error("Failed");
       const data = unwrapApiData(await res.json()) as PricingProductContext;
       setProductContext(data);
+      // Al llegar desde el perfil o Precios vigentes (?productId=) el buscador muestra el producto.
+      setSelectedProduct((prev) => prev ?? { id: data.productId, sku: data.sku, name: data.name, unit: "" });
       setUseCategoryPolicy(false);
       setUseCommercialIntelligence(false);
       if (data.effectiveCost !== null && (!calcCost || !calcCostTouched || confirm("El costo base ya tiene un valor. ¿Quieres reemplazarlo con el costo efectivo del producto?"))) {
@@ -466,11 +457,11 @@ export function PricingCalculatorPanel({
                   step="0.1"
                   value={configForm.desiredMarginPercent}
                   onChange={(e) => setConfigForm((p) => ({ ...p, desiredMarginPercent: e.target.value }))}
-                  className="w-full rounded-xl border-2 border-slate-300 bg-white px-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/15 focus:outline-none"
+                  className="w-full rounded-xl border-2 border-[var(--color-border-strong)] bg-[var(--color-surface)] px-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/15 focus:outline-none"
                 />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-lg font-bold text-slate-500">%</span>
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-lg font-bold text-[var(--color-text-muted)]">%</span>
               </div>
-              <p className="text-xs text-slate-600 flex items-center gap-1">
+              <p className="text-xs text-[var(--color-text-secondary)] flex items-center gap-1">
                 <Info className="h-3 w-3 text-blue-500" />
                 Porcentaje de ganancia sobre el precio de venta final
               </p>
@@ -489,11 +480,11 @@ export function PricingCalculatorPanel({
                   step="1"
                   value={configForm.estimatedMonthlyUnits}
                   onChange={(e) => setConfigForm((p) => ({ ...p, estimatedMonthlyUnits: e.target.value }))}
-                  className="w-full rounded-xl border-2 border-slate-300 bg-white px-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/15 focus:outline-none"
+                  className="w-full rounded-xl border-2 border-[var(--color-border-strong)] bg-[var(--color-surface)] px-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/15 focus:outline-none"
                 />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-500">/ mes</span>
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-[var(--color-text-muted)]">/ mes</span>
               </div>
-              <p className="text-xs text-slate-600 flex items-center gap-1">
+              <p className="text-xs text-[var(--color-text-secondary)] flex items-center gap-1">
                 <Info className="h-3 w-3 text-blue-500" />
                 Cantidad total aproximada de unidades fisicas vendidas al mes. No significa SKUs distintos.
               </p>
@@ -506,14 +497,14 @@ export function PricingCalculatorPanel({
                 Método de Prorrateo
               </label>
               <select
-                className="w-full rounded-xl border-2 border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-[var(--color-text)] transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/15 focus:outline-none"
+                className="w-full rounded-xl border-2 border-[var(--color-border-strong)] bg-[var(--color-surface)] px-4 py-3 text-sm font-semibold text-[var(--color-text)] transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/15 focus:outline-none"
                 value={configForm.prorationMethod}
                 onChange={(e) => setConfigForm((p) => ({ ...p, prorationMethod: e.target.value }))}
               >
                 <option value="BY_QUANTITY">Por cantidad (unidades)</option>
                 <option value="BY_VALUE">Por valor (C$)</option>
               </select>
-              <p className="text-xs text-slate-600">
+              <p className="text-xs text-[var(--color-text-secondary)]">
                 {configForm.prorationMethod === "BY_VALUE"
                   ? "Gastos se reparten segun participacion economica del producto o lote."
                   : "Gastos se dividen equitativamente entre unidades vendidas."}
@@ -561,14 +552,14 @@ export function PricingCalculatorPanel({
           </div>
 
           <div className="p-6 space-y-5">
-            <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
+            <div className="grid grid-cols-2 gap-2 rounded-xl bg-[var(--color-surface-alt)] p-1">
               {(["SIMPLE", "ADVANCED"] as const).map((mode) => (
                 <button
                   key={mode}
                   type="button"
                   onClick={() => setCalcMode(mode)}
                   className={`rounded-lg px-3 py-2 text-sm font-bold transition ${
-                    calcMode === mode ? "bg-white text-emerald-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                    calcMode === mode ? "bg-white text-emerald-700 shadow-sm" : "text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
                   }`}
                 >
                   {mode === "SIMPLE" ? "Simple" : "Avanzado"}
@@ -583,7 +574,7 @@ export function PricingCalculatorPanel({
                 Costo Base sin IVA
               </label>
               <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-lg font-bold text-slate-500">C$</span>
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-lg font-bold text-[var(--color-text-muted)]">C$</span>
                 <input
                   type="number"
                   min="0"
@@ -595,7 +586,7 @@ export function PricingCalculatorPanel({
                     setCalcCostTouched(true);
                   }}
                   onKeyDown={(e) => e.key === "Enter" && handleCalculate()}
-                  className="w-full rounded-xl border-2 border-slate-300 bg-white pl-12 pr-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/15 focus:outline-none"
+                  className="w-full rounded-xl border-2 border-[var(--color-border-strong)] bg-[var(--color-surface)] pl-12 pr-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/15 focus:outline-none"
                 />
               </div>
             </div>
@@ -616,9 +607,9 @@ export function PricingCalculatorPanel({
                     placeholder="15"
                     value={ivaPercent}
                     onChange={(e) => setIvaPercent(e.target.value)}
-                    className="w-full rounded-xl border-2 border-slate-300 bg-white px-4 py-3 text-xl font-bold text-[var(--color-text)] transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/15 focus:outline-none"
+                    className="w-full rounded-xl border-2 border-[var(--color-border-strong)] bg-[var(--color-surface)] px-4 py-3 text-xl font-bold text-[var(--color-text)] transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/15 focus:outline-none"
                   />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-lg font-bold text-slate-500">%</span>
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-lg font-bold text-[var(--color-text-muted)]">%</span>
                 </div>
                 {/* Quick-set buttons */}
                 <div className="flex gap-1.5">
@@ -630,7 +621,7 @@ export function PricingCalculatorPanel({
                       className={`rounded-lg px-4 py-2.5 text-sm font-bold transition-all ${
                         Number(ivaPercent) === v
                           ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/30 border-2 border-emerald-600"
-                          : "bg-slate-100 text-slate-700 border-2 border-slate-300 hover:bg-slate-200"
+                          : "bg-[var(--color-surface-alt)] text-[var(--color-text-secondary)] border-2 border-[var(--color-border-strong)] hover:bg-slate-200"
                       }`}
                     >
                       {v === 0 ? "Sin IVA" : `${v}%`}
@@ -638,34 +629,31 @@ export function PricingCalculatorPanel({
                   ))}
                 </div>
               </div>
-              <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700">
+              <label className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-xs font-medium text-[var(--color-text-secondary)]">
                 <input
                   type="checkbox"
                   checked={includeTaxInCost}
                   onChange={(e) => setIncludeTaxInCost(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300"
+                  className="h-4 w-4 rounded border-[var(--color-border-strong)]"
                 />
                 Incluir IVA en el costo interno
               </label>
             </div>
 
             {calcMode === "ADVANCED" && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
-                <label className="space-y-1 text-xs font-semibold text-slate-700 sm:col-span-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4">
+                <label className="space-y-1 text-xs font-semibold text-[var(--color-text-secondary)] sm:col-span-2">
                   Producto
-                  <select
-                    value={selectedProductId}
-                    onChange={(e) => {
-                      setSelectedProductId(e.target.value);
+                  <ProductCombobox
+                    value={selectedProduct}
+                    branchId={branchId}
+                    placeholder="Buscar producto por nombre, SKU o código…"
+                    onSelect={(product) => {
+                      setSelectedProduct(product);
+                      setSelectedProductId(product.id);
                       setProductContext(null);
                     }}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                  >
-                    <option value="">Seleccionar producto...</option>
-                    {productOptions.map((product) => (
-                      <option key={product.id} value={product.id}>{product.sku} - {product.name}</option>
-                    ))}
-                  </select>
+                  />
                 </label>
                 <Button
                   variant="secondary"
@@ -676,7 +664,7 @@ export function PricingCalculatorPanel({
                   Cargar datos del producto
                 </Button>
                 {productContext ? (
-                  <div className="sm:col-span-2 grid gap-2 rounded-lg border border-emerald-200 bg-white p-3 text-xs">
+                  <div className="sm:col-span-2 grid gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs">
                     <div className="flex justify-between"><span>Producto</span><strong>{productContext.sku} - {productContext.name}</strong></div>
                     <div className="flex justify-between"><span>Categoria</span><strong>{productContext.categoryName}</strong></div>
                     <div className="flex justify-between"><span>Precio semilla (referencia)</span><strong>{money(productContext.standardSalePrice)}</strong></div>
@@ -691,7 +679,7 @@ export function PricingCalculatorPanel({
                       <input type="checkbox" checked={useCategoryPolicy} onChange={(e) => handleUseCategoryPolicyToggle(e.target.checked)} />
                       Usar politica de categoria
                     </label>
-                    {useCategoryPolicy ? <div className="text-[11px] text-slate-600">Los valores pueden editarse manualmente antes de calcular.</div> : null}
+                    {useCategoryPolicy ? <div className="text-[11px] text-[var(--color-text-secondary)]">Los valores pueden editarse manualmente antes de calcular.</div> : null}
                     {productContext.commercialIntelligence ? (
                       <div className="rounded border border-sky-200 bg-sky-50 p-2 text-sky-900">
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -733,7 +721,7 @@ export function PricingCalculatorPanel({
                   ["marketMinPrice", "Precio minimo mercado", "C$"],
                   ["marketMaxPrice", "Precio maximo mercado", "C$"],
                 ].map(([key, label, suffix]) => (
-                  <label key={key} className="space-y-1 text-xs font-semibold text-slate-700">
+                  <label key={key} className="space-y-1 text-xs font-semibold text-[var(--color-text-secondary)]">
                     {label}
                     <div className="relative">
                       <input
@@ -742,18 +730,18 @@ export function PricingCalculatorPanel({
                         step="0.01"
                         value={advancedCalc[key as keyof typeof advancedCalc]}
                         onChange={(e) => setAdvancedCalc((p) => ({ ...p, [key]: e.target.value }))}
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-10 text-sm"
+                        className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-2 pr-10 text-sm"
                       />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-slate-500">{suffix}</span>
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-[var(--color-text-muted)]">{suffix}</span>
                     </div>
                   </label>
                 ))}
-                <label className="space-y-1 text-xs font-semibold text-slate-700 sm:col-span-2">
+                <label className="space-y-1 text-xs font-semibold text-[var(--color-text-secondary)] sm:col-span-2">
                   Redondeo comercial
                   <select
                     value={advancedCalc.roundingRule}
                     onChange={(e) => setAdvancedCalc((p) => ({ ...p, roundingRule: e.target.value }))}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-2 text-sm"
                   >
                     <option value="NONE">Sin redondeo</option>
                     <option value="NEAREST_1">Entero mas cercano</option>
@@ -772,7 +760,7 @@ export function PricingCalculatorPanel({
                     <select
                       value={advancedCalc.expenseAllocationScope}
                       onChange={(e) => setAdvancedCalc((p) => ({ ...p, expenseAllocationScope: e.target.value as typeof p.expenseAllocationScope }))}
-                      className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+                      className="w-full rounded-lg border border-amber-300 bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
                     >
                       <option value="BRANCH">Sucursal completa</option>
                       <option value="CATEGORY">Categoria/familia</option>
@@ -801,7 +789,7 @@ export function PricingCalculatorPanel({
                           placeholder={configForm.estimatedMonthlyUnits}
                         />
                       </label>
-                      <div className="rounded border border-amber-200 bg-white p-2 text-[11px] text-amber-800">
+                      <div className="rounded border border-amber-200 bg-[var(--color-surface)] p-2 text-[11px] text-amber-800">
                         {advancedCalc.expenseAllocationScope === "CATEGORY"
                           ? "Gasto mensual asignado a la categoria. No uses gasto total de sucursal aqui."
                           : advancedCalc.expenseAllocationScope === "PRODUCT"
@@ -814,15 +802,15 @@ export function PricingCalculatorPanel({
                 </div>
                 {configForm.prorationMethod === "BY_VALUE" && (
                   <>
-                    <label className="space-y-1 text-xs font-semibold text-slate-700">
+                    <label className="space-y-1 text-xs font-semibold text-[var(--color-text-secondary)]">
                       Venta mensual estimada total
                       <Input type="number" min="0" step="0.01" value={advancedCalc.estimatedMonthlySalesValue} onChange={(e) => setAdvancedCalc((p) => ({ ...p, estimatedMonthlySalesValue: e.target.value }))} />
                     </label>
-                    <label className="space-y-1 text-xs font-semibold text-slate-700">
+                    <label className="space-y-1 text-xs font-semibold text-[var(--color-text-secondary)]">
                       Valor mensual del producto
                       <Input type="number" min="0" step="0.01" value={advancedCalc.productMonthlySalesValue} onChange={(e) => setAdvancedCalc((p) => ({ ...p, productMonthlySalesValue: e.target.value }))} />
                     </label>
-                    <label className="space-y-1 text-xs font-semibold text-slate-700 sm:col-span-2">
+                    <label className="space-y-1 text-xs font-semibold text-[var(--color-text-secondary)] sm:col-span-2">
                       Unidades mensuales del producto
                       <Input type="number" min="0" step="0.01" value={advancedCalc.estimatedMonthlyUnitsForThisProduct} onChange={(e) => setAdvancedCalc((p) => ({ ...p, estimatedMonthlyUnitsForThisProduct: e.target.value }))} />
                     </label>
@@ -836,8 +824,8 @@ export function PricingCalculatorPanel({
               <div className="rounded-xl bg-emerald-50 border-2 border-emerald-200 p-4 space-y-2">
                 <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Vista previa</p>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-700">Costo base</span>
-                  <span className="text-sm font-bold text-slate-900">{money(Number(calcCost) || 0)}</span>
+                  <span className="text-sm text-[var(--color-text-secondary)]">Costo base</span>
+                  <span className="text-sm font-bold text-[var(--color-text)]">{money(Number(calcCost) || 0)}</span>
                 </div>
                 {includeTaxInCost && Number(ivaPercent) > 0 && (
                   <div className="flex items-center justify-between">
@@ -855,8 +843,8 @@ export function PricingCalculatorPanel({
                 </div>
                 {!includeTaxInCost && Number(ivaPercent) > 0 && (
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-slate-600">IVA de referencia</span>
-                    <span className="text-sm font-bold text-slate-700">No se suma al costo interno</span>
+                    <span className="text-sm text-[var(--color-text-secondary)]">IVA de referencia</span>
+                    <span className="text-sm font-bold text-[var(--color-text-secondary)]">No se suma al costo interno</span>
                   </div>
                 )}
               </div>
@@ -934,7 +922,7 @@ export function PricingCalculatorPanel({
 
                   {/* Step 1: Costo base */}
                   <div className="flex items-center gap-3 rounded-xl bg-[var(--color-surface)]/60 dark:bg-[var(--color-surface)]/5 px-4 py-3">
-                    <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] font-bold text-slate-600 dark:text-slate-300">1</div>
+                    <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] font-bold text-[var(--color-text-secondary)] dark:text-slate-300">1</div>
                     <span className="flex-1 text-sm text-[var(--color-text-muted)]">Costo Base <span className="text-[10px]">(sin IVA)</span></span>
                     <span className="text-sm font-semibold tabular-nums">{money(costoBase)}</span>
                   </div>
@@ -961,8 +949,8 @@ export function PricingCalculatorPanel({
 
                   {/* Step 3: Costo Real */}
                   {calcResult.includeTaxInCost && iva > 0 && (
-                    <div className="flex items-center gap-3 rounded-xl bg-slate-100/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 px-4 py-3">
-                      <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-300 dark:bg-slate-600 text-[10px] font-bold text-slate-700 dark:text-slate-200">=</div>
+                    <div className="flex items-center gap-3 rounded-xl bg-slate-100/80 dark:bg-slate-800/40 border border-[var(--color-border)] dark:border-slate-700 px-4 py-3">
+                      <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-300 dark:bg-slate-600 text-[10px] font-bold text-[var(--color-text-secondary)] dark:text-slate-200">=</div>
                       <span className="flex-1 text-sm font-semibold text-[var(--color-text)]">Costo con IVA</span>
                       <span className="text-sm font-bold tabular-nums">{money(calcResult.baseCost + calcResult.taxAmount)}</span>
                     </div>
@@ -974,7 +962,7 @@ export function PricingCalculatorPanel({
                     ["Merma", calcResult.shrinkageAmount],
                     ["Costo puesto en tienda", calcResult.landedCost],
                   ].map(([label, value]) => (
-                    <div key={label} className="flex items-center gap-3 rounded-xl bg-white/70 px-4 py-3">
+                    <div key={label} className="flex items-center gap-3 rounded-xl bg-[var(--color-surface)] px-4 py-3">
                       <div className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-700">+</div>
                       <span className="flex-1 text-sm text-[var(--color-text-muted)]">{label}</span>
                       <span className="text-sm font-semibold tabular-nums">{money(Number(value))}</span>
@@ -992,23 +980,23 @@ export function PricingCalculatorPanel({
                   </div>
 
                   {/* Divider */}
-                  <div className="border-t-2 border-dashed border-slate-300 dark:border-slate-600 my-1" />
+                  <div className="border-t-2 border-dashed border-[var(--color-border-strong)] dark:border-slate-600 my-1" />
 
                   {/* Step 5: Costo total */}
-                  <div className="flex items-center gap-3 rounded-xl bg-slate-100/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 px-4 py-3">
-                    <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-300 dark:bg-slate-600 text-[10px] font-bold text-slate-700 dark:text-slate-200">=</div>
+                  <div className="flex items-center gap-3 rounded-xl bg-slate-100/80 dark:bg-slate-800/40 border border-[var(--color-border)] dark:border-slate-700 px-4 py-3">
+                    <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-300 dark:bg-slate-600 text-[10px] font-bold text-[var(--color-text-secondary)] dark:text-slate-200">=</div>
                     <span className="flex-1 text-sm font-semibold text-[var(--color-text)]">Costo Total Interno</span>
                     <span className="text-sm font-bold tabular-nums">{money(calcResult.totalInternalCost)}</span>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 pt-2">
-                    <div className="rounded-xl bg-white/80 border border-slate-200 p-3">
-                      <p className="text-[10px] font-bold uppercase text-slate-500">Precio minimo rentable</p>
-                      <p className="text-sm font-bold text-slate-900">{money(calcResult.minPrice)}</p>
+                    <div className="rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] p-3">
+                      <p className="text-[10px] font-bold uppercase text-[var(--color-text-muted)]">Precio minimo rentable</p>
+                      <p className="text-sm font-bold text-[var(--color-text)]">{money(calcResult.minPrice)}</p>
                     </div>
-                    <div className="rounded-xl bg-white/80 border border-slate-200 p-3">
-                      <p className="text-[10px] font-bold uppercase text-slate-500">Precio maximo de mercado</p>
-                      <p className="text-sm font-bold text-slate-900">{calcResult.maxPrice === null ? "Sin limite" : money(calcResult.maxPrice)}</p>
+                    <div className="rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] p-3">
+                      <p className="text-[10px] font-bold uppercase text-[var(--color-text-muted)]">Precio maximo de mercado</p>
+                      <p className="text-sm font-bold text-[var(--color-text)]">{calcResult.maxPrice === null ? "Sin limite" : money(calcResult.maxPrice)}</p>
                     </div>
                   </div>
 
@@ -1056,25 +1044,25 @@ export function PricingCalculatorPanel({
 
                   {/* KPIs debajo del precio */}
                   <div className="grid grid-cols-2 gap-3 mt-6 w-full max-w-xs">
-                    <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
+                    <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-[var(--color-border-strong)] dark:border-slate-700 p-3 text-center shadow-sm">
                       <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Margen real</p>
                       <p className="text-lg font-bold text-[var(--color-master-600)] dark:text-[var(--color-master-400)]">{calcResult.grossMarginPercent.toFixed(1)}%</p>
                     </div>
-                    <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
+                    <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-[var(--color-border-strong)] dark:border-slate-700 p-3 text-center shadow-sm">
                       <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Markup</p>
                       <p className="text-lg font-bold text-teal-600 dark:text-teal-400">{gananciaPercent}%</p>
                     </div>
-                    <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
+                    <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-[var(--color-border-strong)] dark:border-slate-700 p-3 text-center shadow-sm">
                       <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Gastos/mes</p>
                       <p className="text-xs font-bold text-[var(--color-text)]">{money(calcResult.totalMonthlyExpenses)}</p>
                     </div>
-                    <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
+                    <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-[var(--color-border-strong)] dark:border-slate-700 p-3 text-center shadow-sm">
                       <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Uds/mes</p>
                       <p className="text-xs font-bold text-[var(--color-text)]">{calcResult.estimatedMonthlyUnits.toLocaleString()}</p>
                     </div>
                   </div>
 
-                  <div className="mt-4 w-full max-w-xs rounded-xl border border-slate-200 bg-white/80 p-3 text-left text-xs text-slate-700">
+                  <div className="mt-4 w-full max-w-xs rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-left text-xs text-[var(--color-text-secondary)]">
                     <div className="flex justify-between"><span>Precio minimo crudo</span><strong>{money(calcResult.rawSuggestedPrice)}</strong></div>
                     <div className="flex justify-between"><span>Redondeo</span><strong>{calcResult.roundingRule}</strong></div>
                     <div className="flex justify-between"><span>Piso aplicado</span><strong>{calcResult.priceFloorReason}</strong></div>
@@ -1096,7 +1084,7 @@ export function PricingCalculatorPanel({
                   {productContext ? (
                     <div className="mt-5 w-full max-w-xs space-y-2 text-left">
                       {/* Fase 2 — alcance: una sucursal, varias elegidas, o todas las activas */}
-                      <div className="flex rounded-lg border border-slate-300 p-0.5 text-xs dark:border-slate-700">
+                      <div className="flex rounded-lg border border-[var(--color-border-strong)] p-0.5 text-xs dark:border-slate-700">
                         {([
                           { value: "BRANCH" as const, label: "Esta sucursal" },
                           { value: "SELECTED_BRANCHES" as const, label: "Elegir sucursales" },
@@ -1114,7 +1102,7 @@ export function PricingCalculatorPanel({
                       </div>
 
                       {applyScope === "SELECTED_BRANCHES" && (
-                        <div className="max-h-32 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                        <div className="max-h-32 space-y-1 overflow-y-auto rounded-lg border border-[var(--color-border)] p-2 dark:border-slate-700">
                           {branches.map((b) => (
                             <label key={b.id} className="flex items-center gap-2 text-xs text-[var(--color-text)]">
                               <input
@@ -1220,7 +1208,7 @@ export function PricingCalculatorPanel({
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-full text-xs">
               <thead>
-                <tr className="border-b border-slate-200 text-left text-slate-500">
+                <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
                   <th className="py-2 pr-3">Producto</th>
                   <th className="py-2 pr-3">Clase</th>
                   <th className="py-2 pr-3">Margen</th>
@@ -1233,8 +1221,8 @@ export function PricingCalculatorPanel({
                 {commercialAlerts.map((alert, index) => (
                   <tr key={`${alert.productId}-${alert.message}-${index}`} className="border-b border-slate-100 align-top">
                     <td className="py-2 pr-3">
-                      <div className="font-semibold text-slate-900">{alert.sku}</div>
-                      <div className="text-slate-600">{alert.name}</div>
+                      <div className="font-semibold text-[var(--color-text)]">{alert.sku}</div>
+                      <div className="text-[var(--color-text-secondary)]">{alert.name}</div>
                     </td>
                     <td className="py-2 pr-3">
                       <span className={`rounded px-2 py-1 font-bold ${
@@ -1242,7 +1230,7 @@ export function PricingCalculatorPanel({
                       }`}>
                         {alert.combinedClass}
                       </span>
-                      <div className="mt-1 text-slate-500">{alert.riskLevel}</div>
+                      <div className="mt-1 text-[var(--color-text-muted)]">{alert.riskLevel}</div>
                     </td>
                     <td className="py-2 pr-3">{alert.grossMarginPercent === null ? "N/A" : `${alert.grossMarginPercent.toFixed(1)}%`}</td>
                     <td className="py-2 pr-3">{alert.stockOnHand.toLocaleString()}</td>
@@ -1258,7 +1246,7 @@ export function PricingCalculatorPanel({
         )}
       </Card>
 
-      <details className="group rounded-2xl border border-slate-200 dark:border-slate-700 bg-[var(--color-surface)] overflow-hidden">
+      <details className="group rounded-2xl border border-[var(--color-border)] dark:border-slate-700 bg-[var(--color-surface)] overflow-hidden">
         <summary className="flex items-center gap-3 cursor-pointer px-6 py-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors select-none">
           <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--color-info-50)] dark:bg-blue-900/30">
             <Info className="h-4 w-4 text-[var(--color-info-700)] dark:text-blue-400" />
@@ -1281,7 +1269,7 @@ export function PricingCalculatorPanel({
                   { step: "3", color: "slate", formula: "Costo Total = Costo Real + Gasto/Unidad", note: "Costo completo por unidad" },
                   { step: "4", color: "emerald", formula: "Precio = Costo Total ÷ (1 − Margen/100)", note: "Precio con margen incluido" },
                 ].map((item) => (
-                  <div key={item.step} className="flex items-start gap-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 p-3">
+                  <div key={item.step} className="flex items-start gap-3 rounded-xl bg-[var(--color-surface-alt)] dark:bg-slate-800/40 p-3">
                     <div className={`flex items-center justify-center w-6 h-6 rounded-full bg-${item.color}-200 dark:bg-${item.color}-800 text-[10px] font-bold text-${item.color}-700 dark:text-${item.color}-300 flex-shrink-0 mt-0.5`} style={{
                       backgroundColor: item.color === "amber" ? "#fde68a" : item.color === "rose" ? "#fecdd3" : item.color === "slate" ? "#cbd5e1" : "#a7f3d0",
                       color: item.color === "amber" ? "#92400e" : item.color === "rose" ? "#9f1239" : item.color === "slate" ? "#334155" : "#065f46",
@@ -1300,13 +1288,13 @@ export function PricingCalculatorPanel({
             {/* Ejemplo */}
             <div className="space-y-3">
               <h6 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-success-700)] dark:text-emerald-400">Ejemplo Práctico</h6>
-              <div className="rounded-xl bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800/60 dark:to-slate-800/30 border border-slate-200 dark:border-slate-700 p-4 space-y-2 font-mono text-xs">
+              <div className="rounded-xl bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800/60 dark:to-slate-800/30 border border-[var(--color-border)] dark:border-slate-700 p-4 space-y-2 font-mono text-xs">
                 <p className="text-[var(--color-text-muted)]"><span className="text-[var(--color-text)] font-semibold">Cemento</span> — Costo base: C$400</p>
-                <div className="border-t border-slate-200 dark:border-slate-700 pt-2 space-y-1">
+                <div className="border-t border-[var(--color-border)] dark:border-slate-700 pt-2 space-y-1">
                   <p><span className="text-[var(--color-warning-700)] font-semibold">①</span> C$400 × 1.15 = <strong className="text-[var(--color-text)]">C$460.00</strong> <span className="text-[10px] text-[var(--color-text-muted)]">(+IVA 15%)</span></p>
                   <p><span className="text-rose-600 font-semibold">②</span> C$50,000 ÷ 1,000 = <strong className="text-[var(--color-text)]">C$50.00</strong> <span className="text-[10px] text-[var(--color-text-muted)]">(gasto/ud)</span></p>
-                  <p><span className="text-slate-600 font-semibold">③</span> C$460 + C$50 = <strong className="text-[var(--color-text)]">C$510.00</strong> <span className="text-[10px] text-[var(--color-text-muted)]">(costo total)</span></p>
-                  <div className="border-t border-slate-200 dark:border-slate-700 pt-2 mt-2">
+                  <p><span className="text-[var(--color-text-secondary)] font-semibold">③</span> C$460 + C$50 = <strong className="text-[var(--color-text)]">C$510.00</strong> <span className="text-[10px] text-[var(--color-text-muted)]">(costo total)</span></p>
+                  <div className="border-t border-[var(--color-border)] dark:border-slate-700 pt-2 mt-2">
                     <p><span className="text-[var(--color-success-700)] font-semibold">④</span> C$510 ÷ (1 − 0.07) = <strong className="text-[var(--color-success-700)] dark:text-emerald-400 text-base">C$548.39</strong></p>
                     <p className="text-[10px] text-[var(--color-text-muted)] mt-1">Margen del 7% — Ganancia: C$38.39/ud</p>
                   </div>

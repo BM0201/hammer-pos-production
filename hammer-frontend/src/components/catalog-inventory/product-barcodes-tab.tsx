@@ -64,7 +64,6 @@ export function ProductBarcodesTab({
   const [showCamera, setShowCamera] = useState(false);
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveTarget, setMoveTarget] = useState<ComboboxProduct | null>(null);
-  const [allProducts, setAllProducts] = useState<ComboboxProduct[]>([]);
   const [printingId, setPrintingId] = useState<string | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -250,19 +249,10 @@ export function ProductBarcodesTab({
     }
   }
 
-  async function startMove(barcodeId: string) {
+  function startMove(barcodeId: string) {
     setMenuOpenId(null);
     setMovingId(barcodeId);
     setMoveTarget(null);
-    if (allProducts.length > 0) return;
-    try {
-      const res = await apiFetch(`/api/catalog/products?limit=1000&isActive=true`);
-      const raw = await res.json();
-      const data = unwrapApiData(raw) as Array<{ id: string; sku: string; name: string; unit: string }>;
-      setAllProducts(data);
-    } catch {
-      toast.error("No se pudo cargar la lista de productos.");
-    }
   }
 
   async function confirmMove(barcodeId: string) {
@@ -407,7 +397,6 @@ export function ProductBarcodesTab({
                           Este código estaba en el producto equivocado — mover a:
                         </label>
                         <ProductCombobox
-                          products={allProducts}
                           value={moveTarget}
                           onSelect={setMoveTarget}
                           excludeId={productId}

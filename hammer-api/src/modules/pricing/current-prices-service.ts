@@ -119,7 +119,7 @@ export async function getCurrentPrices(
   const where: Prisma.ProductWhereInput = {
     isActive: true,
     ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
-    ...(filters.q ? buildProductSearchWhere<Prisma.ProductWhereInput>(filters.q, ["sku", "name", "barcode", "category.name"]) : {}),
+    ...(filters.q ? buildProductSearchWhere<Prisma.ProductWhereInput>(filters.q, ["sku", "name", "barcode", "barcodes.code", "category.name"]) : {}),
   };
 
   const products = await db.product.findMany({

@@ -28,10 +28,6 @@ function read(rel) {
 }
 
 const ADMIN = "components/catalog-inventory/catalog-inventory-admin.tsx";
-// Fase 5 (prompt-flujo-velocidad.md): PricingPanel se extrajo de ADMIN a su
-// propio archivo para cargarlo con next/dynamic — el contenido que prueba
-// C.4 vive ahí ahora, no en catalog-inventory-admin.tsx.
-const PRICING = "components/catalog-inventory/pricing-panel.tsx";
 
 test("Parte A: la barra de filtros no usa .hm-input directo sin envolver — el control que queda (categoría) sigue en su propio div con ancho fijo", () => {
   const c = read(ADMIN);
@@ -105,10 +101,37 @@ test("Parte C.3: con sucursal elegida, el encabezado de columna dice 'Costo · {
   assert.match(c, /Costo\{data\.costScope === "BRANCH" && costBranchCode \? ` · \$\{costBranchCode\}` : ""\}/, "el encabezado de Costo debe incluir el código de sucursal cuando hay una elegida");
 });
 
-test("Parte C.4: 'Precios y costos' (PricingPanel) ya no cae a branches[0] en silencio — activeBranch es null sin sucursal, no un fallback local", () => {
-  const c = read(PRICING);
-  assert.ok(!c.includes("branches.find((branch) => branch.id === selectedBranchId) ?? branches[0]"), "activeBranch no debe caer a branches[0]");
-  assert.ok(c.includes("branches.find((branch) => branch.id === selectedBranchId) ?? null"), "activeBranch debe ser null explícito sin sucursal elegida");
-  assert.ok(!c.includes("if (!selectedBranchId && branches[0]) {"), "no debe existir el useEffect que auto-seleccionaba branches[0] y mutaba el branchId compartido");
-  assert.ok(c.includes("Elegí una sucursal arriba para ver y editar precios y costos"), "debe pedir explícito una sucursal en vez de mostrar la tabla vacía en silencio");
+
+test("'Precios y costos' (?tab=pricing) se retiró del centro: links viejos se redirigen y cada camino lleva a un lugar real", () => {
+  const c = read(ADMIN);
+  assert.ok(!existsSync(join(SRC, "components/catalog-inventory/pricing-panel.tsx")), "PricingPanel (buscador que filtraba solo la página cargada) ya no existe");
+  assert.ok(!c.includes('tab === "pricing"'), "el centro ya no dibuja esa pestaña");
+  assert.match(c, /RETIRED_PRICING_TAB_HREF = "\/app\/master\/pricing\?tab=current"/, "?tab=pricing redirige a Precios vigentes");
+  assert.ok(c.includes("router.replace(RETIRED_PRICING_TAB_HREF"), "la redirección es replace, no deja la URL vieja en el historial");
+  assert.ok(c.includes("/products/${product.id}?tab=pricing"), "el botón Precio de la fila abre el perfil en Precios y costos");
+  assert.ok(c.includes('onNavigate("products", "NO_PRICE")'), "'Sin precio de venta' filtra la Lista como 'Sin costo'");
+  const profile = read("components/catalog-inventory/product-360.tsx");
+  assert.ok(profile.includes("/branch-settings"), "la asignación manual por sucursal (lo único propio de la pestaña retirada) vive en el perfil");
+});
+
+test("los buscadores de productos buscan en el servidor — cargar la lista topa en 1000 y hay más productos", () => {
+  const combobox = read("components/catalog-inventory/product-combobox.tsx");
+  assert.ok(combobox.includes('new URLSearchParams({ isActive: "true", limit: String(limit), q })'), "el buscador pide al servidor por lo escrito");
+  const calculator = read("components/pricing/pricing-calculator-panel.tsx");
+  assert.ok(!calculator.includes("productOptions"), "la Calculadora ya no carga la lista completa en un <select>");
+  assert.ok(calculator.includes("<ProductCombobox"));
+  const barcodes = read("components/catalog-inventory/product-barcodes-tab.tsx");
+  assert.ok(!barcodes.includes("limit=1000"), "mover un código tampoco carga la lista completa");
+  for (const page of ["app/app/master/purchase-orders/page.tsx", "app/app/master/replenishment/page.tsx"]) {
+    assert.ok(!read(page).includes('fetch("/api/catalog/products")'), `${page} no debe cargar la lista completa`);
+  }
+  const replenishment = read("app/app/master/replenishment/page.tsx");
+  assert.equal(replenishment.match(/excludeTimber: true/g)?.length, 2, "Plan y Traslados siguen sin ofrecer madera");
+});
+
+test("el perfil permite cambiar precios: el general y el propio de cada sucursal, incluso si ya tiene uno", () => {
+  const profile = read("components/catalog-inventory/product-360.tsx");
+  assert.ok(profile.includes("JSON.stringify({ standardSalePrice: price"), "el precio general se guarda desde el perfil");
+  assert.ok(profile.includes('raw?.error?.code === "PRICE_DEVIATES_FROM_FUSION"'), "el desvío de fusión se confirma, igual que en Fusiones");
+  assert.match(profile, /"Agregar motivo" : "Cambiar precio aquí"/, "una sucursal con precio propio también puede cambiarlo sin volver al general");
 });

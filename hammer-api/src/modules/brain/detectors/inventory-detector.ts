@@ -284,7 +284,7 @@ export async function detectInventoryDecisions(ctx: BrainDetectorContext): Promi
         severity: isWoodCategory ? "HIGH" : "HIGH",
         title: `${isWoodCategory ? "Madera" : "Producto"} sin precio: ${product.sku} - ${product.name}`,
         description: "Producto activo sin precio de venta asignado en ninguna sucursal.",
-        recommendation: "Definir precio por sucursal en Catalogo -> Precios y costos antes de venderlo en POS.",
+        recommendation: "Definir precio por sucursal en Inventario -> el producto -> Precios y costos antes de venderlo en POS.",
         productId: product.id,
         confidenceScore: 0.96,
         riskScore: riskScoreFor("HIGH", 0.96),

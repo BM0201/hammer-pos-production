@@ -115,7 +115,7 @@ function productWhere(params: Partial<CatalogInventoryQuery>): Prisma.ProductWhe
   return {
     ...(params.categoryId ? { categoryId: params.categoryId } : {}),
     ...(params.q
-      ? buildProductSearchWhere<Prisma.ProductWhereInput>(params.q, ["sku", "name", "barcode", "category.name"])
+      ? buildProductSearchWhere<Prisma.ProductWhereInput>(params.q, ["sku", "name", "barcode", "barcodes.code", "category.name"])
       : {}),
   };
 }
@@ -361,45 +361,8 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
   }
 
   const filteredProductIds = filteredProducts.map((product) => product.id);
-  const stockGroupMembers = filteredProductIds.length > 0
-    ? await prisma.productStockGroupMember.findMany({
-        where: { productId: { in: filteredProductIds }, isActive: true, stockGroup: { isActive: true } },
-        include: {
-          stockGroup: {
-            include: {
-              products: {
-                where: { isActive: true },
-                select: { productId: true, isCanonical: true, conversionFactor: true, isPackagePresentation: true },
-                orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
-              },
-            },
-          },
-        },
-      })
-    : [];
-  const conversionByProductId = new Map<string, CatalogStockConversion>();
-  for (const member of stockGroupMembers) {
-    const canonical = member.stockGroup.products.find((item) => item.isCanonical)
-      ?? member.stockGroup.products.find((item) => new Prisma.Decimal(item.conversionFactor).eq(1))
-      ?? member;
-    conversionByProductId.set(member.productId, {
-      stockGroupId: member.stockGroupId,
-      stockGroupCode: member.stockGroup.code,
-      stockGroupName: member.stockGroup.name,
-      baseUnit: member.stockGroup.baseUnit,
-      packageUnit: member.stockGroup.packageUnit,
-      saleUnit: member.saleUnit,
-      conversionFactor: member.conversionFactor,
-      conversionFactorToBase: member.stockGroup.conversionFactorToBase,
-      tracksPackages: member.stockGroup.tracksPackages,
-      approximateFactor: member.stockGroup.approximateFactor,
-      minimumClosedPackageReserve: member.stockGroup.minimumClosedPackageReserve,
-      autoOpenForUnitSale: member.stockGroup.autoOpenForUnitSale,
-      isPackagePresentation: member.isPackagePresentation,
-      canonicalProductId: canonical.productId,
-      isCanonical: member.isCanonical,
-    });
-  }
+  const conversionByProductId = await loadStockConversions(filteredProductIds);
+
   const inventoryProductIds = Array.from(new Set(filteredProducts.map((product) => conversionByProductId.get(product.id)?.canonicalProductId ?? product.id)));
   const branchIds = branches.map((branch) => branch.id);
   const sharedInventoryBalances = inventoryProductIds.length > 0 && branchIds.length > 0
@@ -578,6 +541,50 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
   };
 }
 
+/** Fusión (ProductStockGroupMember) de cada producto: unidad de venta, factor y canónico. La usan la lista y el perfil. */
+async function loadStockConversions(productIds: string[]): Promise<Map<string, CatalogStockConversion>> {
+  const stockGroupMembers = productIds.length > 0
+    ? await prisma.productStockGroupMember.findMany({
+        where: { productId: { in: productIds }, isActive: true, stockGroup: { isActive: true } },
+        include: {
+          stockGroup: {
+            include: {
+              products: {
+                where: { isActive: true },
+                select: { productId: true, isCanonical: true, conversionFactor: true, isPackagePresentation: true },
+                orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
+              },
+            },
+          },
+        },
+      })
+    : [];
+  const conversionByProductId = new Map<string, CatalogStockConversion>();
+  for (const member of stockGroupMembers) {
+    const canonical = member.stockGroup.products.find((item) => item.isCanonical)
+      ?? member.stockGroup.products.find((item) => new Prisma.Decimal(item.conversionFactor).eq(1))
+      ?? member;
+    conversionByProductId.set(member.productId, {
+      stockGroupId: member.stockGroupId,
+      stockGroupCode: member.stockGroup.code,
+      stockGroupName: member.stockGroup.name,
+      baseUnit: member.stockGroup.baseUnit,
+      packageUnit: member.stockGroup.packageUnit,
+      saleUnit: member.saleUnit,
+      conversionFactor: member.conversionFactor,
+      conversionFactorToBase: member.stockGroup.conversionFactorToBase,
+      tracksPackages: member.stockGroup.tracksPackages,
+      approximateFactor: member.stockGroup.approximateFactor,
+      minimumClosedPackageReserve: member.stockGroup.minimumClosedPackageReserve,
+      autoOpenForUnitSale: member.stockGroup.autoOpenForUnitSale,
+      isPackagePresentation: member.isPackagePresentation,
+      canonicalProductId: canonical.productId,
+      isCanonical: member.isCanonical,
+    });
+  }
+  return conversionByProductId;
+}
+
 export async function getCatalogInventoryProduct(productId: string) {
   const product = await prisma.product.findUnique({
     where: { id: productId },
@@ -600,6 +607,9 @@ export async function getCatalogInventoryProduct(productId: string) {
   });
   if (!product) throw new Error("NOT_FOUND");
 
+  // El panel "Editar producto" del perfil necesita la fusión para mostrar la unidad de venta real.
+  const stockConversion = (await loadStockConversions([productId])).get(productId) ?? null;
+
   const auditLogs = await prisma.auditLog.findMany({
     where: { entityId: productId },
     include: { actor: { select: { id: true, username: true, fullName: true } }, branch: { select: { id: true, code: true, name: true } } },
@@ -607,7 +617,7 @@ export async function getCatalogInventoryProduct(productId: string) {
     take: 60,
   });
 
-  return { product, auditLogs };
+  return { product: { ...product, stockConversion }, auditLogs };
 }
 
 /**

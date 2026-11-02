@@ -1592,7 +1592,7 @@ export default function MasterCommandCenterPage() {
     { key: "days", count: attention?.pendingReviewDays ?? 0, label: "día(s) esperando tu confirmación", href: "/app/master/operations", tone: "warning" },
     { key: "approvals", count: attention?.pendingApprovals ?? 0, label: "aprobación(es) pendientes", href: "/app/master/approvals", tone: "warning" },
     { key: "pendingPay", count: totals.pendingPaymentCount, label: `cobro(s) pendientes · ${money(totals.pendingPaymentTotal)}`, href: "/app/master/sales/orders", tone: "warning" },
-    { key: "noPrice", count: attention?.productsMissingPrice ?? 0, label: "producto(s) sin precio de venta", href: "/app/master/catalog-inventory?tab=pricing", tone: "warning" },
+    { key: "noPrice", count: attention?.productsMissingPrice ?? 0, label: "producto(s) sin precio de venta", href: "/app/master/catalog-inventory?tab=products&filter=NO_PRICE", tone: "warning" },
     { key: "dispatch", count: attention?.pendingDispatchTotal ?? 0, label: "despacho(s) pendientes", href: "/app/master/sales/orders", tone: "info" },
   ];
   const closureRows =

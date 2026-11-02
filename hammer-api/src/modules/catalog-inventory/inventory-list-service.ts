@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { tokenize } from "@/modules/catalog/product-search";
 
 /**
  * prompt-inventario-v3.md Fase 1.2 — lista de productos para la nueva
@@ -115,6 +116,25 @@ const VIEW_COND: Record<Exclude<InventoryProductView, "ALL">, Prisma.Sql> = {
   INACTIVE: Prisma.sql`p."isActive" = false`,
 };
 
+/**
+ * Búsqueda por texto sobre `Product p` — misma regla que
+ * buildProductSearchWhere (catalog/product-search.ts): cada palabra debe
+ * aparecer en el nombre, el SKU, cualquier código o la categoría, en
+ * cualquier orden. Antes se buscaba la frase pegada ("plywood 3/16" no
+ * encontraba `PLYWOOD DE 3/16"`) y solo el código principal exacto.
+ */
+export function productTextSearchSql(q: string | undefined): Prisma.Sql | null {
+  const tokens = tokenize(q ?? "");
+  if (tokens.length === 0) return null;
+  return Prisma.join(
+    tokens.map((token) => {
+      const like = `%${token}%`;
+      return Prisma.sql`(p.name ILIKE ${like} OR p.sku ILIKE ${like} OR p.barcode ILIKE ${like} OR EXISTS (SELECT 1 FROM "ProductBarcode" pb WHERE pb."productId" = p.id AND pb.code ILIKE ${like}) OR EXISTS (SELECT 1 FROM "Category" sc WHERE sc.id = p."categoryId" AND sc.name ILIKE ${like}))`;
+    }),
+    " AND ",
+  );
+}
+
 function decimalToNumber(value: Prisma.Decimal | number | string | null | undefined): number {
   if (value === null || value === undefined) return 0;
   return Number(value);
@@ -129,10 +149,8 @@ export async function listInventoryProducts(input: ListInventoryProductsInput): 
     view === "INACTIVE" ? Prisma.sql`p."isActive" = false` : Prisma.sql`p."isActive" = true`,
   ];
   if (input.categoryId) baseConditions.push(Prisma.sql`p."categoryId" = ${input.categoryId}`);
-  if (input.q?.trim()) {
-    const q = input.q.trim();
-    baseConditions.push(Prisma.sql`(p.name ILIKE ${"%" + q + "%"} OR p.sku ILIKE ${"%" + q + "%"} OR p.barcode = ${q})`);
-  }
+  const textSearch = productTextSearchSql(input.q);
+  if (textSearch) baseConditions.push(textSearch);
   const baseWhere = Prisma.join(baseConditions, " AND ");
 
   const viewCondition = view !== "ALL" && view !== "INACTIVE" ? Prisma.sql`AND ${VIEW_COND[view]}` : Prisma.sql``;
@@ -204,10 +222,8 @@ export async function listInventoryProducts(input: ListInventoryProductsInput): 
 async function countInventoryProductsByView(input: Pick<ListInventoryProductsInput, "branchId" | "categoryId" | "q">): Promise<InventoryProductCounts> {
   const conditions: Prisma.Sql[] = [];
   if (input.categoryId) conditions.push(Prisma.sql`p."categoryId" = ${input.categoryId}`);
-  if (input.q?.trim()) {
-    const q = input.q.trim();
-    conditions.push(Prisma.sql`(p.name ILIKE ${"%" + q + "%"} OR p.sku ILIKE ${"%" + q + "%"} OR p.barcode = ${q})`);
-  }
+  const textSearch = productTextSearchSql(input.q);
+  if (textSearch) conditions.push(textSearch);
   const extraWhere = conditions.length > 0 ? Prisma.sql`AND ${Prisma.join(conditions, " AND ")}` : Prisma.sql``;
 
   const [row] = await prisma.$queryRaw<Array<Record<string, bigint>>>`
@@ -430,10 +446,8 @@ export type InventoryStockMatrixRow = {
 export async function getInventoryStockMatrix(input: { branchIds: string[]; categoryId?: string; q?: string }): Promise<InventoryStockMatrixRow[]> {
   const conditions: Prisma.Sql[] = [Prisma.sql`p."isActive" = true`];
   if (input.categoryId) conditions.push(Prisma.sql`p."categoryId" = ${input.categoryId}`);
-  if (input.q?.trim()) {
-    const q = input.q.trim();
-    conditions.push(Prisma.sql`(p.name ILIKE ${"%" + q + "%"} OR p.sku ILIKE ${"%" + q + "%"})`);
-  }
+  const textSearch = productTextSearchSql(input.q);
+  if (textSearch) conditions.push(textSearch);
   const where = Prisma.join(conditions, " AND ");
 
   const rows = await prisma.$queryRaw<Array<{ productId: string; sku: string; name: string; branchId: string; branchCode: string; quantityOnHand: Prisma.Decimal; stockStatus: string | null }>>`

@@ -13,6 +13,7 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, qty, fmtDate, fmtDateTime } from "@/lib/format";
 import { useSubmitting } from "@/lib/client/use-submitting";
 import { BranchMatrix } from "@/components/multi-branch/branch-matrix";
+import { useProductSearch } from "@/components/catalog-inventory/product-combobox";
 import { type MatrixLine, buildMatrixPayloadLines, buildBranchPreviews } from "@/lib/multi-branch-matrix";
 import { InventoryTopbar } from "@/components/inventory/inventory-topbar";
 import { useInventoryScope } from "@/hooks/use-inventory-scope";
@@ -21,7 +22,7 @@ import { useInventoryScope } from "@/hooks/use-inventory-scope";
  * Tipos
  * ══════════════════════════════════════════════════════════════ */
 
-type Product = { id: string; sku: string; name: string; unit: string; isTimber?: boolean };
+type Product = { id: string; sku: string; name: string; unit: string };
 type Branch = { id: string; code: string; name: string; isDefaultSupplier?: boolean };
 type Supplier = { id: string; name: string; ruc?: string | null; paymentTerms?: string | null };
 
@@ -140,7 +141,7 @@ type TransferOpportunity = {
   priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
   message: string;
 };
-type TransferLineForm = { productId: string; quantity: string };
+type TransferLineForm = { productId: string; name: string; quantity: string };
 
 type InboundDocumentRow = {
   kind: "PURCHASE_ORDER" | "TRANSFER";
@@ -390,7 +391,7 @@ function SignalsTab({ branchId, onAdded }: { branchId: string; onAdded: () => vo
  * TAB 2 — PLAN
  * ══════════════════════════════════════════════════════════════ */
 
-function PlanTab({ branchId, products, refreshKey }: { branchId: string; products: Product[]; refreshKey: number }) {
+function PlanTab({ branchId, refreshKey }: { branchId: string; refreshKey: number }) {
   const [draft, setDraft] = useState<DraftType | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -398,6 +399,8 @@ function PlanTab({ branchId, products, refreshKey }: { branchId: string; product
   const [showManualForm, setShowManualForm] = useState(false);
   const [manualQuery, setManualQuery] = useState("");
   const [manualProductId, setManualProductId] = useState("");
+  const [manualProductName, setManualProductName] = useState("");
+  const filteredManualProducts = useProductSearch(manualProductId ? "" : manualQuery, { excludeTimber: true, limit: 8 });
   const [manualQty, setManualQty] = useState("1");
   const [manualSource, setManualSource] = useState<"PURCHASE" | "TRANSFER" | "PRODUCTION">("PURCHASE");
 
@@ -511,10 +514,6 @@ function PlanTab({ branchId, products, refreshKey }: { branchId: string; product
     }
   }
 
-  const filteredManualProducts = manualQuery.trim()
-    ? products.filter((p) => p.sku.toLowerCase().includes(manualQuery.toLowerCase()) || p.name.toLowerCase().includes(manualQuery.toLowerCase())).slice(0, 8)
-    : [];
-
   if (loading) {
     return <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-[var(--color-master-500)]" /></div>;
   }
@@ -610,7 +609,7 @@ function PlanTab({ branchId, products, refreshKey }: { branchId: string; product
               <label className="mb-1 block text-xs text-[var(--color-text-muted)]">Producto</label>
               <input
                 type="text"
-                value={manualProductId ? (products.find((p) => p.id === manualProductId)?.name ?? "") : manualQuery}
+                value={manualProductId ? manualProductName : manualQuery}
                 onChange={(e) => { setManualQuery(e.target.value); setManualProductId(""); }}
                 placeholder="Buscar por SKU o nombre..."
                 className="hm-input w-full rounded-lg text-sm"
@@ -618,7 +617,7 @@ function PlanTab({ branchId, products, refreshKey }: { branchId: string; product
               {filteredManualProducts.length > 0 && !manualProductId && (
                 <div className="absolute z-20 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-lg">
                   {filteredManualProducts.map((p) => (
-                    <button key={p.id} type="button" onClick={() => { setManualProductId(p.id); setManualQuery(""); }} className="flex w-full items-center gap-2 px-2.5 py-2 text-left text-[0.78rem] hover:bg-[var(--color-surface-alt)]">
+                    <button key={p.id} type="button" onClick={() => { setManualProductId(p.id); setManualProductName(p.name); setManualQuery(""); }} className="flex w-full items-center gap-2 px-2.5 py-2 text-left text-[0.78rem] hover:bg-[var(--color-surface-alt)]">
                       <span className="font-mono text-[0.68rem] text-[var(--color-text-muted)]">{p.sku}</span>
                       <span className="flex-1 truncate">{p.name}</span>
                     </button>
@@ -718,7 +717,7 @@ function PlanTab({ branchId, products, refreshKey }: { branchId: string; product
  * TAB 3 — TRASLADOS (oportunidades + gestión real de traslados)
  * ══════════════════════════════════════════════════════════════ */
 
-function TransitTab({ branchId, branches, products }: { branchId: string; branches: Branch[]; products: Product[] }) {
+function TransitTab({ branchId, branches }: { branchId: string; branches: Branch[] }) {
   const [allTransfers, setAllTransfers] = useState<Transfer[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("");
@@ -741,6 +740,7 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
   const [modalNotes, setModalNotes] = useState("");
   const [modalLines, setModalLines] = useState<TransferLineForm[]>([]);
   const [modalProductSearch, setModalProductSearch] = useState("");
+  const filteredProducts = useProductSearch(modalProductSearch, { excludeTimber: true, limit: 10 });
 
   // Parte B.3 — "Enviar a varias sucursales": mismo modal, origen fijo, destinos en chips.
   const [multiMode, setMultiMode] = useState(false);
@@ -855,16 +855,16 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
     setModalFromBranchId(centralBranchId || opp.fromBranchId);
     setModalToBranchId(opp.toBranchId);
     setModalNotes("");
-    setModalLines([{ productId: opp.productId, quantity: String(Math.ceil(Number(opp.suggestedTransferQty))) }]);
+    setModalLines([{ productId: opp.productId, name: opp.name, quantity: String(Math.ceil(Number(opp.suggestedTransferQty))) }]);
     setModalProductSearch("");
     setShowModal(true);
   };
 
   const removeModalLine = (i: number) => setModalLines((prev) => prev.filter((_, idx) => idx !== i));
   const updateModalLine = (i: number, value: string) => setModalLines((prev) => { const next = [...prev]; next[i] = { ...next[i], quantity: value }; return next; });
-  const addProductToModal = (productId: string) => {
-    if (modalLines.some((l) => l.productId === productId)) { toast("Ese producto ya está en la lista."); return; }
-    setModalLines((prev) => [...prev, { productId, quantity: "1" }]);
+  const addProductToModal = (product: Product) => {
+    if (modalLines.some((l) => l.productId === product.id)) { toast("Ese producto ya está en la lista."); return; }
+    setModalLines((prev) => [...prev, { productId: product.id, name: product.name, quantity: "1" }]);
     setModalProductSearch("");
   };
 
@@ -919,10 +919,6 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
       setActionLoading(null);
     }
   }
-
-  const filteredProducts = modalProductSearch.trim()
-    ? products.filter((p) => p.sku.toLowerCase().includes(modalProductSearch.toLowerCase()) || p.name.toLowerCase().includes(modalProductSearch.toLowerCase())).slice(0, 10)
-    : [];
 
   function ConfirmOrActions({ id, status }: { id: string; status: string }) {
     if (confirmAction?.id === id) {
@@ -1143,7 +1139,7 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
                     {filteredProducts.length > 0 && (
                       <div className="mt-1 max-h-40 overflow-y-auto rounded-lg border border-[var(--color-border)]">
                         {filteredProducts.map((p) => (
-                          <button key={p.id} type="button" onClick={() => addProductToModal(p.id)} disabled={modalLines.some((l) => l.productId === p.id)} className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs hover:bg-[var(--color-surface-alt)] disabled:opacity-40">
+                          <button key={p.id} type="button" onClick={() => addProductToModal(p)} disabled={modalLines.some((l) => l.productId === p.id)} className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs hover:bg-[var(--color-surface-alt)] disabled:opacity-40">
                             <span><span className="font-mono font-semibold">{p.sku}</span> <span className="text-[var(--color-text-secondary)]">{p.name}</span></span>
                             {modalLines.some((l) => l.productId === p.id) ? <CheckCircle className="h-3.5 w-3.5 text-[var(--color-success-500)]" /> : <Plus className="h-3.5 w-3.5 text-[var(--color-master-600)]" />}
                           </button>
@@ -1154,11 +1150,13 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
                   {modalLines.length > 0 && (
                     <div className="divide-y divide-[var(--color-border)] rounded-lg border border-[var(--color-border)]">
                       {modalLines.map((line, idx) => {
-                        const p = products.find((x) => x.id === line.productId);
                         return (
                           <div key={idx} className="flex items-center gap-3 px-3 py-2">
-                            <div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{p?.name ?? line.productId}</p></div>
-                            <input type="number" min="0.01" value={line.quantity} onChange={(e) => updateModalLine(idx, e.target.value)} className="hm-input w-20 rounded-lg text-right text-sm" />
+                            <div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{line.name}</p></div>
+                            {/* .hm-input es width:100%: sin este contenedor se comía el ancho y el nombre medía 0. */}
+                            <div className="w-20 shrink-0">
+                              <input type="number" min="0.01" value={line.quantity} onChange={(e) => updateModalLine(idx, e.target.value)} className="hm-input w-full rounded-lg text-right text-sm" />
+                            </div>
                             <button onClick={() => removeModalLine(idx)} className="hm-icon-btn hm-icon-btn-danger"><X className="h-4 w-4" /></button>
                           </div>
                         );
@@ -1595,7 +1593,6 @@ export default function ReplenishmentPage() {
   const scope = useInventoryScope();
   const [activeTab, setActiveTab] = useState<MainTab>("signals");
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [planRefreshKey, setPlanRefreshKey] = useState(0);
 
@@ -1611,20 +1608,13 @@ export default function ReplenishmentPage() {
 
   const fetchMeta = useCallback(async () => {
     try {
-      const [bRes, pRes, sRes] = await Promise.all([
+      const [bRes, sRes] = await Promise.all([
         fetch("/api/branches"),
-        fetch("/api/catalog/products"),
         fetch("/api/suppliers"),
       ]);
       const bData = unwrapApiData(await bRes.json());
-      const pData = unwrapApiData(await pRes.json());
       const sData = unwrapApiData(await sRes.json());
       setBranches(Array.isArray(bData) ? bData : []);
-      // La madera se compra por pedido especial (viaje/trip con dimensiones
-      // especificas, ver pestana Madera) — no debe aparecer en los
-      // buscadores manuales de Plan/Traslados como si fuera un producto de
-      // compra rutinaria.
-      setProducts(Array.isArray(pData) ? (pData as Product[]).filter((p) => !p.isTimber) : []);
       setSuppliers(Array.isArray(sData) ? sData : []);
     } catch { /* non-critical */ }
   }, []);
@@ -1672,8 +1662,8 @@ export default function ReplenishmentPage() {
         ) : (
           <>
             {activeTab === "signals" && <SignalsTab branchId={branchId} onAdded={() => setPlanRefreshKey((k) => k + 1)} />}
-            {activeTab === "plan" && <PlanTab branchId={branchId} products={products} refreshKey={planRefreshKey} />}
-            {activeTab === "transit" && <TransitTab branchId={branchId} branches={branches} products={products} />}
+            {activeTab === "plan" && <PlanTab branchId={branchId} refreshKey={planRefreshKey} />}
+            {activeTab === "transit" && <TransitTab branchId={branchId} branches={branches} />}
             {activeTab === "inbound" && <InboundTab branchId={branchId} />}
             {activeTab === "params" && <ParamsTab branchId={branchId} suppliers={suppliers} />}
             {activeTab === "timber" && <TimberTab branchId={branchId} />}

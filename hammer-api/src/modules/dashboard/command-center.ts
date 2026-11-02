@@ -243,7 +243,7 @@ export async function getCommandCenterSnapshot() {
     prisma.operationalDay.count({ where: { lifecycle: "AWAITING_REVIEW", reviewStatus: "PENDING" } }),
     prisma.operationalDay.count({ where: { lifecycle: "ACTIVE", businessDate: { lt: todayBusinessDate } } }),
     prisma.product.count({
-      where: { isActive: true, branchProductSettings: { none: { branchPrice: { gt: 0 } } } },
+      where: { isActive: true, standardSalePrice: { lte: 0 }, branchProductSettings: { none: { branchPrice: { gt: 0 } } } },
     }),
   ]);
 

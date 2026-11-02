@@ -7,7 +7,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
-  AlertTriangle, BarChart3, Boxes, Building2, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
+  AlertTriangle, BarChart3, Boxes, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
   CheckCircle2, Copy, DollarSign, Download, FileSpreadsheet, FileUp, History, Info, Loader2, Merge, Package, Pencil,
   Plus, RefreshCcw, Save, ScanLine, Search, Settings2, Shuffle, Sparkles, Tags, Trash2,
   TrendingUp, Wand2, X, Zap,
@@ -22,7 +22,7 @@ import { tokenize } from "@/lib/product-search";
 import { formatSharedStock } from "@/lib/inventory/shared-stock-format";
 import { UNDO_WINDOW_MS, type BarcodeKind } from "@/lib/barcode-manager-logic";
 import { useInventoryScope } from "@/hooks/use-inventory-scope";
-import { ProductEditDrawer, type ProductEditDraft } from "./product-edit-drawer";
+import { ProductEditDrawer } from "./product-edit-drawer";
 import { normalizePresentationUnit } from "@/lib/inventory/presentation-units";
 import { UnitPicker } from "@/components/inventory/unit-picker";
 
@@ -41,7 +41,6 @@ const FusionPricingPanel = dynamic(
 const CategoriesPanel = dynamic(() => import("@/components/catalog-inventory/categories-panel").then((m) => m.CategoriesPanel), { ssr: false });
 const UnifiedImportPanel = dynamic(() => import("@/components/catalog-inventory/unified-import-panel").then((m) => m.UnifiedImportPanel), { ssr: false });
 const MovementsPanel = dynamic(() => import("@/components/catalog-inventory/movements-panel").then((m) => m.MovementsPanel), { ssr: false });
-const PricingPanel = dynamic(() => import("@/components/catalog-inventory/pricing-panel").then((m) => m.PricingPanel), { ssr: false });
 const TransfersPanel = dynamic(() => import("@/components/catalog-inventory/transfers-panel").then((m) => m.TransfersPanel), { ssr: false });
 const ReplenishmentPanel = dynamic(() => import("@/components/catalog-inventory/replenishment-panel").then((m) => m.ReplenishmentPanel), { ssr: false });
 const AuditPanel = dynamic(() => import("@/components/catalog-inventory/audit-panel").then((m) => m.AuditPanel), { ssr: false });
@@ -116,10 +115,9 @@ export type ProductRow = {
   /**
    * prompt-precios-costos-una-sola-fuente.md — el mismo motor que usa la
    * venta (branchCost > WAC > averageCost > globalCost > lastPurchaseCost,
-   * fusión-aware), UNA fila por sucursal activa. buildBranchPricingCostRow
-   * lo usa en vez de recalcular con la cascada de costo de red (sin
-   * branchCost, borrada en docs/COSTO-UNA-FUENTE.md) como hacía antes —
-   * la causa real del margen que no cuadraba.
+   * fusión-aware), UNA fila por sucursal activa — nunca recalculado en el
+   * navegador (la cascada de red sin branchCost era la causa del margen
+   * que no cuadraba).
    */
   branchEffectivePricing?: Array<{
     branchId: string;
@@ -273,37 +271,7 @@ export type CenterData = {
   pagination?: Pagination;
 };
 
-export type BranchPricingCostRow = {
-  referencePrice: number;
-  branchPrice: number | null;
-  effectivePrice: number | null;
-  priceSource: "BRANCH" | "STANDARD" | "MISSING" | "FUSION_DERIVED";
-  baseWeightedAverageCost: number | null;
-  weightedAverageCost: number | null;
-  branchCost: number | null;
-  effectiveCost: number | null;
-  costSource: "BRANCH" | "GLOBAL_AVERAGE" | "GLOBAL" | "LAST_PURCHASE" | "WAC_ESTIMATE" | "NONE";
-  /** prompt-precios-costos-una-sola-fuente.md B.3 — de dónde sale el costo con el que se calculó el margen, para que un margen que no cuadra se explique en la fila en vez de en una investigación aparte. */
-  costExplanation: string;
-  effectiveMarginPercent: number | null;
-  isConvertibleStock: boolean;
-  baseUnit?: string | null;
-  conversionFactor?: number | null;
-  warnings: string[];
-};
-
-function costSourceLabel(source: BranchPricingCostRow["costSource"], branchCode: string): string {
-  switch (source) {
-    case "BRANCH": return `Costo cargado en ${branchCode}`;
-    case "WAC_ESTIMATE": return `Promedio de compras en ${branchCode}`;
-    case "GLOBAL_AVERAGE": return "Promedio general del producto";
-    case "GLOBAL": return "Costo de compra general";
-    case "LAST_PURCHASE": return "Última compra registrada";
-    default: return "Sin costo";
-  }
-}
-
-type Tab = "summary" | "products" | "categories" | "import" | "stock" | "kardex" | "intakes" | "counts" | "pricing" | "fusion" | "transfers" | "reorder" | "duplicates" | "audit";
+type Tab = "summary" | "products" | "categories" | "import" | "stock" | "kardex" | "intakes" | "counts" | "fusion" | "transfers" | "reorder" | "duplicates" | "audit";
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "summary", label: "Resumen", icon: BarChart3 },
@@ -318,7 +286,10 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "kardex", label: "Kardex", icon: History },
   { id: "intakes", label: "Entradas", icon: History },
   { id: "counts", label: "Conteos", icon: History },
-  { id: "pricing", label: "Precios y costos", icon: TrendingUp },
+  // "Precios y costos" (tab=pricing) se retiró: era una pestaña sin lugar en
+  // la barra, con un buscador que solo filtraba los 50 productos cargados.
+  // Precio/costo por producto → perfil (Precios y costos); en lote → zona
+  // Precios. Los links viejos se redirigen (RETIRED_PRICING_TAB_HREF).
   // "Ese apartado de Fusiones, es para poner el precio, no es otra
   // pestaña para crear" — a diferencia de Fusión de Inventario (crear
   // fusiones, editar presentaciones/factores — sigue en su propia
@@ -334,6 +305,9 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "duplicates", label: "Duplicados", icon: Copy },
   { id: "audit", label: "Auditoria", icon: BarChart3 },
 ];
+
+/** Destino de los links viejos a ?tab=pricing — la edición de precios en lote vive en la zona Precios. */
+const RETIRED_PRICING_TAB_HREF = "/app/master/pricing?tab=current";
 
 /** La URL es la única fuente de la pestaña; `movements` (links viejos) cae en Kardex, igual que en la barra. */
 function resolveTab(raw: string | null): Tab {
@@ -368,14 +342,6 @@ export function numberOrNull(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export function formatMoneyOrNd(value: number | null) {
-  return value === null ? "N/D" : money(value);
-}
-
-export function formatMarginOrNd(value: number | null) {
-  return value === null ? "N/D" : `${value.toFixed(1)}%`;
-}
-
 export function marginBadgeVariant(value: number | null) {
   if (value === null) return "neutral" as const;
   if (value < 0) return "danger" as const;
@@ -387,11 +353,8 @@ export function marginBadgeVariant(value: number | null) {
  * docs/COSTO-UNA-FUENTE.md, ciclo de blindaje, C.1 — "—" siempre que no
  * hay un número real que mostrar, sea porque costScope es NETWORK (nadie
  * eligió sucursal) o porque, con sucursal elegida, este producto
- * específico no tiene costo/precio resuelto. A diferencia de
- * formatMoneyOrNd/formatMarginOrNd (que muestran "N/D" en la tabla de
- * Precios y costos), acá el guion es deliberado: "N/D" suena a error de
- * datos, "—" es "no aplica sin sucursal" — la distinción que este ciclo
- * existe para hacer explícita.
+ * específico no tiene costo/precio resuelto. El guion es deliberado:
+ * "N/D" suena a error de datos, "—" es "no aplica sin sucursal".
  */
 function formatCostOrDash(value: number | null) {
   return value === null ? "—" : money(value);
@@ -413,78 +376,6 @@ function effectivePriceAndMargin(product: ProductRow, costBranchId: string | nul
   const cost = product.effectiveCost;
   const margin = cost !== null && cost > 0 && price !== null && price > 0 ? ((price - cost) / price) * 100 : null;
   return { price, margin };
-}
-
-export function buildBranchPricingCostRow(product: ProductRow, branch: Branch): BranchPricingCostRow {
-  const setting = product.branchProductSettings.find((item) => item.branchId === branch.id);
-  // prompt-precios-costos-una-sola-fuente.md — antes effectiveCost salía de
-  // una cascada de costo de red (WAC > averageCost > globalCost >
-  // lastPurchaseCost, SIN branchCost, borrada en docs/COSTO-UNA-FUENTE.md)
-  // mientras esta misma fila mostraba branchCost de la sucursal — dos
-  // costos distintos en una fila, el bug real detrás de un margen que no
-  // cuadraba con lo que se veía en pantalla. entry es el mismo motor que
-  // resuelve precio/costo efectivo
-  // para la venta (branchCost > WAC > averageCost > globalCost >
-  // lastPurchaseCost, fusión-aware) — branchEffectivePricing lo trae
-  // calculado desde el backend (getEffectiveProductPricingBatch), no se
-  // reimplementa acá.
-  const entry = product.branchEffectivePricing?.find((item) => item.branchId === branch.id) ?? null;
-  const branchPrice = numberOrNull(setting?.branchPrice);
-  const branchCost = numberOrNull(setting?.branchCost);
-  const referencePrice = Number(product.basePrice) || 0;
-  const sharedWac = numberOrNull(product.allSharedInventoryBalances?.find((item) => item.branchId === branch.id)?.weightedAverageCost);
-  const directWac = numberOrNull(product.inventoryBalances.find((item) => item.branchId === branch.id)?.weightedAverageCost);
-  const baseWeightedAverageCost = sharedWac ?? directWac;
-  const conversionFactor = numberOrNull(product.stockConversion?.conversionFactor) ?? 1;
-  const weightedAverageCost = baseWeightedAverageCost === null
-    ? null
-    : baseWeightedAverageCost * (product.stockConversion ? conversionFactor : 1);
-
-  const effectiveCost = entry?.effectiveCost ?? null;
-  const costSource = entry?.costSource ?? "NONE";
-  const costExplanation = entry?.isFusionMember && product.stockConversion
-    ? `Derivado de ${product.stockConversion.baseUnit} × ${Number(product.stockConversion.conversionFactor)}`
-    : costSourceLabel(costSource, branch.code);
-  // Respaldo defensivo si branchEffectivePricing no vino (dato viejo en
-  // caché, o algún llamador que todavía no lo pide) — mismo fallback a
-  // standardSalePrice que ya hace el motor de venta (effective-pricing.ts),
-  // para no volver a colapsar en "N/D" un producto que sí se vende al
-  // precio general.
-  const effectivePrice = entry?.effectivePrice ?? branchPrice ?? (referencePrice > 0 ? referencePrice : null);
-  const priceSource: BranchPricingCostRow["priceSource"] = entry?.priceSource
-    ?? (branchPrice !== null ? "BRANCH" : referencePrice > 0 ? "STANDARD" : "MISSING");
-  const effectiveMarginPercent = effectivePrice !== null && effectivePrice > 0 && effectiveCost !== null && effectiveCost > 0
-    ? ((effectivePrice - effectiveCost) / effectivePrice) * 100
-    : null;
-
-  const warnings: string[] = [];
-  // "Sin precio en esta sucursal" es sobre branchPrice (la excepción propia
-  // de ESTA sucursal), no sobre effectivePrice — "sigue el precio general"
-  // es un estado válido, no "sin precio" (mismo criterio que hasNoBranchPrice
-  // en catalog-inventory/service.ts). Antes era equivalente por accidente
-  // (effectivePrice ERA branchPrice a secas); ahora que effectivePrice cae a
-  // STANDARD, hay que decidirlo explícito para no perder el aviso.
-  if (branchPrice === null) warnings.push("Sin precio en esta sucursal");
-  if (effectiveCost === null) warnings.push("No se puede calcular margen sin costo efectivo.");
-  if (entry?.sellability === "BELOW_COST") warnings.push("Precio bajo costo.");
-
-  return {
-    referencePrice,
-    branchPrice,
-    effectivePrice,
-    priceSource,
-    baseWeightedAverageCost,
-    weightedAverageCost,
-    branchCost,
-    effectiveCost,
-    costSource,
-    costExplanation,
-    effectiveMarginPercent,
-    isConvertibleStock: Boolean(product.stockConversion),
-    baseUnit: product.stockConversion?.baseUnit ?? null,
-    conversionFactor,
-    warnings,
-  };
 }
 
 /* ── Pagination Bar ── */
@@ -568,6 +459,10 @@ export function CatalogInventoryAdmin() {
   // marcando otra sección, rompía "Atrás" y volver a tocar la misma
   // píldora no hacía nada (la URL no cambiaba).
   const tab = resolveTab(searchParams.get("tab"));
+  const isRetiredPricingTab = searchParams.get("tab") === "pricing";
+  useEffect(() => {
+    if (isRetiredPricingTab) router.replace(RETIRED_PRICING_TAB_HREF as Route);
+  }, [isRetiredPricingTab, router]);
   const urlFilter = searchParams.get("filter") ?? "";
   function goTab(next: Tab, nextFilter?: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -576,15 +471,20 @@ export function CatalogInventoryAdmin() {
     else params.delete("filter");
     router.push(`${pathname}?${params}` as Route);
   }
-  const [q, setQ] = useState("");
-  const [debouncedQ, setDebouncedQ] = useState("");
+  // El texto de búsqueda llega de la barra superior ("Ver los N resultados
+  // en la lista" → ?q=) — esta pantalla ya no tiene buscador propio.
+  const q = searchParams.get("q") ?? "";
+  function clearSearch() {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("q");
+    router.push(`${pathname}?${params}` as Route);
+  }
   // prompt-inventario-unificado.md Commit 1 §4 — ya no hay <select> de
   // sucursal propio acá: lo da la barra (useInventoryScope). `branchId` es
-  // la sucursal concreta que necesitan Kardex, Precios y Reposición; la
-  // carga del centro en "Toda la red" va SIN sucursal (stock de toda la
-  // red, costos "—"), salvo Precios y costos, que es por sucursal.
+  // la sucursal concreta que necesitan Kardex y Reposición; la carga del
+  // centro en "Toda la red" va SIN sucursal (stock de toda la red, costos "—").
   const branchId = (scope.mode === "branch" ? scope.branchId : scope.branches[0]?.id) ?? "";
-  const loadBranchId = scope.mode === "branch" || tab === "pricing" ? branchId : "";
+  const loadBranchId = scope.mode === "branch" ? branchId : "";
   const [categoryId, setCategoryId] = useState("");
   // Pendientes (Calidad) llega con ?filter=NO_COST ya en la URL.
   const [filter, setFilter] = useState(urlFilter);
@@ -598,21 +498,10 @@ export function CatalogInventoryAdmin() {
   useEffect(() => {
     setFilter(urlFilter);
     setPage(1);
-  }, [tab, urlFilter]);
+  }, [tab, urlFilter, q]);
 
-  /* Debounce the text search so each keystroke doesn't fire an API request */
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQ(q), 350);
-    return () => clearTimeout(timer);
-  }, [q]);
-
-  /* ── Inline edit state for product rows ── */
+  /* ── Panel de edición (ProductEditDrawer) ── */
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<ProductEditDraft>({ name: "", categoryId: "", sku: "", unit: "", applySuggestedSku: false });
-  const [editSkuPreview, setEditSkuPreview] = useState("");
-  const [savingProduct, setSavingProduct] = useState(false);
-  const [generatingSku, setGeneratingSku] = useState(false);
-  const [focusedPricingProductId, setFocusedPricingProductId] = useState<string | null>(null);
   const [movementDialog, setMovementDialog] = useState<"adjustment" | "opening" | null>(null);
 
   /* prompt-codigos-editar-eliminar.md Fase 3.3 — menú rápido del chip de
@@ -628,7 +517,7 @@ export function CatalogInventoryAdmin() {
   const load = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams();
-    if (debouncedQ.trim()) params.set("q", debouncedQ.trim());
+    if (q.trim()) params.set("q", q.trim());
     if (loadBranchId) params.set("branchId", loadBranchId);
     if (categoryId) params.set("categoryId", categoryId);
     if (filter) params.set("filter", filter);
@@ -639,7 +528,7 @@ export function CatalogInventoryAdmin() {
     if (!response.ok) throw new Error(raw.message ?? "No se pudo cargar Catalogo e Inventario.");
     setData(unwrapApiData(raw));
     setLoading(false);
-  }, [loadBranchId, categoryId, filter, debouncedQ, page]);
+  }, [loadBranchId, categoryId, filter, q, page]);
 
   useEffect(() => {
     load().catch((error) => {
@@ -659,128 +548,6 @@ export function CatalogInventoryAdmin() {
     await load();
   }
 
-  async function updateBranchPrice(product: ProductRow, branch: Branch, field: "branchPrice", value: string, reason?: string, overridePriceConfirmed = false) {
-    const numeric = value.trim() === "" ? null : Number(value);
-    if (numeric !== null && (!Number.isFinite(numeric) || numeric < 0)) {
-      toast.error("No se permiten costos o precios negativos.");
-      return;
-    }
-    const response = await apiFetch("/api/master/catalog-inventory", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      // Parte B (prompt-huecos-fase1-fase3-despliegue.md) — priceExceptionReason
-      // viaja junto con branchPrice: setBranchPriceTx exige motivo cuando se
-      // fija un precio (numeric !== null); al limpiarlo a null no hace falta.
-      body: JSON.stringify({ branchId: branch.id, productId: product.id, [field]: numeric, priceExceptionReason: numeric !== null ? reason : undefined, overridePriceConfirmed: overridePriceConfirmed || undefined }),
-    });
-    if (!response.ok) {
-      const raw = await response.json().catch(() => null);
-      // Parte C (prompt-precios-costos-una-sola-fuente.md) — un 409 es una
-      // pregunta del servidor, no un error genérico: cada uno de estos
-      // guards existe por una razón concreta y distinta, y quien lo ve
-      // necesita saber CUÁL para poder actuar, no solo que "algo falló".
-      if (raw?.error?.code === "BELOW_COST_NOT_ALLOWED") {
-        // El costo/fuente ya están en el cliente (buildBranchPricingCostRow,
-        // el mismo motor que acaba de calcular el margen de esta fila) — no
-        // hace falta que el backend los mande de vuelta en el error.
-        const row = buildBranchPricingCostRow(product, branch);
-        toast.error(
-          row.effectiveCost !== null
-            ? `El costo vigente es ${money(row.effectiveCost)} (${row.costExplanation}). Corregí el costo o subí el precio.`
-            : (raw?.error?.message ?? "El precio no puede ser menor al costo."),
-          { duration: 8000 },
-        );
-        return;
-      }
-      if (raw?.error?.code === "FUSION_COST_WRITE_NOT_ALLOWED") {
-        toast.error("Esta presentación es un miembro derivado de una fusión: el costo se carga en el producto canónico, no aquí.", { duration: 8000 });
-        return;
-      }
-      // prompt-costos-precios-fusion.md §2.2 — el override sigue permitido
-      // (vender por metro más barato que por lata suelta es legítimo), solo
-      // deja de ser invisible: se confirma explícito antes de guardarlo.
-      if (raw?.error?.code === "FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED" && !overridePriceConfirmed) {
-        const confirmed = window.confirm(`${raw.error.message}\n\n¿Confirmás que el precio es correcto tal cual lo escribiste?`);
-        if (confirmed) {
-          await updateBranchPrice(product, branch, field, value, reason, true);
-        }
-        return;
-      }
-      toast.error(raw?.error?.message ?? "No se pudo guardar la configuracion por sucursal.");
-      return;
-    }
-    toast.success(`Precio guardado para ${branch.code}`);
-    await load();
-  }
-
-  async function updateGlobalCost(product: ProductRow, value: string, allowHighUnitCost = false) {
-    const numeric = value.trim() === "" ? null : Number(value);
-    if (numeric !== null && (!Number.isFinite(numeric) || numeric < 0)) {
-      toast.error("El costo universal no puede ser negativo.");
-      return;
-    }
-    const response = await apiFetch(`/api/catalog/products/${product.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ globalCost: numeric, allowHighUnitCost: allowHighUnitCost || undefined }),
-    });
-    if (!response.ok) {
-      const raw = await response.json().catch(() => null);
-      // "asegura el motor de mejor manera" — este producto tiene una
-      // presentación en bulto (fusión), y el costo nuevo se parece al
-      // costo del BULTO completo, no al de la unidad base. Sin este
-      // reintento, un costo alto legítimo (el bulto de verdad subió de
-      // precio) quedaría bloqueado sin salida — mismo error que ya
-      // arreglamos para standardSalePrice, no lo repetimos acá.
-      if (raw?.error?.code === "SUSPECTED_PACKAGE_COST_AS_UNIT_COST") {
-        const confirmed = window.confirm(`${raw.error.message}\n\n¿Confirmás que el costo es correcto tal cual lo escribiste?`);
-        if (confirmed) {
-          await updateGlobalCost(product, value, true);
-          return;
-        }
-        return;
-      }
-      // Parte C — este producto es un miembro DERIVADO de una fusión (el
-      // costo se edita en el canónico); la UI ya oculta este input para
-      // derivados, así que en la práctica esto solo puede pasar por una
-      // fusión creada/cambiada en el momento entre que se cargó la fila y
-      // se guardó — un mensaje claro en vez de uno genérico igual ayuda.
-      if (raw?.error?.code === "FUSION_COST_WRITE_NOT_ALLOWED") {
-        toast.error("Esta presentación es un miembro derivado de una fusión: el costo se carga en el producto canónico, no aquí.", { duration: 8000 });
-        return;
-      }
-      toast.error(raw?.error?.message ?? "No se pudo guardar el costo universal.");
-      return;
-    }
-    toast.success(`Costo universal actualizado para ${product.sku}`);
-    await load();
-  }
-
-  async function toggleBranchAssignment(product: ProductRow, branchId: string, isAvailable: boolean) {
-    const res = await apiFetch(`/api/catalog/products/${product.id}/branch-settings`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ branchId, isAvailable }),
-    });
-    if (!res.ok) {
-      toast.error("No se pudo actualizar la asignación de sucursal.");
-      return;
-    }
-    toast.success(isAvailable ? `${product.sku} asignado a esta sucursal` : `${product.sku} desasignado de esta sucursal`);
-    await load();
-  }
-
-  /* ── Inline product edit handlers ── */
-  function startEditing(product: ProductRow) {
-    setEditingProductId(product.id);
-    setEditDraft({ name: product.name, categoryId: product.category?.id ?? "", sku: product.sku, unit: product.stockConversion?.saleUnit ?? product.unit, applySuggestedSku: false });
-    setEditSkuPreview("");
-  }
-  function cancelEditing() {
-    setEditingProductId(null);
-    setEditDraft({ name: "", categoryId: "", sku: "", unit: "", applySuggestedSku: false });
-    setEditSkuPreview("");
-  }
 
   async function removePrimaryBarcodeQuick(product: ProductRow) {
     setCodeMenuBusyId(product.id);
@@ -832,73 +599,6 @@ export function CatalogInventoryAdmin() {
       setCodeMenuProductId(null);
     }
   }
-  async function regenerateSku(product: ProductRow) {
-    const name = editDraft.name.trim() || product.name;
-    const catId = editDraft.categoryId || product.category?.id || "";
-    if (!catId) {
-      toast.error("Selecciona una categoría primero para regenerar el SKU.");
-      return;
-    }
-    setGeneratingSku(true);
-    try {
-      const response = await fetch(
-        `/api/catalog/products/sku-suggestion?name=${encodeURIComponent(name)}&categoryId=${encodeURIComponent(catId)}&productId=${encodeURIComponent(product.id)}`
-      );
-      if (!response.ok) throw new Error("No se pudo generar el SKU.");
-      const raw = await response.json();
-      const result = unwrapApiData(raw);
-      if (result.suggestedSku) {
-        setEditSkuPreview(result.suggestedSku);
-        setEditDraft((prev) => ({ ...prev, applySuggestedSku: true }));
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Error al generar SKU.");
-    } finally {
-      setGeneratingSku(false);
-    }
-  }
-  async function saveProductEdit(product: ProductRow) {
-    if (!editDraft.name.trim()) { toast.error("El nombre es obligatorio."); return; }
-    setSavingProduct(true);
-    try {
-      const body: Record<string, unknown> = {};
-      if (editDraft.name.trim() !== product.name) body.name = editDraft.name.trim();
-      if (editDraft.categoryId && editDraft.categoryId !== product.category?.id) body.categoryId = editDraft.categoryId;
-      // En una fusión, el servidor cambia también su "se vende por" (el factor no se toca).
-      if (editDraft.unit.trim() && normalizePresentationUnit(editDraft.unit) !== normalizePresentationUnit(product.stockConversion?.saleUnit ?? product.unit)) body.unit = editDraft.unit.trim();
-      if (editDraft.applySuggestedSku && editSkuPreview) {
-        const hasHistory = product.totalStock !== 0 || product.inventoryBalances.length > 0;
-        if (hasHistory) {
-          const confirmed = window.confirm("Este producto ya tiene historial o inventario. Cambiar el SKU no borra movimientos, pero puede afectar reportes externos. Deseas actualizar el SKU?");
-          if (!confirmed) {
-            setSavingProduct(false);
-            return;
-          }
-        }
-        body.skuUpdateMode = "USE_SUGGESTED";
-        body.suggestedSku = editSkuPreview;
-      } else if (editDraft.categoryId && editDraft.categoryId !== product.category?.id) {
-        body.skuUpdateMode = "KEEP_CURRENT";
-      }
-      if (Object.keys(body).length === 0) { cancelEditing(); return; }
-      const response = await apiFetch(`/api/catalog/products/${product.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!response.ok) {
-        const json = await response.json().catch(() => null);
-        throw new Error(json?.error?.message ?? json?.message ?? "No se pudo actualizar el producto.");
-      }
-      toast.success("Producto actualizado");
-      cancelEditing();
-      await load();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Error al guardar producto.");
-    } finally {
-      setSavingProduct(false);
-    }
-  }
 
   /* ── Estado para creación manual de producto ── */
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -934,32 +634,6 @@ export function CatalogInventoryAdmin() {
   const [skuPreview, setSkuPreview] = useState("");
   const [skuStatus, setSkuStatus] = useState<"idle" | "checking" | "available" | "taken">("idle");
   const skuCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (!editingProductId || !editDraft.name.trim() || !editDraft.categoryId) {
-      setEditSkuPreview("");
-      return;
-    }
-    const currentProduct = data?.products.find((product) => product.id === editingProductId);
-    const categoryChanged = Boolean(currentProduct && editDraft.categoryId !== currentProduct.category?.id);
-    const nameChanged = Boolean(currentProduct && editDraft.name.trim() !== currentProduct.name);
-    if (!categoryChanged && !nameChanged) {
-      setEditSkuPreview("");
-      return;
-    }
-    const timer = setTimeout(async () => {
-      try {
-        const response = await fetch(`/api/catalog/products/sku-suggestion?name=${encodeURIComponent(editDraft.name.trim())}&categoryId=${encodeURIComponent(editDraft.categoryId)}&productId=${encodeURIComponent(editingProductId)}`);
-        if (!response.ok) return;
-        const raw = await response.json();
-        const result = unwrapApiData(raw);
-        setEditSkuPreview(result.suggestedSku ?? "");
-      } catch {
-        setEditSkuPreview("");
-      }
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [data?.products, editDraft.categoryId, editDraft.name, editingProductId]);
 
   // Auto-preview SKU when name + category change
   useEffect(() => {
@@ -1150,62 +824,28 @@ export function CatalogInventoryAdmin() {
 
   return (
     <section className="space-y-5">
-      {/* ── Encabezado plano ── */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-xl font-medium" style={{ color: "var(--color-text)" }}>Catálogo e inventario</h1>
-          <p className="text-sm" style={{ color: "var(--color-text-muted)", marginTop: "2px" }}>Productos, precios, existencias y movimientos</p>
-        </div>
-        {data && branchId && (() => {
-          const activeBranch = data.branches.find((b) => b.id === branchId);
-          return activeBranch ? (
-            <div className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs" style={{ border: "0.5px solid var(--color-border)", color: "var(--color-text-secondary)" }}>
-              <Building2 className="h-3.5 w-3.5" style={{ color: "var(--color-text-muted)" }} />
-              <span>{activeBranch.name}</span>
-            </div>
-          ) : null;
-        })()}
-      </div>
-
-      {/* ── Barra de filtros ──
-          El mismo bug de layout que tenía la Bandeja de precios
-          (master/pricing/page.tsx): .hm-input declara width:100%
-          (globals.css:588) y el minWidth inline no limita nada cuando el
-          ancho ya es 100% — cada control ocupaba la fila entera y
-          flex-wrap los mandaba a línea propia. Solución copiada de ahí:
-          cada control en su propio contenedor con ancho fijo (no en el
-          input/select directo). Sin botón "Aplicar" — branchId y
-          categoryId ya disparan setPage(1) y el useEffect de load()
-          recarga solo (línea ~546); q ya tiene su propio debounce
-          (350ms, línea ~517). Un botón que a veces hacía falta y a veces
-          no enseñaba a desconfiar de los filtros. */}
+      {/* ── Filtros ── el título, la sucursal y el buscador los da la barra
+          superior (InventoryTopbar); acá queda solo la categoría y, si se
+          llegó desde "Ver los N resultados", el texto buscado con su ✕.
+          Cada control en su propio contenedor de ancho fijo: .hm-input
+          declara width:100% y sin eso ocupaba la fila entera. */}
       <div className="flex flex-wrap items-end gap-2">
-        <div className="w-[240px]">
-          <label htmlFor="cat-search" className="mb-1 block text-xs" style={{ color: "var(--color-text-muted)" }}>Buscar</label>
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 pointer-events-none" style={{ color: "var(--color-text-muted)" }} />
-            <input
-              id="cat-search"
-              className="hm-input h-10 w-full"
-              style={{ paddingLeft: "2rem" }}
-              placeholder="Buscar SKU o producto"
-              value={q}
-              onChange={(event) => { setQ(event.target.value); setPage(1); }}
-            />
-          </div>
-        </div>
-        {/* prompt-inventario-unificado.md Commit 1 §4 — el <select> de
-            sucursal propio de este encabezado se borra: la sucursal única
-            la da la barra (useInventoryScope). El resto de este
-            encabezado viejo (título, buscador, categoría) se borra
-            completo en el Commit 2 de ese doc. */}
         <div className="w-[170px]">
           <label htmlFor="cat-category" className="mb-1 block text-xs" style={{ color: "var(--color-text-muted)" }}>Categoría</label>
           <select id="cat-category" className="hm-input h-10" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}>
-            <option value="">Todas las categorias</option>
+            <option value="">Todas las categorías</option>
             {data?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
           </select>
         </div>
+        {q.trim() ? (
+          <span className="inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--color-master-300)] bg-[var(--color-master-50)] pl-3 pr-1 text-sm text-[var(--color-master-700)]">
+            <Search className="h-3.5 w-3.5" />
+            Resultados para «{q.trim()}»
+            <button type="button" onClick={clearSearch} aria-label="Quitar búsqueda" className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-[var(--color-master-100)]">
+              <X className="h-4 w-4" />
+            </button>
+          </span>
+        ) : null}
       </div>
 
       {/* docs/COSTO-UNA-FUENTE.md, C.2 — una línea de texto, no una alerta
@@ -1631,21 +1271,13 @@ export function CatalogInventoryAdmin() {
                     <td>
                       <div className="flex justify-end gap-1.5">
                         <>
-                          <Button variant="secondary" size="sm" onClick={() => startEditing(product)} icon={<Pencil className="h-3.5 w-3.5" />}>Editar</Button>
+                          <Button variant="secondary" size="sm" onClick={() => setEditingProductId(product.id)} icon={<Pencil className="h-3.5 w-3.5" />}>Editar</Button>
                           <Link href={`/app/master/catalog-inventory/products/${product.id}` as Route} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--color-border)] px-2 text-xs font-medium hover:bg-[var(--color-surface-alt)]">
                             <Search className="h-3 w-3" /> Ver
                           </Link>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setFocusedPricingProductId(product.id);
-                              goTab("pricing");
-                            }}
-                            icon={<DollarSign className="h-3.5 w-3.5" />}
-                          >
-                            Precio
-                          </Button>
+                          <Link href={`/app/master/catalog-inventory/products/${product.id}?tab=pricing` as Route} className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium hover:bg-[var(--color-surface-alt)]">
+                            <DollarSign className="h-3.5 w-3.5" /> Precio
+                          </Link>
                           <Button variant={product.isActive ? "danger" : "success"} size="sm" onClick={() => toggleProduct(product).catch((error) => toast.error(error.message))}>
                             {product.isActive ? "Desactivar" : "Activar"}
                           </Button>
@@ -1723,24 +1355,6 @@ export function CatalogInventoryAdmin() {
       {data && (tab === "kardex" || tab === "intakes" || tab === "counts") ? (
         <MovementsPanel view={tab} branches={data.branches} products={data.products} movements={data.movements} selectedBranchId={branchId} initialDialog={movementDialog} onInitialDialogHandled={() => setMovementDialog(null)} onSelectBranch={(nextBranchId) => scope.setScope({ mode: "branch", branchId: nextBranchId })} onDone={load} />
       ) : null}
-      {data && tab === "pricing" ? (
-        <>
-          <PricingPanel
-            branches={data.branches}
-            products={data.products}
-            selectedBranchId={branchId}
-            focusedProductId={focusedPricingProductId}
-            missingPriceCount={data.kpis.missingPriceCount}
-            onlyMissing={filter === "NO_BRANCH_PRICE"}
-            onToggleOnlyMissing={() => { setFilter((prev) => (prev === "NO_BRANCH_PRICE" ? "" : "NO_BRANCH_PRICE")); setPage(1); }}
-            onSelectBranch={(nextBranchId) => { scope.setScope({ mode: "branch", branchId: nextBranchId }); setPage(1); }}
-            onSave={updateBranchPrice}
-            onSaveGlobalCost={updateGlobalCost}
-            onToggleBranchAssignment={toggleBranchAssignment}
-          />
-          {data.pagination && <PaginationBar pagination={data.pagination} onPageChange={setPage} />}
-        </>
-      ) : null}
       {/* "Ese apartado de Fusiones, es para poner el precio, no es otra
           pestaña para crear" — FusionPricingPanel es autónomo (carga sus
           propios grupos vía /api/inventory/stock-groups) y hace SOLO eso:
@@ -1757,16 +1371,10 @@ export function CatalogInventoryAdmin() {
         const editingProduct = editingProductId ? data?.products.find((p) => p.id === editingProductId) : undefined;
         return editingProduct && data ? (
           <ProductEditDrawer
-            product={editingProduct}
+            product={{ ...editingProduct, hasHistory: editingProduct.totalStock !== 0 || editingProduct.inventoryBalances.length > 0 }}
             categories={data.categories}
-            draft={editDraft}
-            onDraftChange={setEditDraft}
-            skuPreview={editSkuPreview}
-            generatingSku={generatingSku}
-            onRegenerateSku={() => void regenerateSku(editingProduct)}
-            saving={savingProduct}
-            onSave={() => void saveProductEdit(editingProduct)}
-            onClose={cancelEditing}
+            onClose={() => setEditingProductId(null)}
+            onSaved={() => { setEditingProductId(null); void load(); }}
           />
         ) : null;
       })()}
@@ -1981,7 +1589,7 @@ function InventorySummary({ kpis, onNavigate }: InventorySummaryProps) {
             type="button"
             className="flex items-start gap-3 rounded-lg p-3 text-left transition-colors duration-[140ms]"
             style={{ background: "var(--color-surface-alt)", border: "0.5px solid var(--color-border)" }}
-            onClick={() => onNavigate("pricing")}
+            onClick={() => onNavigate("products", "NO_PRICE")}
             onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--color-master-400)"; }}
             onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--color-border)"; }}
           >

@@ -422,7 +422,16 @@ const mockProducts: MockProduct[] = [
   { id: "p-varilla", sku: "MET-HIE-0001", name: "VARILLA DE HIERRO 3/8 STD", unit: "VARILLA", categoryId: "cat-hierro", saleUnit: "VARILLA", factor: 1, canonical: true },
   { id: "p-quintal", sku: "MET-HIE-0002", name: "HIERRO DE 3/8 STD (QUINTAL)", unit: "UNIDAD", categoryId: "cat-hierro", saleUnit: "QUINTAL", factor: 14, canonical: false },
   { id: "p-pintura", sku: "PIN-ACE-0001", name: "PINTURA DE ACEITE BLANCA", unit: "UN", categoryId: "cat-pintura" },
+  { id: "p-plywood", sku: "WOO-PLY-STD-0004", name: 'PLYWOOD DE 3/16"', unit: "UNIDAD", categoryId: "cat-hierro" },
+  ...Array.from({ length: 11 }, (_, i) => ({ id: `p-regla-${i}`, sku: `MAD-REG-${i}`, name: `REGLA 1X${2 + Math.floor(i / 4)}X${3 + (i % 4)}`, unit: "UNIDAD", categoryId: "cat-hierro" })),
 ];
+// Asignación manual por sucursal (BranchProductSetting.isAvailable), clave "productId:branchId".
+const mockAssignments = new Set<string>();
+// Precio general por producto y precio propio por sucursal (clave "productId:branchId").
+const mockStandardPrices = new Map<string, number>();
+const mockBranchPrices = new Map<string, { price: number; reason: string }>();
+// Misma regla que productTextSearchSql: cada palabra en nombre o SKU.
+const mockMatches = (p: MockProduct, q: string) => q.trim().toUpperCase().split(/\s+/).filter(Boolean).every((t) => `${p.sku} ${p.name}`.toUpperCase().includes(t));
 function mockProductRow(p: MockProduct) {
   return {
     id: p.id, sku: p.sku, name: p.name, unit: p.unit, isActive: true, barcode: null, barcodes: [],
@@ -486,16 +495,81 @@ const server = http.createServer(async (req, res) => {
   if (path === "/api/master/inventory/config/primary-branch") return ok(res, { branchId: branches[0]?.id ?? null });
   if (path === "/api/master/inventory/nav-counts") return ok(res, { activeProducts: mockProducts.length, negativeStock: 0, lowStock: 0, staleTransfers: 0, pendingQuality: 0 });
   if (path === "/api/master/catalog-inventory" && method === "GET") {
+    const listed = mockProducts.filter((p) => mockMatches(p, url.searchParams.get("q") ?? ""));
     return ok(res, {
       branches, categories: mockCategories, costScope: "NETWORK", costBranchId: null, costBranchName: null,
       kpis: { activeProducts: mockProducts.length, skusWithoutInventory: 0, criticalStockProducts: 0, zeroStockProducts: 0, totalInventoryValue: 0, productsWithoutCost: 0, productsWithoutPrice: 0, missingPriceCount: 0 },
-      products: mockProducts.map(mockProductRow), balances: [], movements: [], transfers: [], reorderAlerts: [], auditLogs: [],
-      pagination: { page: 1, limit: 50, total: mockProducts.length, totalPages: 1 },
+      products: listed.map(mockProductRow), balances: [], movements: [], transfers: [], reorderAlerts: [], auditLogs: [],
+      pagination: { page: 1, limit: 50, total: listed.length, totalPages: 1 },
+    });
+  }
+  if (path === "/api/master/inventory/products" && method === "GET") {
+    const found = mockProducts.filter((p) => mockMatches(p, url.searchParams.get("q") ?? ""));
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    return ok(res, { rows: found.slice(0, limit).map((p) => ({ id: p.id, sku: p.sku, name: p.name, barcode: null })), nextCursor: null, counts: { ALL: found.length } });
+  }
+  if (path === "/api/catalog/categories" && method === "GET") return ok(res, mockCategories);
+  const detailMatch = path.match(/^\/api\/master\/catalog-inventory\/products\/([^/]+)$/);
+  if (detailMatch && method === "GET") {
+    const p = mockProducts.find((x) => x.id === detailMatch[1]);
+    if (!p) return send(res, 404, { ok: false, error: { code: "NOT_FOUND", message: "Producto no encontrado." } });
+    const branch = { id: branches[0].id, code: branches[0].code, name: branches[0].name };
+    return ok(res, {
+      product: {
+        id: p.id, sku: p.sku, name: p.name, unit: p.unit, isActive: true, standardSalePrice: String(mockStandardPrices.get(p.id) ?? 100), barcode: null,
+        category: mockCategories.find((c) => c.id === p.categoryId) ?? null,
+        inventoryBalances: [{ id: "bal-1", quantityOnHand: "28", weightedAverageCost: "590", inventoryValue: "16520", branch }],
+        inventoryMovements: [], reorderPolicies: [], brainDecisions: [],
+        branchProductSettings: [...mockAssignments].filter((k) => k.startsWith(`${p.id}:`)).map((k) => {
+          const b = branches.find((x) => x.id === k.split(":")[1])!;
+          return { id: k, isAvailable: true, branchCost: null, branchPrice: null, branch: { id: b.id, code: b.code, name: b.name } };
+        }),
+      },
+      auditLogs: [],
+    });
+  }
+  const assignMatch = path.match(/^\/api\/catalog\/products\/([^/]+)\/branch-settings$/);
+  if (assignMatch && method === "PATCH") {
+    const body = await readJson(req);
+    const key = `${assignMatch[1]}:${String(body.branchId)}`;
+    if (body.isAvailable) mockAssignments.add(key); else mockAssignments.delete(key);
+    return ok(res, { productId: assignMatch[1], branchId: body.branchId, isAvailable: Boolean(body.isAvailable) });
+  }
+  if (path === "/api/pricing/product-context" && method === "GET") {
+    const p = mockProducts.find((x) => x.id === url.searchParams.get("productId"));
+    if (!p) return send(res, 404, { ok: false, error: { code: "NOT_FOUND", message: "Producto no encontrado." } });
+    return ok(res, {
+      productId: p.id, branchId: url.searchParams.get("branchId"), sku: p.sku, name: p.name,
+      standardSalePrice: mockStandardPrices.get(p.id) ?? 100, branchPrice: null, effectivePrice: mockStandardPrices.get(p.id) ?? 100, priceSource: "STANDARD",
+      branchCost: null, weightedAverageCost: null, effectiveCost: 59, costSource: "NONE", categoryId: p.categoryId, categoryName: "Hierro",
+      categoryPolicy: { targetMarginPercent: 30, minProfitAmount: 5, monthlyExpenseAllocation: 0, estimatedMonthlyUnits: 100, isVirtualDefault: true },
+    });
+  }
+  const setPriceMatch = path.match(/^\/api\/master\/pricing\/product\/([^/]+)\/branches\/([^/]+)\/set-price$/);
+  if (setPriceMatch && method === "POST") {
+    const body = await readJson(req);
+    mockBranchPrices.set(`${setPriceMatch[1]}:${setPriceMatch[2]}`, { price: Number(body.price), reason: String(body.reason) });
+    return ok(res, { ok: true });
+  }
+  if (path === "/api/master/pricing/follow-standard" && method === "POST") {
+    const body = await readJson(req);
+    for (const b of body.branchIds as string[]) mockBranchPrices.delete(`${String(body.productId)}:${b}`);
+    return ok(res, { ok: true });
+  }
+  const pricingMatch = path.match(/^\/api\/master\/pricing\/product\/([^/]+)\/branches$/);
+  if (pricingMatch && method === "GET") {
+    const standard = mockStandardPrices.get(pricingMatch[1]) ?? 100;
+    return ok(res, {
+      standardSalePrice: standard,
+      branches: branches.map((b) => {
+        const own = mockBranchPrices.get(`${pricingMatch[1]}:${b.id}`);
+        const price = own?.price ?? standard;
+        return { branchId: b.id, branchName: b.name, followsStandard: !own, effectivePrice: price, priceExceptionReason: own?.reason ?? null, priceExceptionAt: own ? new Date().toISOString() : null, effectiveCost: 59, marginPercent: ((price - 59) / price) * 100, hasUnexplainedException: false };
+      }),
     });
   }
   if (path === "/api/catalog/products" && method === "GET") {
-    const q = (url.searchParams.get("q") ?? "").toUpperCase();
-    return ok(res, mockProducts.filter((p) => !q || `${p.sku} ${p.name}`.toUpperCase().includes(q)));
+    return ok(res, mockProducts.filter((p) => mockMatches(p, url.searchParams.get("q") ?? "")));
   }
   const productMatch = path.match(/^\/api\/catalog\/products\/([^/]+)$/);
   if (productMatch && method === "PATCH") {
@@ -503,6 +577,7 @@ const server = http.createServer(async (req, res) => {
     if (!product) return send(res, 404, { ok: false, error: { code: "NOT_FOUND", message: "Producto no encontrado." } });
     const body = await readJson(req);
     if (typeof body.name === "string") product.name = body.name;
+    if (typeof body.standardSalePrice === "number") mockStandardPrices.set(product.id, body.standardSalePrice);
     if (typeof body.unit === "string") {
       product.unit = body.unit.toUpperCase();
       if (product.saleUnit) product.saleUnit = product.unit;

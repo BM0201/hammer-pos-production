@@ -223,7 +223,7 @@ export function toHttpErrorResponse(error: unknown) {
       return errJson("VALIDATION_ERROR", "El producto no está activo.", 400);
     }
     if (error.message === "PRODUCT_HAS_NO_BRANCH_PRICE") {
-      return errJson("PRODUCT_HAS_NO_BRANCH_PRICE", "Este producto no tiene precio de venta asignado en esta sucursal. Asígnalo en Catálogo → Precios y costos antes de venderlo.", 422);
+      return errJson("PRODUCT_HAS_NO_BRANCH_PRICE", "Este producto no tiene precio de venta asignado en esta sucursal. Asígnalo en Inventario → el producto → Precios y costos antes de venderlo.", 422);
     }
 
     // Operational day errors — Día Operativo 360 (bitácora, no compuerta):

@@ -17,16 +17,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve, join } from "node:path";
+import { dirname, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SRC = resolve(__dirname, "..", "..", "src");
-
-function read(rel) {
-  const abs = join(SRC, rel);
-  assert.ok(existsSync(abs), `Archivo no existe: ${rel}`);
-  return readFileSync(abs, "utf8");
-}
 
 function readApi(relFromRepoRoot) {
   const abs = resolve(__dirname, "..", "..", "..", relFromRepoRoot);
@@ -34,18 +27,6 @@ function readApi(relFromRepoRoot) {
   return readFileSync(abs, "utf8");
 }
 
-const ADMIN = "components/catalog-inventory/catalog-inventory-admin.tsx";
-
-test("updateGlobalCost ofrece reintento con allowHighUnitCost cuando el backend sospecha costo de bulto", () => {
-  const c = read(ADMIN);
-  assert.ok(c.includes('raw?.error?.code === "SUSPECTED_PACKAGE_COST_AS_UNIT_COST"'), "debe detectar el código específico, no el genérico VALIDATION_ERROR");
-  assert.ok(c.includes("await updateGlobalCost(product, value, true)"), "el reintento debe pasar allowHighUnitCost=true");
-});
-
-test("el body del PATCH manda allowHighUnitCost al backend", () => {
-  const c = read(ADMIN);
-  assert.ok(c.includes("allowHighUnitCost: allowHighUnitCost || undefined"), "debe reenviar el override en el payload");
-});
 
 test("backend: updateProductSchema acepta allowHighUnitCost", () => {
   const validators = readApi("hammer-api/src/modules/catalog/validators.ts");

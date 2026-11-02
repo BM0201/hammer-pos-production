@@ -404,7 +404,8 @@ function ReceivePurchaseOrderModal({
 export default function PurchaseOrdersPage() {
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  // Productos elegidos en las líneas, por id: el buscador trae resultados del servidor, no una lista completa.
+  const [selectedProducts, setSelectedProducts] = useState<Record<string, Product>>({});
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -492,17 +493,13 @@ export default function PurchaseOrdersPage() {
 
   const fetchMeta = useCallback(async () => {
     try {
-      const [branchRes, prodRes, supplierRes] = await Promise.all([
+      const [branchRes, supplierRes] = await Promise.all([
         fetch("/api/master/users"),
-        fetch("/api/catalog/products"),
         fetch("/api/suppliers"),
       ]);
       const branchJson = unwrapApiData(await branchRes.json());
-      const prodJson = unwrapApiData(await prodRes.json());
       const supplierJson = unwrapApiData(await supplierRes.json());
       if (branchJson?.branches) setBranches(branchJson.branches);
-      const prods = Array.isArray(prodJson) ? prodJson : [];
-      setProducts(prods);
       setSuppliers(Array.isArray(supplierJson) ? supplierJson : []);
     } catch { /* non-critical */ }
   }, []);
@@ -1518,14 +1515,14 @@ export default function PurchaseOrdersPage() {
               </div>
 
               {formLines.map((line, idx) => {
-                const selectedProduct = products.find((p) => p.id === line.productId) ?? null;
+                const selectedProduct = selectedProducts[line.productId] ?? null;
                 const usedElsewhere = !!line.productId && formLines.filter((l) => l.productId === line.productId).length > 1;
                 const lineSubtotal = (parseFloat(line.quantity) || 0) * (parseFloat(line.unitCostBeforeTax) || 0);
                 return (
                   <div key={idx} className="grid grid-cols-1 gap-2 rounded-lg border border-[var(--color-border)] p-3 md:grid-cols-12 md:items-end md:border-0 md:p-0">
                     <div className="md:col-span-4">
                       {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Producto</label>}
-                      <ProductCombobox products={products} value={selectedProduct} onSelect={(p) => updateLine(idx, "productId", p.id)} />
+                      <ProductCombobox value={selectedProduct} onSelect={(p) => { setSelectedProducts((prev) => ({ ...prev, [p.id]: p })); updateLine(idx, "productId", p.id); }} />
                       {selectedProduct && <p className="mt-1 text-[0.68rem] text-[var(--color-text-muted)]">Unidad: {selectedProduct.unit}</p>}
                       {usedElsewhere && <p className="mt-1 text-[0.68rem] text-[var(--color-warning-700)]">Este producto ya está en otra línea.</p>}
                     </div>

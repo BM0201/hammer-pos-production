@@ -167,6 +167,15 @@ test("buildNavSearchResults: 'nuevo producto' encuentra la acción correspondien
   assert.ok(actionsGroup.items.some((i) => i.label === "Nuevo producto"));
 });
 
+test("buildNavSearchResults: con más coincidencias que las mostradas, el último ítem abre la lista filtrada", () => {
+  const productsGroup = buildNavSearchResults("regla 1x3", PRODUCTS, 40).find((g) => g.kind === "products")!;
+  const last = productsGroup.items[productsGroup.items.length - 1];
+  assert.equal(last.href, "/app/master/catalog-inventory?tab=products&q=regla%201x3");
+  assert.match(last.label, /40/);
+  const exact = buildNavSearchResults("FER-002", PRODUCTS).find((g) => g.kind === "products")!;
+  assert.ok(!exact.items.some((i) => i.id === "all-results"));
+});
+
 test("buildNavSearchResults: consulta vacía no devuelve nada", () => {
   assert.deepEqual(buildNavSearchResults("", PRODUCTS), []);
   assert.deepEqual(buildNavSearchResults("   ", PRODUCTS), []);

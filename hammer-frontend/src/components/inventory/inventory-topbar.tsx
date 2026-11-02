@@ -105,8 +105,8 @@ export function InventoryTopbar() {
     const params = new URLSearchParams({ q: term, limit: "8", branchId: searchBranchId });
     const res = await apiFetch(`/api/master/inventory/products?${params}`, { signal });
     const raw = await res.json().catch(() => null);
-    const data = raw ? (unwrapApiData(raw) as { rows: Array<{ id: string; sku: string; name: string; barcode: string | null }> }) : { rows: [] };
-    const groups = buildNavSearchResults(term, data.rows ?? []);
+    const data = raw ? (unwrapApiData(raw) as { rows: Array<{ id: string; sku: string; name: string; barcode: string | null }>; counts?: { ALL: number } }) : { rows: [] };
+    const groups = buildNavSearchResults(term, data.rows ?? [], data.counts?.ALL);
     lastSearchedTerm.current = term;
     return groups;
   }, [searchBranchId]);
@@ -225,7 +225,7 @@ export function InventoryTopbar() {
                         onClick={() => { router.push(item.href as Route); setSearchOpen(false); setQuery(""); }}
                         className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs ${flatIndex === highlighted ? "bg-[var(--color-surface-alt)]" : ""}`}
                       >
-                        <span className="truncate font-medium text-[var(--color-text)]">{item.label}</span>
+                        <span className={`truncate font-medium ${item.id === "all-results" ? "text-[var(--color-master-700)] underline underline-offset-2" : "text-[var(--color-text)]"}`}>{item.label}</span>
                         {item.sublabel ? <span className="shrink-0 font-mono text-[var(--color-text-muted)]">{item.sublabel}</span> : null}
                       </button>
                     );

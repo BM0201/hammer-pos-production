@@ -43,10 +43,6 @@ function readApi(relFromRepoRoot) {
 }
 
 const ADMIN = "components/catalog-inventory/catalog-inventory-admin.tsx";
-// Fase 5 (prompt-flujo-velocidad.md): PricingPanel se extrajo de ADMIN a su
-// propio archivo para cargarlo con next/dynamic — la lógica de fila
-// (isMissing, etc.) vive ahí ahora.
-const PRICING = "components/catalog-inventory/pricing-panel.tsx";
 
 test("backend: updateProduct sincroniza averageCost con globalCost al editar el costo (buildGlobalCostUpdateFields)", () => {
   const service = readApi("hammer-api/src/modules/catalog/service.ts");
@@ -72,32 +68,3 @@ test("frontend: priceSource cae a STANDARD cuando no hay branchPrice — ya no c
   assert.ok(c.includes('"BRANCH" | "STANDARD" | "MISSING" | "FUSION_DERIVED"'), "el tipo debe incluir STANDARD/FUSION_DERIVED, no solo BRANCH|MISSING");
 });
 
-test("frontend: isMissing (fila roja / botón Asignar) se decide sobre branchPrice, no sobre effectivePrice", () => {
-  const c = read(PRICING);
-  assert.ok(c.includes("const isMissing = row.branchPrice === null"), "con el fallback a STANDARD, effectivePrice casi nunca es null — isMissing tiene que seguir siendo sobre branchPrice para no perder el aviso de 'esta sucursal no tiene precio propio'");
-});
-
-test("frontend: cada fila de costo muestra costExplanation (de dónde sale el costo)", () => {
-  const c = read(ADMIN);
-  assert.ok(c.includes("costExplanation"), "B.3 — un margen que no cuadra tiene que explicarse en la fila, no en una investigación aparte");
-  assert.ok(c.includes("function costSourceLabel"), "debe traducir costSource (BRANCH/WAC_ESTIMATE/GLOBAL_AVERAGE/GLOBAL/LAST_PURCHASE/NONE) a texto legible");
-});
-
-test("frontend: Parte C — BELOW_COST_NOT_ALLOWED en updateBranchPrice muestra el costo vigente y su origen, no un mensaje genérico", () => {
-  const c = read(ADMIN);
-  assert.ok(c.includes('raw?.error?.code === "BELOW_COST_NOT_ALLOWED"'), "debe distinguir este código específico");
-  assert.ok(/El costo vigente es .*row\.costExplanation/.test(c), "el mensaje debe incluir el costo efectivo Y su explicación, ambos ya calculados en el cliente");
-});
-
-test("frontend: Parte C — FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED ofrece reintento con overridePriceConfirmed", () => {
-  const c = read(ADMIN);
-  assert.ok(c.includes('raw?.error?.code === "FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED"'));
-  assert.ok(c.includes("await updateBranchPrice(product, branch, field, value, reason, true)"), "el reintento debe pasar overridePriceConfirmed=true");
-  assert.ok(c.includes("overridePriceConfirmed: overridePriceConfirmed || undefined"), "el body del PATCH debe reenviar el override al backend");
-});
-
-test("frontend: Parte C — FUSION_COST_WRITE_NOT_ALLOWED tiene mensaje propio en updateBranchPrice y en updateGlobalCost", () => {
-  const c = read(ADMIN);
-  const matches = c.match(/raw\?\.error\?\.code === "FUSION_COST_WRITE_NOT_ALLOWED"/g) ?? [];
-  assert.ok(matches.length >= 2, "debe manejarse en los dos caminos que pueden tocar el costo de un miembro derivado");
-});

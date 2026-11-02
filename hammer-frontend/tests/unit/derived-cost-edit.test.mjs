@@ -23,16 +23,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve, join } from "node:path";
+import { dirname, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SRC = resolve(__dirname, "..", "..", "src");
-
-function read(rel) {
-  const abs = join(SRC, rel);
-  assert.ok(existsSync(abs), `Archivo no existe: ${rel}`);
-  return readFileSync(abs, "utf8");
-}
 
 function readApi(relFromRepoRoot) {
   const abs = resolve(__dirname, "..", "..", "..", relFromRepoRoot);
@@ -40,28 +33,6 @@ function readApi(relFromRepoRoot) {
   return readFileSync(abs, "utf8");
 }
 
-const ADMIN = "components/catalog-inventory/catalog-inventory-admin.tsx";
-// Fase 5 (prompt-flujo-velocidad.md): PricingPanel (la pestaña "Precios y
-// costos") se extrajo de ADMIN a su propio archivo para cargarlo con
-// next/dynamic — el contenido de costo por presentación derivada vive ahí.
-const PRICING = "components/catalog-inventory/pricing-panel.tsx";
-
-test("frontend: el costo de un miembro derivado ya NO es de solo lectura — no queda el mensaje viejo de 'edítalo en la unidad base'", () => {
-  const c = read(PRICING);
-  assert.ok(!c.includes("edítalo en la unidad base"), "el mensaje de solo-lectura de antes no debe seguir en el código");
-  assert.ok(!/el costo NO se edita ac/.test(c), "el comentario que documentaba el bloqueo viejo debe haberse ido con el bloqueo");
-});
-
-test("frontend: la fila de un derivado usa el MISMO input editable que el canónico (onSaveGlobalCost), con título aclarando la conversión", () => {
-  const c = read(PRICING);
-  assert.ok(c.includes("se convierte automáticamente al producto canónico"), "debe avisar que lo tecleado se convierte, no se guarda tal cual");
-});
-
-test("frontend: globalCostServerValue precarga el input de un derivado con el costo YA convertido a su unidad (row.effectiveCost), no con product.globalCost (siempre null en un derivado)", () => {
-  const c = read(PRICING);
-  assert.ok(c.includes("function globalCostServerValue"));
-  assert.match(c, /buildBranchPricingCostRow\(product, activeBranch\)/, "debe reusar el mismo motor que ya calcula el costo efectivo de la fila, no reimplementarlo");
-});
 
 test("backend: resolveGlobalCostWriteTarget existe y catalog/service.ts la usa en vez de rechazar con assertNotFusionMemberCostWrite", () => {
   const service = readApi("hammer-api/src/modules/catalog/service.ts");

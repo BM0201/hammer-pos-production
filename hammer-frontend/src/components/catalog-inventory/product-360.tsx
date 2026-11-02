@@ -13,15 +13,14 @@ import {
   DollarSign,
   Brain,
   ClipboardList,
-  BarChart3,
   Building2,
   Tag,
-  Activity,
   AlertTriangle,
   Calculator,
   History,
   Printer,
   Barcode,
+  Pencil,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +33,8 @@ import { getActiveBranchId } from "@/lib/client/active-branch";
 import { printProductLabels } from "@/lib/client/print-product-labels";
 import { money, qty, fmtDateTime } from "@/lib/format";
 import { CostOnlyCorrectionModal } from "@/components/pricing/cost-only-correction-modal";
+import { ProductEditDrawer } from "@/components/catalog-inventory/product-edit-drawer";
+import type { Category, ProductRow } from "@/components/catalog-inventory/catalog-inventory-admin";
 
 // Fase 5 (prompt-flujo-velocidad.md): las 3 pestañas más pesadas de esta
 // ficha de producto (Kardex, historial de costo, historial de precio) se
@@ -73,7 +74,9 @@ export type ProductDetail = {
     isActive: boolean;
     standardSalePrice: string;
     barcode: string | null;
-    category?: { name: string };
+    category?: { id: string; name: string };
+    /** Fusión del producto — el panel "Editar producto" muestra la unidad de venta real. */
+    stockConversion?: ProductRow["stockConversion"];
     inventoryBalances: Array<{
       id: string;
       quantityOnHand: string;
@@ -134,14 +137,15 @@ type Tab = "general" | "stock" | "movements" | "wacHistory" | "priceHistory" | "
 // con los componentes que los usan — ya no viven acá.
 
 /* ── Tab config ── */
+// Lo que se edita primero (precios, códigos), después lo que se consulta.
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "general", label: "Resumen", icon: Package },
+  { id: "pricing", label: "Precios y costos", icon: DollarSign },
+  { id: "barcodes", label: "Códigos", icon: Barcode },
   { id: "stock", label: "Existencias", icon: Warehouse },
-  { id: "movements", label: "Kardex / Movimientos", icon: ArrowLeftRight },
+  { id: "movements", label: "Kardex", icon: ArrowLeftRight },
   { id: "wacHistory", label: "Historial de costo", icon: History },
   { id: "priceHistory", label: "Historial de precio", icon: Tag },
-  { id: "pricing", label: "Precios y Costos", icon: DollarSign },
-  { id: "barcodes", label: "Códigos", icon: Barcode },
   { id: "brain", label: "Brain", icon: Brain },
   { id: "audit", label: "Auditoría", icon: ClipboardList },
 ];
@@ -171,7 +175,30 @@ export function Product360({ productId }: { productId: string }) {
   // D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "Corregir costo" en
   // la pestaña de Precios y Costos: qué sucursal tiene el modal abierto.
   const [correctingBranchId, setCorrectingBranchId] = useState<string | null>(null);
+  // "Editar producto" — mismo panel que la lista; las categorías se piden al abrirlo.
+  const [editCategories, setEditCategories] = useState<Category[] | null>(null);
   const sessionState = useSession();
+
+  async function toggleBranchAssignment(branchId: string, isAvailable: boolean) {
+    const res = await apiFetch(`/api/catalog/products/${productId}/branch-settings`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ branchId, isAvailable }),
+    });
+    if (!res.ok) {
+      toast.error("No se pudo actualizar la asignación de sucursal.");
+      return;
+    }
+    toast.success(isAvailable ? "Asignado a la sucursal" : "Asignación quitada");
+    await reloadProduct();
+  }
+
+  function openEditor() {
+    apiFetch("/api/catalog/categories")
+      .then((res) => res.json())
+      .then((raw) => setEditCategories(unwrapApiData(raw) as Category[]))
+      .catch(() => toast.error("No se pudieron cargar las categorías."));
+  }
 
   const reloadProduct = useCallback(() => {
     return fetch(`/api/master/catalog-inventory/products/${productId}`, { cache: "no-store" })
@@ -255,7 +282,7 @@ export function Product360({ productId }: { productId: string }) {
       {/* ── Volver + Header ── */}
       <div>
         <Link
-          href={"/app/master/catalog-inventory" as Route}
+          href={"/app/master/catalog-inventory?tab=products" as Route}
           className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--color-info-600)] hover:text-[var(--color-info-700)] transition-colors mb-2"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
@@ -272,7 +299,13 @@ export function Product360({ productId }: { productId: string }) {
               {product.category?.name ?? "Sin categoría"} · {product.unit}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={product.isActive ? "success" : "warning"}>
+              {product.isActive ? "Activo" : "Inactivo"}
+            </Badge>
+            <Button variant="primary" size="sm" icon={<Pencil className="h-4 w-4" />} onClick={openEditor}>
+              Editar producto
+            </Button>
             <Button
               variant="secondary"
               size="sm"
@@ -283,9 +316,6 @@ export function Product360({ productId }: { productId: string }) {
             >
               {product.barcode ? "Imprimir etiqueta" : "Generar código y etiqueta"}
             </Button>
-            <Badge variant={product.isActive ? "success" : "warning"}>
-              {product.isActive ? "Activo" : "Inactivo"}
-            </Badge>
           </div>
         </div>
       </div>
@@ -316,21 +346,17 @@ export function Product360({ productId }: { productId: string }) {
       {/* ═══ GENERAL TAB ═══ */}
       {tab === "general" && (
         <div className="space-y-5">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            <KpiMini icon={Warehouse} label="Stock Total" value={qty(totalStock)} accent="emerald" />
-            <KpiMini icon={DollarSign} label="Precio Base" value={money(product.standardSalePrice)} accent="blue" />
-            <KpiMini icon={Building2} label="Sucursales con stock" value={String(product.inventoryBalances.length)} accent="indigo" />
-            <KpiMini icon={Activity} label="Movimientos recientes" value={String(product.inventoryMovements.length)} accent="amber" />
+          {/* "Movimientos recientes" se quitó: contaba las filas cargadas
+              (tope 80), no los movimientos reales — está en Kardex. */}
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiMini icon={Warehouse} label="Stock total" value={qty(totalStock)} accent="emerald" />
+            <KpiMini icon={DollarSign} label="Precio general" value={money(product.standardSalePrice)} accent="blue" />
+            <KpiMini icon={Building2} label="Sucursales con stock" value={String(product.inventoryBalances.filter((b) => Number(b.quantityOnHand) > 0).length)} accent="indigo" />
+            <KpiMini icon={Package} label="Valor en inventario" value={money(totalValue)} accent="amber" />
           </div>
-          {totalValue > 0 && (
-            <Card className="p-4 bg-gradient-to-r from-slate-50 to-white dark:from-slate-900/50 dark:to-[var(--color-surface)]">
-              <p className="text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1">
-                <BarChart3 className="h-3.5 w-3.5 inline mr-1" />
-                Valor Total en Inventario
-              </p>
-              <p className="text-3xl font-extrabold text-[var(--color-text)]">{money(totalValue)}</p>
-            </Card>
-          )}
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Nombre, categoría, SKU y unidad: <b>Editar producto</b>. Precio y costo por sucursal: pestaña <b>Precios y costos</b>. Códigos de barra: pestaña <b>Códigos</b>.
+          </p>
         </div>
       )}
 
@@ -410,57 +436,9 @@ export function Product360({ productId }: { productId: string }) {
       {/* ═══ PRICING TAB ═══ */}
       {tab === "pricing" && (
         <div className="space-y-4">
-          <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
-            <div className="hm-card-header-amber px-5 py-3 flex items-center gap-2">
-              <DollarSign className="h-5 w-5" />
-              <h2 className="font-semibold">Disponibilidad y Costo por Sucursal</h2>
-            </div>
-            {product.branchProductSettings.length === 0 ? (
-              <div className="p-8 text-center">
-                <DollarSign className="h-10 w-10 mx-auto mb-3 text-[var(--color-text-muted)]" />
-                <p className="text-sm font-medium text-[var(--color-text-secondary)]">Sin configuración de precios por sucursal</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="hm-table">
-                  <thead>
-                    <tr>
-                      <th>Sucursal</th>
-                      <th className="text-center">Disponible</th>
-                      <th className="text-right">Costo Sucursal</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {product.branchProductSettings.map((s) => (
-                      <tr key={s.id}>
-                        <td>
-                          <span className="inline-flex items-center gap-2">
-                            <span className="flex items-center justify-center w-7 h-7 rounded-lg bg-[var(--color-master-50)] text-[var(--color-master-700)] text-xs font-bold">
-                              {s.branch.code}
-                            </span>
-                            <span className="font-medium text-[var(--color-text)]">{s.branch.name}</span>
-                          </span>
-                        </td>
-                        <td className="text-center">
-                          {s.isAvailable ? (
-                            <Badge variant="success">Sí</Badge>
-                          ) : (
-                            <Badge variant="danger">No</Badge>
-                          )}
-                        </td>
-                        <td className="text-right font-mono">{s.branchCost ? money(s.branchCost) : <span className="text-[var(--color-text-muted)]">Base</span>}</td>
-                        <td className="text-right">
-                          <button type="button" onClick={() => setCorrectingBranchId(s.branch.id)} className="text-xs font-semibold text-[var(--color-primary-600)] underline underline-offset-2">Corregir costo</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
+          {/* Una sola lista por sucursal: precio, costo, margen y sus
+              acciones. Antes había una tabla aparte de "Disponibilidad y
+              costo" que repetía las sucursales con otro costo. */}
           {correctingBranchId && (
             <CostOnlyCorrectionModal
               productId={product.id}
@@ -471,8 +449,24 @@ export function Product360({ productId }: { productId: string }) {
             />
           )}
 
-          <BranchPricingBlock productId={product.id} standardSalePriceFallback={product.standardSalePrice} />
+          <BranchPricingBlock
+            productId={product.id}
+            standardSalePriceFallback={product.standardSalePrice}
+            assignedBranchIds={new Set(product.branchProductSettings.filter((s) => s.isAvailable).map((s) => s.branch.id))}
+            onToggleAssignment={toggleBranchAssignment}
+            onCorrectCost={setCorrectingBranchId}
+            onStandardPriceSaved={() => void reloadProduct()}
+          />
         </div>
+      )}
+
+      {editCategories && (
+        <ProductEditDrawer
+          product={{ ...product, hasHistory: totalStock !== 0 || product.inventoryBalances.length > 0 }}
+          categories={editCategories}
+          onClose={() => setEditCategories(null)}
+          onSaved={() => { setEditCategories(null); void reloadProduct(); }}
+        />
       )}
 
       {/* ═══ CÓDIGOS TAB (Fase 2, prompt-codigos-y-duplicados.md) ═══ */}
@@ -596,13 +590,62 @@ type BranchPricingRow = {
 };
 type BranchPricingStatus = { standardSalePrice: number | null; branches: BranchPricingRow[] };
 
-function BranchPricingBlock({ productId, standardSalePriceFallback }: { productId: string; standardSalePriceFallback: string }) {
+function BranchPricingBlock({
+  productId,
+  standardSalePriceFallback,
+  assignedBranchIds,
+  onToggleAssignment,
+  onCorrectCost,
+  onStandardPriceSaved,
+}: {
+  productId: string;
+  standardSalePriceFallback: string;
+  assignedBranchIds: Set<string>;
+  onToggleAssignment: (branchId: string, isAvailable: boolean) => Promise<void>;
+  onCorrectCost: (branchId: string) => void;
+  onStandardPriceSaved: () => void;
+}) {
   const [data, setData] = useState<BranchPricingStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [exceptionFormBranchId, setExceptionFormBranchId] = useState<string | null>(null);
   const [priceInput, setPriceInput] = useState("");
   const [reasonInput, setReasonInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Precio general (standardSalePrice) — el que siguen todas las sucursales sin precio propio.
+  const [standardInput, setStandardInput] = useState<string | null>(null);
+
+  async function saveStandardPrice(overridePriceConfirmed = false) {
+    const price = Number(standardInput);
+    if (!price || price <= 0) { toast.error("El precio debe ser mayor que 0."); return; }
+    setSubmitting(true);
+    try {
+      const res = await apiFetch(`/api/catalog/products/${productId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ standardSalePrice: price, overridePriceConfirmed: overridePriceConfirmed || undefined }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) {
+        // Mismo aviso que la pestaña Fusiones: desviarse del precio implícito de la fusión se confirma, no se bloquea.
+        if (raw?.error?.code === "PRICE_DEVIATES_FROM_FUSION" && !overridePriceConfirmed) {
+          if (window.confirm(`${raw.error.message}\n\n¿Confirmás que este precio es intencional?`)) {
+            setSubmitting(false);
+            await saveStandardPrice(true);
+          }
+          return;
+        }
+        throw new Error(raw?.error?.message ?? "No se pudo guardar el precio general.");
+      }
+      toast.success("Precio general actualizado.");
+      setStandardInput(null);
+      onStandardPriceSaved();
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "No se pudo guardar el precio general.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -649,14 +692,14 @@ function BranchPricingBlock({ productId, standardSalePriceFallback }: { productI
         body: JSON.stringify({ price, reason: reasonInput.trim() }),
       });
       const raw = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo fijar la excepción.");
-      toast.success("Excepción de precio fijada.");
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo guardar el precio de la sucursal.");
+      toast.success("Precio de la sucursal guardado.");
       setExceptionFormBranchId(null);
       setPriceInput("");
       setReasonInput("");
       await load();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "No se pudo fijar la excepción.");
+      toast.error(e instanceof Error ? e.message : "No se pudo guardar el precio de la sucursal.");
     } finally {
       setSubmitting(false);
     }
@@ -679,11 +722,27 @@ function BranchPricingBlock({ productId, standardSalePriceFallback }: { productI
       <div className="hm-card-header-amber px-5 py-3">
         <div className="flex items-center gap-2">
           <DollarSign className="h-5 w-5" />
-          <h2 className="font-semibold">Precio por sucursal</h2>
+          <h2 className="font-semibold">Precio y costo por sucursal</h2>
         </div>
-        <p className="mt-1 text-sm">
-          Precio general: <strong>{money(standardPrice)}</strong> · {followingCount} de {data.branches.length} sucursales lo siguen
-        </p>
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-sm">
+          <span>Precio general: <strong>{money(standardPrice)}</strong> · {followingCount} de {data.branches.length} sucursales lo siguen</span>
+          {standardInput === null ? (
+            <Button size="sm" variant="secondary" onClick={() => setStandardInput(String(standardPrice || ""))}>
+              Cambiar precio general
+            </Button>
+          ) : null}
+        </div>
+        {standardInput !== null ? (
+          <div className="mt-2 flex flex-wrap items-end gap-2 rounded-lg bg-[var(--color-surface)] p-3 text-[var(--color-text)]">
+            <label className="text-xs font-semibold text-[var(--color-text-muted)]">
+              Nuevo precio general
+              <Input type="number" step="0.01" min="0.01" value={standardInput} onChange={(e) => setStandardInput(e.target.value)} className="mt-1 w-36" autoFocus />
+            </label>
+            <p className="flex-1 text-xs text-[var(--color-text-muted)]">Cambia el precio de las {followingCount} sucursales que siguen el general. Las que tienen precio propio no cambian.</p>
+            <Button size="sm" variant="success" loading={submitting} onClick={() => void saveStandardPrice()}>Guardar</Button>
+            <Button size="sm" variant="ghost" onClick={() => setStandardInput(null)} disabled={submitting}>Cancelar</Button>
+          </div>
+        ) : null}
       </div>
 
       <div className="divide-y divide-[var(--color-border)]">
@@ -695,14 +754,32 @@ function BranchPricingBlock({ productId, standardSalePriceFallback }: { productI
                 {b.followsStandard ? (
                   <Badge variant="neutral">Sigue el general</Badge>
                 ) : b.hasUnexplainedException ? (
-                  <Badge variant="danger">Excepción sin motivo registrado</Badge>
+                  <Badge variant="danger">Precio propio sin motivo</Badge>
                 ) : (
-                  <Badge variant="warning">Excepción</Badge>
+                  <Badge variant="warning">Precio propio</Badge>
                 )}
+                {/* isAvailable = asignación manual (BranchProductSetting): no
+                    es "disponible/no disponible" — sin ella el producto igual
+                    aparece en la sucursal si tiene stock o historial. Antes
+                    vivía en la pestaña oculta catalog-inventory?tab=pricing. */}
+                <button
+                  type="button"
+                  title={assignedBranchIds.has(b.branchId) ? "Quitar la asignación manual de esta sucursal" : "Mostrar el producto en esta sucursal aunque no tenga stock ni historial"}
+                  onClick={() => void onToggleAssignment(b.branchId, !assignedBranchIds.has(b.branchId))}
+                  className={`rounded-full px-2 py-0.5 text-xs font-semibold transition-colors ${
+                    assignedBranchIds.has(b.branchId)
+                      ? "bg-[var(--color-success-100)] text-[var(--color-success-700)] hover:bg-[var(--color-success-200)]"
+                      : "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                >
+                  {assignedBranchIds.has(b.branchId) ? "★ Asignado a la sucursal" : "○ Asignar a la sucursal"}
+                </button>
               </div>
-              <div className="flex items-center gap-4 text-sm">
+              <div className="flex flex-wrap items-center gap-4 text-sm">
                 <span className="font-mono font-semibold text-[var(--color-text)]">{b.effectivePrice === null ? "—" : money(b.effectivePrice)}</span>
+                <span className="text-[var(--color-text-muted)]">costo {b.effectiveCost === null ? "—" : money(b.effectiveCost)}</span>
                 <span className="text-[var(--color-text-muted)]">margen {b.marginPercent === null ? "—" : `${b.marginPercent.toFixed(0)}%`}</span>
+                <button type="button" onClick={() => onCorrectCost(b.branchId)} className="text-xs font-semibold text-[var(--color-primary-600)] underline underline-offset-2">Corregir costo</button>
                 {/* Fase 4.1 (prompt-mudanza-zona-precios.md) — el editor de acá se queda
                     (editar el precio mientras se mira el producto es correcto); este
                     enlace abre la Calculadora de la zona Precios con el producto y la
@@ -714,20 +791,18 @@ function BranchPricingBlock({ productId, standardSalePriceFallback }: { productI
                   <Calculator className="h-3 w-3" aria-hidden="true" />
                   Calcular precio con costos y margen
                 </Link>
-                {b.followsStandard ? (
-                  <Button size="sm" variant="secondary" onClick={() => { setExceptionFormBranchId(b.branchId); setPriceInput(""); setReasonInput(""); }}>
-                    Fijar excepción
-                  </Button>
-                ) : b.hasUnexplainedException ? (
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" variant="secondary" onClick={() => { setExceptionFormBranchId(b.branchId); setPriceInput(b.effectivePrice !== null ? String(b.effectivePrice) : ""); setReasonInput(""); }}>
-                      Agregar motivo
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => void followStandard(b.branchId)}>
-                      Volver al general
-                    </Button>
-                  </div>
-                ) : (
+                {/* "Cambiar precio aquí" fija (o cambia) el precio propio de
+                    esta sucursal, con motivo. Antes una sucursal que ya tenía
+                    precio propio solo podía "Volver al general": no había
+                    forma de cambiarlo sin perderlo primero. */}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => { setExceptionFormBranchId(b.branchId); setPriceInput(b.followsStandard || b.effectivePrice === null ? "" : String(b.effectivePrice)); setReasonInput(""); }}
+                >
+                  {b.hasUnexplainedException ? "Agregar motivo" : "Cambiar precio aquí"}
+                </Button>
+                {!b.followsStandard && (
                   <Button size="sm" variant="ghost" onClick={() => void followStandard(b.branchId)}>
                     Volver al general
                   </Button>
@@ -750,7 +825,7 @@ function BranchPricingBlock({ productId, standardSalePriceFallback }: { productI
             {exceptionFormBranchId === b.branchId && (
               <div className="mt-3 flex flex-wrap items-end gap-2 rounded-lg bg-[var(--color-surface-alt)] p-3">
                 <label className="text-xs font-semibold text-[var(--color-text-muted)]">
-                  Precio
+                  Precio en {b.branchName}
                   <Input type="number" step="0.01" min="0.01" value={priceInput} onChange={(e) => setPriceInput(e.target.value)} className="mt-1 w-32" />
                 </label>
                 <label className="flex-1 text-xs font-semibold text-[var(--color-text-muted)]">

@@ -477,8 +477,9 @@ export function excludeDerivedStockGroupMembers(): Prisma.ProductWhereInput {
 // (este archivo importa de vuelta esa cache más abajo, en listProducts).
 export { branchProductScopeFilter } from "@/modules/catalog/branch-product-scope";
 
-export async function listProducts(params: { q?: string; ids?: string[]; isActive?: boolean; branchId?: string; limit?: number; inStockOnly?: boolean; group?: boolean }) {
+export async function listProducts(params: { q?: string; ids?: string[]; isActive?: boolean; branchId?: string; limit?: number; inStockOnly?: boolean; group?: boolean; excludeTimber?: boolean }) {
   const andClauses: Prisma.ProductWhereInput[] = [];
+  if (params.excludeTimber) andClauses.push({ isTimber: false });
 
   // Fase 3 (prompt-flujo-velocidad.md): en vez de repetir las 4 condiciones
   // OR de branchProductScopeFilter (que Postgres reevalúa por subconsulta

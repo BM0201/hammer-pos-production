@@ -565,7 +565,7 @@ export async function listCommercialAlerts(input: { branchId: string; limit?: nu
     };
 
     if (effectivePrice === null) {
-      alerts.push({ ...base, severity: "WARNING", message: "Producto sin precio de venta asignado en esta sucursal.", recommendedAction: "Asignar precio en Catalogo -> Precios y costos." });
+      alerts.push({ ...base, severity: "WARNING", message: "Producto sin precio de venta asignado en esta sucursal.", recommendedAction: "Asignar precio en Inventario -> el producto -> Precios y costos." });
     } else if (effectiveCost !== null && effectivePrice < effectiveCost) {
       alerts.push({ ...base, severity: "DANGER", message: "Precio debajo de costo efectivo.", recommendedAction: "Corregir precio o revisar costo antes de vender." });
     }
