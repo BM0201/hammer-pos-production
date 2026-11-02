@@ -1,7 +1,7 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { calculateTimber, type TimberPricing } from "@/modules/timber/calculator";
-import { getPricingConfig } from "@/modules/timber/service";
+import { getPricingConfig, timberCatalogName } from "@/modules/timber/service";
 import { calculateTimberSchema } from "@/modules/timber/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { z } from "zod";
@@ -46,6 +46,7 @@ export async function POST(request: Request) {
 
     return ok({
       perPiece: calc,
+      catalogName: timberCatalogName(parsed.thickness, parsed.width, calc.varaLength),
       quantity,
       pricing,
       totals: {

@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Plus, Truck, Search, TreePine, X, Settings2, Upload, Loader2, Building2, ArrowRight } from "lucide-react";
-import { numFixed as fmt, money } from "@/lib/format";
+import { numFixed as fmt, money, fmtDateTimeShort } from "@/lib/format";
+import { parseTimberMeasure } from "./timber-measure";
 
 /* ─────────────────────────── Tipos ─────────────────────────── */
 
@@ -67,6 +68,8 @@ type InjectionPreviewLine = {
   lineId: string;
   dimensions: { thickness: number; width: number; length: number };
   isNewProduct: boolean;
+  productName: string;
+  sku: string | null;
   piecesToAdd: number;
   costPerPiece: { before: number | null; after: number };
   wac: { before: number | null; after: number };
@@ -188,6 +191,7 @@ function TripsList({ onSelect, onCreateNew }: { onSelect: (id: string) => void; 
   const [trips, setTrips] = useState<TripSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [nextTripCode, setNextTripCode] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -195,6 +199,7 @@ function TripsList({ onSelect, onCreateNew }: { onSelect: (id: string) => void; 
       const raw = await readJson(res);
       const data = unwrapApiData(raw);
       setTrips(Array.isArray(data?.items) ? data.items : []);
+      setNextTripCode(data?.nextTripCode ?? null);
     } catch {
       showToast("error", "No se pudieron cargar los viajes.");
     } finally {
@@ -211,7 +216,9 @@ function TripsList({ onSelect, onCreateNew }: { onSelect: (id: string) => void; 
           <div className="hm-section-icon hm-section-icon-master"><Truck className="h-4 w-4" /></div>
           <div>
             <h1 className="text-lg font-bold tracking-tight text-[var(--color-text)]">Viajes de Madera</h1>
-            <p className="text-sm text-[var(--color-text-muted)]">Del viaje al costo inyectado en cada medida</p>
+            <p className="text-sm text-[var(--color-text-muted)]">
+              Del viaje al costo inyectado en cada medida{nextTripCode && <> · el próximo que se ingrese será <b className="font-mono">{nextTripCode}</b></>}
+            </p>
           </div>
         </div>
         <span className="flex-1" />
@@ -246,7 +253,10 @@ function TripsList({ onSelect, onCreateNew }: { onSelect: (id: string) => void; 
             <tbody>
               {trips.map((t) => (
                 <tr key={t.id} className="cursor-pointer" onClick={() => onSelect(t.id)}>
-                  <td><b className="font-mono text-[12.5px]">{t.tripCode}</b>{t.supplierName && <><br /><span className="text-[11px] text-[var(--color-text-muted)]">{t.supplierName}</span></>}</td>
+                  <td>
+                    {t.status === "DRAFT" ? <b className="text-[12.5px]">Sin número</b> : <b className="font-mono text-[12.5px]">{t.tripCode}</b>}
+                    <br /><span className="text-[11px] text-[var(--color-text-muted)]">{[t.supplierName, fmtDateTimeShort(t.createdAt)].filter(Boolean).join(" · ")}</span>
+                  </td>
                   <td>{t.destinationBranch.code}</td>
                   <td>
                     {t.status === "DRAFT" && <Badge variant="warning">Borrador</Badge>}
@@ -271,65 +281,40 @@ function TripsList({ onSelect, onCreateNew }: { onSelect: (id: string) => void; 
 
 function NewTripForm({ onCreated, onCancel }: { onCreated: (id: string) => void; onCancel: () => void }) {
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [branchId, setBranchId] = useState("");
-  const [supplierName, setSupplierName] = useState("");
-  const [origin, setOrigin] = useState("");
-  const [creating, setCreating] = useState(false);
+  const [creatingFor, setCreatingFor] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/branches").then((r) => r.json()).then((raw) => setBranches(unwrapApiData(raw) ?? [])).catch(() => {});
   }, []);
 
-  async function create() {
-    if (!branchId) { showToast("error", "Seleccioná la sucursal destino."); return; }
-    setCreating(true);
+  async function create(destinationBranchId: string) {
+    setCreatingFor(destinationBranchId);
     try {
       const res = await apiFetch("/api/timber/trips", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          destinationBranchId: branchId,
-          supplierName: supplierName.trim() || undefined,
-          origin: origin.trim() || undefined,
-          woodTripTotalCost: 0,
-          lines: [{ thickness: 1, width: 12, length: 16, pieces: 1 }],
-        }),
+        body: JSON.stringify({ destinationBranchId, woodTripTotalCost: 0, lines: [] }),
       });
       const raw = await readJson(res);
       if (!res.ok) { showToast("error", raw?.error?.message ?? "No se pudo crear el viaje."); return; }
-      const created = unwrapApiData(raw);
-      showToast("success", `Viaje ${created.trip.tripCode} creado.`);
-      onCreated(created.trip.id);
+      onCreated(unwrapApiData(raw).trip.id);
     } catch {
       showToast("error", "Error de red al crear el viaje.");
     } finally {
-      setCreating(false);
+      setCreatingFor(null);
     }
   }
 
   return (
     <div className="mx-auto max-w-md space-y-4">
-      <h1 className="text-lg font-bold text-[var(--color-text)]">Nuevo viaje de madera</h1>
-      <Card className="space-y-3">
-        <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
-          Sucursal destino
-          <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm">
-            <option value="">Seleccionar…</option>
-            {branches.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
-          </select>
-        </label>
-        <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
-          Aserradero / proveedor
-          <input value={supplierName} onChange={(e) => setSupplierName(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm" />
-        </label>
-        <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
-          Origen
-          <input value={origin} onChange={(e) => setOrigin(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm" />
-        </label>
-        <div className="flex gap-2 pt-2">
-          <Button variant="ghost" className="flex-1" onClick={onCancel}>Cancelar</Button>
-          <Button variant="primary" className="flex-1" loading={creating} onClick={create}>Crear y cubicar →</Button>
-        </div>
+      <h1 className="text-lg font-bold text-[var(--color-text)]">¿A qué sucursal llega la madera?</h1>
+      <Card className="space-y-2">
+        {branches.map((b) => (
+          <Button key={b.id} variant="secondary" className="w-full" loading={creatingFor === b.id} disabled={creatingFor !== null} onClick={() => create(b.id)}>
+            {b.code} — {b.name}
+          </Button>
+        ))}
+        <Button variant="ghost" className="w-full" onClick={onCancel}>Cancelar</Button>
       </Card>
     </div>
   );
@@ -353,16 +338,25 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
   const [expenses, setExpenses] = useState<Expenses>({ freightAmount: 0, fuelAmount: 0, perDiemAmount: 0, permitsAmount: 0, otherExpensesAmount: 0 });
   const [invoicedFeet, setInvoicedFeet] = useState<number | "">("");
   const [pricePolicy, setPricePolicy] = useState("RECALC_FROM_PRICE_PER_INCH");
+  const [supplierName, setSupplierName] = useState("");
+  const [origin, setOrigin] = useState("");
+  // Aparte de `trip`: el autoguardado lo reemplaza y la respuesta de PUT no trae este dato.
+  const [nextTripCode, setNextTripCode] = useState<string | null>(null);
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const load = useCallback(async () => {
     try {
       const res = await fetch(`/api/timber/trips/${tripId}`);
       const raw = await readJson(res);
       if (!res.ok) { showToast("error", "No se pudo cargar el viaje."); return; }
-      const t: TripDetail = unwrapApiData(raw);
+      const t: TripDetail & { nextTripCode: string | null } = unwrapApiData(raw);
       setTrip(t);
+      setNextTripCode(t.nextTripCode);
+      setSupplierName(t.supplierName ?? "");
+      setOrigin(t.origin ?? "");
       setLines(t.lines.map((l) => ({ thickness: l.thicknessIn, width: l.widthIn, length: l.lengthIn, pieces: l.pieces })));
-      setCostMode(n(t.computedCostPerFoot) > 0 && n(t.woodTripTotalCost) === n(t.computedCostPerFoot) * n(t.totalFeet) ? "PER_FOOT" : "TOTAL");
+      // Un total que no sale de pies × precio se escribió a mano. Sin costo todavía: por pie, el default.
+      setCostMode(n(t.woodTripTotalCost) > 0 && Math.abs(n(t.woodTripTotalCost) - n(t.computedCostPerFoot) * n(t.totalFeet)) > 0.01 ? "TOTAL" : "PER_FOOT");
       setCostPerFoot(n(t.computedCostPerFoot) || "");
       setWoodTripTotalCost(n(t.woodTripTotalCost) || "");
       setExpenses({
@@ -384,6 +378,7 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
 
   async function save(showSuccessToast = false) {
     if (!isEditable) return;
+    clearTimeout(autosaveTimer.current);
     setSaving(true);
     try {
       const res = await apiFetch(`/api/timber/trips/${tripId}`, {
@@ -396,6 +391,8 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
           expenses,
           invoicedFeet: invoicedFeet === "" ? null : Number(invoicedFeet),
           pricePolicy,
+          supplierName: supplierName.trim() || null,
+          origin: origin.trim() || null,
         }),
       });
       const raw = await readJson(res);
@@ -412,17 +409,27 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
   // Autosave con debounce cuando cambian los campos del paso 1.
   useEffect(() => {
     if (!isEditable || loading) return;
-    const handle = setTimeout(() => { void save(false); }, 700);
-    return () => clearTimeout(handle);
+    autosaveTimer.current = setTimeout(() => { void save(false); }, 700);
+    return () => clearTimeout(autosaveTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines, costMode, costPerFoot, woodTripTotalCost, expenses, invoicedFeet, pricePolicy]);
+  }, [lines, costMode, costPerFoot, woodTripTotalCost, expenses, invoicedFeet, pricePolicy, supplierName, origin]);
+
+  // Los pasos 2 y 3 leen el último guardado: sin esto, entrar antes del autoguardado mostraba datos viejos.
+  async function goToStep(next: 1 | 2 | 3) {
+    await save(false);
+    setStep(next);
+  }
 
   function updateLinePieces(idx: number, pieces: number) {
     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, pieces } : l)));
   }
-  function addMeasure(measure: TripLineDraft) {
-    if (lines.some((l) => l.thickness === measure.thickness && l.width === measure.width && l.length === measure.length)) return;
-    setLines((prev) => [...prev, { ...measure, pieces: 1 }]);
+  // Otra vez la misma medida (otro atado de la hoja) suma piezas a su línea.
+  function addMeasure(measure: Omit<TripLineDraft, "pieces">, pieces: number) {
+    setLines((prev) => {
+      const idx = prev.findIndex((l) => l.thickness === measure.thickness && l.width === measure.width && l.length === measure.length);
+      if (idx >= 0) return prev.map((l, i) => (i === idx ? { ...l, pieces: l.pieces + pieces } : l));
+      return [...prev, { ...measure, pieces }];
+    });
   }
   function removeLine(idx: number) {
     setLines((prev) => prev.filter((_, i) => i !== idx));
@@ -468,7 +475,7 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
   // el botón. Vuelve a la lista al cancelar, no tiene sentido seguir
   // editando un viaje que ya no es DRAFT.
   async function cancelTrip() {
-    if (!window.confirm(`¿Cancelar el viaje ${trip?.tripCode}? No se puede deshacer.`)) return;
+    if (!window.confirm("¿Cancelar este borrador? No se puede deshacer.")) return;
     setCancelling(true);
     try {
       const res = await apiFetch(`/api/timber/trips/${tripId}`, {
@@ -496,8 +503,13 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
       <div className="flex flex-wrap items-center gap-3">
         <button onClick={onBack} className="rounded-lg p-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]">←</button>
         <div>
-          <h1 className="text-lg font-bold tracking-tight text-[var(--color-text)]">Viaje <span className="font-mono">{trip.tripCode}</span></h1>
-          <p className="text-sm text-[var(--color-text-muted)]">{trip.destinationBranch.code} — {trip.destinationBranch.name}</p>
+          <h1 className="text-lg font-bold tracking-tight text-[var(--color-text)]">
+            {trip.status === "DRAFT" ? "Viaje nuevo" : <>Viaje <span className="font-mono">{trip.tripCode}</span></>}
+          </h1>
+          <p className="text-sm text-[var(--color-text-muted)]">
+            {trip.destinationBranch.code} — {trip.destinationBranch.name}
+            {trip.status === "DRAFT" && nextTripCode && <> · al ingresarlo será <b className="font-mono">{nextTripCode}</b></>}
+          </p>
         </div>
         {trip.status === "DRAFT" && <Badge variant="warning">Borrador</Badge>}
         {trip.status === "TRANSFERRED" && <Badge variant="success">Confirmado</Badge>}
@@ -513,7 +525,7 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
         {(["1 · Viaje y cubicación", "2 · Costos por medida", "3 · Confirmar e inyectar"] as const).map((label, i) => (
           <button
             key={label}
-            onClick={() => setStep((i + 1) as 1 | 2 | 3)}
+            onClick={() => void goToStep((i + 1) as 1 | 2 | 3)}
             className={`flex-1 rounded-lg px-3 py-2 text-[12.5px] font-semibold ${step === i + 1 ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm" : "text-[var(--color-text-muted)]"}`}
           >
             {label}
@@ -530,6 +542,8 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
           invoicedFeet={invoicedFeet} setInvoicedFeet={setInvoicedFeet}
           trip={trip} updateLinePieces={updateLinePieces} addMeasure={addMeasure} removeLine={removeLine}
           fetchCubicationPreview={fetchCubicationPreview} applyCubicationImport={applyCubicationImport}
+          supplierName={supplierName} setSupplierName={setSupplierName} origin={origin} setOrigin={setOrigin}
+          onReview={() => void goToStep(3)}
         />
       )}
       {step === 2 && <StepCostosPorMedida trip={trip} />}
@@ -550,12 +564,15 @@ function StepViajeYCubicacion(props: {
   invoicedFeet: number | ""; setInvoicedFeet: (v: number | "") => void;
   trip: TripDetail;
   updateLinePieces: (idx: number, pieces: number) => void;
-  addMeasure: (m: TripLineDraft) => void;
+  addMeasure: (m: Omit<TripLineDraft, "pieces">, pieces: number) => void;
   removeLine: (idx: number) => void;
   fetchCubicationPreview: (fileBase64: string) => Promise<CubicationImportPreview>;
   applyCubicationImport: (recognized: CubicationImportRecognizedLine[]) => void;
+  supplierName: string; setSupplierName: (v: string) => void;
+  origin: string; setOrigin: (v: string) => void;
+  onReview: () => void;
 }) {
-  const { lines, isEditable, costMode, setCostMode, costPerFoot, setCostPerFoot, woodTripTotalCost, setWoodTripTotalCost, expenses, setExpenses, invoicedFeet, setInvoicedFeet, trip, updateLinePieces, addMeasure, removeLine, fetchCubicationPreview, applyCubicationImport } = props;
+  const { lines, isEditable, costMode, setCostMode, costPerFoot, setCostPerFoot, woodTripTotalCost, setWoodTripTotalCost, expenses, setExpenses, invoicedFeet, setInvoicedFeet, trip, updateLinePieces, addMeasure, removeLine, fetchCubicationPreview, applyCubicationImport, supplierName, setSupplierName, origin, setOrigin, onReview } = props;
   const reconciliation = trip.reconciliation;
   // prompt-timber-borrador-bugs.md, BUG 3 — antes esta pantalla mostraba
   // trip.totalPieces/totalFeet (el último guardado exitoso) mientras el
@@ -568,22 +585,37 @@ function StepViajeYCubicacion(props: {
   const totalFeet = lines.reduce((sum, l) => sum + (l.thickness * l.width * l.length * l.pieces) / 12, 0);
   // Precio por pie: en modo PER_FOOT es el input tal cual (ya vive en el
   // cliente); en modo TOTAL es costo÷pies (misma división que hace
-  // calculateTimberTrip, sin duplicar la función). Solo cae al último
-  // valor guardado (trip.computedCostPerFoot) en el caso borde que SÍ
-  // necesita el servidor: TOTAL sin costo cargado todavía, donde el
-  // motor usa el costo por defecto configurado — dato que el cliente no
-  // tiene cargado y no vale la pena pedir aparte para un preview.
+  // calculateTimberTrip, sin duplicar la función). TOTAL sin costo cargado
+  // = 0, igual que el servidor: ya no se inventa un costo por defecto.
   const computedCostPerFoot = costMode === "PER_FOOT"
     ? (Number(costPerFoot) || 0)
     : totalFeet > 0 && Number(woodTripTotalCost) > 0
       ? Number(woodTripTotalCost) / totalFeet
-      : n(trip.computedCostPerFoot);
+      : 0;
   const maderaTotal = computedCostPerFoot * totalFeet;
   const tripExpensesTotal = expenses.freightAmount + expenses.fuelAmount + expenses.perDiemAmount + expenses.permitsAmount + expenses.otherExpensesAmount;
   const landedCostPerFoot = totalFeet > 0 ? (maderaTotal + tripExpensesTotal) / totalFeet : 0;
   const [cubicationPreview, setCubicationPreview] = useState<CubicationImportPreview | null>(null);
   const [cubicationImportLoading, setCubicationImportLoading] = useState(false);
   const cubicationFileInputRef = useRef<HTMLInputElement>(null);
+  const [measureText, setMeasureText] = useState("");
+  const [piecesText, setPiecesText] = useState("");
+  const measureInputRef = useRef<HTMLInputElement>(null);
+  const piecesInputRef = useRef<HTMLInputElement>(null);
+
+  // Todo con teclado: medida, Enter, piezas, Enter, y vuelve a la medida.
+  function submitQuickEntry(e: React.FormEvent) {
+    e.preventDefault();
+    const measure = parseTimberMeasure(measureText);
+    if (!measure) { showToast("error", "Medida no reconocida. Ejemplo: 1x12x16"); measureInputRef.current?.focus(); return; }
+    if (!piecesText) { piecesInputRef.current?.focus(); return; }
+    const pieces = Math.trunc(Number(piecesText));
+    if (!(pieces > 0)) { showToast("error", "Las piezas deben ser un número mayor a 0."); piecesInputRef.current?.focus(); return; }
+    addMeasure(measure, pieces);
+    setMeasureText("");
+    setPiecesText("");
+    measureInputRef.current?.focus();
+  }
 
   async function onCubicationFileSelected(file: File | null) {
     if (!file) return;
@@ -610,6 +642,7 @@ function StepViajeYCubicacion(props: {
   }
 
   return (
+    <div className="space-y-4">
     <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
       <Card noPadding>
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3.5 py-2.5">
@@ -618,10 +651,6 @@ function StepViajeYCubicacion(props: {
           <span className="flex-1" />
           {isEditable && (
             <>
-              <select onChange={(e) => { const m = STANDARD_MEASURES[Number(e.target.value)]; if (m) addMeasure(m); e.target.value = ""; }} value="" className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[11.5px]">
-                <option value="">+ Agregar medida</option>
-                {STANDARD_MEASURES.map((m, i) => <option key={i} value={i}>{m.thickness}×{m.width}×{m.length}</option>)}
-              </select>
               {/* prompt-timber-cubicacion-carga.md, Parte B — el usuario
                   siempre recuenta a mano en su propia hoja de cubicación;
                   esto evita re-teclear las ~50 medidas de un viaje una por
@@ -639,11 +668,47 @@ function StepViajeYCubicacion(props: {
             </>
           )}
         </div>
+        {isEditable && (
+          <form onSubmit={submitQuickEntry} className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-3.5 py-2.5">
+            <div className="min-w-[10rem] flex-1">
+              <input
+                ref={measureInputRef}
+                value={measureText}
+                onChange={(e) => setMeasureText(e.target.value)}
+                list="timber-standard-measures"
+                aria-label="Medida"
+                placeholder="Medida: 1x12x16"
+                autoComplete="off"
+                className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 font-mono text-sm"
+              />
+              <datalist id="timber-standard-measures">
+                {STANDARD_MEASURES.map((m) => <option key={`${m.thickness}x${m.width}x${m.length}`} value={`${m.thickness}x${m.width}x${m.length}`} />)}
+              </datalist>
+            </div>
+            <div className="w-24">
+              <input
+                ref={piecesInputRef}
+                value={piecesText}
+                onChange={(e) => setPiecesText(e.target.value)}
+                type="number"
+                min={1}
+                step={1}
+                aria-label="Piezas"
+                placeholder="Piezas"
+                className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-right font-mono text-sm"
+              />
+            </div>
+            <Button type="submit" variant="secondary" size="sm" icon={<Plus className="h-3.5 w-3.5" />}>Agregar</Button>
+          </form>
+        )}
         <table className="hm-sheet-table">
           <thead>
             <tr><th>Medida</th><th className="r" style={{ width: 90 }}>Piezas</th><th className="r">Pies/pza</th><th className="r">Pies totales</th><th /></tr>
           </thead>
           <tbody>
+            {lines.length === 0 && (
+              <tr><td colSpan={5} className="text-center text-[var(--color-text-muted)]">Todavía no hay medidas. Escribí la primera arriba o cargá el Excel.</td></tr>
+            )}
             {lines.map((l, i) => {
               const feetPerPiece = (l.thickness * l.width * l.length) / 12;
               return (
@@ -651,12 +716,12 @@ function StepViajeYCubicacion(props: {
                   <td><b>{l.thickness}×{l.width}×{l.length}</b></td>
                   <td>
                     {isEditable ? (
-                      <input type="number" value={l.pieces} onChange={(e) => updateLinePieces(i, Number(e.target.value))} className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-right font-mono text-[12.5px]" />
+                      <input type="number" min={0} step={1} value={l.pieces} onChange={(e) => updateLinePieces(i, Math.trunc(Number(e.target.value)))} aria-label={`Piezas de ${l.thickness}×${l.width}×${l.length}`} className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-right font-mono text-[12.5px]" />
                     ) : <span className="hm-num">{l.pieces}</span>}
                   </td>
                   <td className="hm-num text-[var(--color-text-muted)]">{fmt(feetPerPiece, 3)}</td>
                   <td className="hm-num">{fmt(feetPerPiece * l.pieces)}</td>
-                  <td>{isEditable && <button onClick={() => removeLine(i)} className="text-[var(--color-text-soft)] hover:text-[var(--color-danger-700)]"><X className="h-3.5 w-3.5" /></button>}</td>
+                  <td>{isEditable && <button type="button" onClick={() => removeLine(i)} aria-label={`Quitar ${l.thickness}×${l.width}×${l.length}`} className="text-[var(--color-text-soft)] hover:text-[var(--color-danger-700)]"><X className="h-3.5 w-3.5" /></button>}</td>
                 </tr>
               );
             })}
@@ -733,6 +798,20 @@ function StepViajeYCubicacion(props: {
 
       <div className="flex flex-col gap-3.5">
         <Card>
+          <div className="hm-section-rule">Datos del viaje</div>
+          <div className="grid grid-cols-2 gap-2.5">
+            <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
+              Proveedor
+              <input disabled={!isEditable} value={supplierName} onChange={(e) => setSupplierName(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm" />
+            </label>
+            <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
+              Origen
+              <input disabled={!isEditable} value={origin} onChange={(e) => setOrigin(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm" />
+            </label>
+          </div>
+        </Card>
+
+        <Card>
           <div className="hm-section-rule">Costo de la madera</div>
           <div className="mb-2.5 flex gap-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-0.5">
             <button disabled={!isEditable} onClick={() => setCostMode("PER_FOOT")} className={`flex-1 rounded-md py-1.5 text-[12px] font-semibold ${costMode === "PER_FOOT" ? "bg-[var(--color-surface)] text-[var(--color-master-700)] shadow-sm" : "text-[var(--color-text-muted)]"}`}>Precio por pie</button>
@@ -780,6 +859,12 @@ function StepViajeYCubicacion(props: {
           )}
         </Card>
       </div>
+    </div>
+    {isEditable && (
+      <div className="flex justify-end">
+        <Button variant="primary" disabled={lines.length === 0} icon={<ArrowRight className="h-4 w-4" />} onClick={onReview}>Revisar e ingresar</Button>
+      </div>
+    )}
     </div>
   );
 }
@@ -878,7 +963,19 @@ function StepConfirmar({ trip, pricePolicy, setPricePolicy, onSaveFirst, onConfi
 
   useEffect(() => { void loadPreview(); }, [loadPreview]);
 
-  const hasNegativeMargin = trip.lines.some((l) => n(l.calculatedMarginPct) < 0);
+  // Cambiar la política cambia los precios del preview: guardarla y recalcular
+  // (antes la tabla seguía mostrando los precios de la política anterior).
+  const lastPolicy = useRef(pricePolicy);
+  useEffect(() => {
+    if (lastPolicy.current === pricePolicy) return;
+    lastPolicy.current = pricePolicy;
+    void (async () => { await onSaveFirst(); await loadPreview(); })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pricePolicy]);
+
+  // Mismo criterio que el servidor (hasNegativeMarginInPreview): con el precio que deja la política, no el de por pulgada.
+  const hasNegativeMargin = (preview?.lines ?? []).some((l) => l.sellingPrice.after < l.costPerPiece.after);
+  const priceDrops = (preview?.lines ?? []).filter((l) => l.sellingPrice.before !== null && l.sellingPrice.after < l.sellingPrice.before).length;
   const reconciliationNeedsAck = trip.reconciliation.status === "REVIEW";
 
   async function confirm() {
@@ -902,7 +999,7 @@ function StepConfirmar({ trip, pricePolicy, setPricePolicy, onSaveFirst, onConfi
         showToast("error", raw?.error?.message ?? "No se pudo confirmar el viaje.");
         return;
       }
-      showToast("success", "Viaje confirmado e inyectado al inventario.");
+      showToast("success", `Viaje ${unwrapApiData(raw).tripCode} ingresado al inventario.`);
       onConfirmed();
     } catch {
       showToast("error", "Error de red al confirmar.");
@@ -931,7 +1028,10 @@ function StepConfirmar({ trip, pricePolicy, setPricePolicy, onSaveFirst, onConfi
               <tbody>
                 {preview.lines.map((l) => (
                   <tr key={l.lineId}>
-                    <td><b>{l.dimensions.thickness}×{l.dimensions.width}×{l.dimensions.length}</b>{l.isNewProduct && <Badge variant="info" className="ml-1.5">nuevo</Badge>}</td>
+                    <td>
+                      <b>{l.productName}</b>{l.isNewProduct && <Badge variant="info" className="ml-1.5">nuevo</Badge>}
+                      <br /><span className="text-[11px] text-[var(--color-text-muted)]">{l.dimensions.thickness}×{l.dimensions.width}×{l.dimensions.length} pies{l.sku && ` · ${l.sku}`}</span>
+                    </td>
                     <td className="hm-num">+{l.piecesToAdd}</td>
                     <td className="hm-num"><span className="text-[var(--color-text-soft)]">{l.costPerPiece.before !== null ? fmt(l.costPerPiece.before) : "—"}</span> → <b>{fmt(l.costPerPiece.after)}</b></td>
                     <td className="hm-num"><span className="text-[var(--color-text-soft)]">{l.wac.before !== null ? fmt(l.wac.before) : "—"}</span> → <b>{fmt(l.wac.after)}</b></td>
@@ -959,6 +1059,13 @@ function StepConfirmar({ trip, pricePolicy, setPricePolicy, onSaveFirst, onConfi
             </div>
           </Card>
 
+          {priceDrops > 0 && pricePolicy !== "COST_ONLY" && (
+            <div className="rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3.5 text-[12.5px] text-[var(--color-warning-800)]">
+              <b className="block text-[13px]">⚠ {priceDrops} medida{priceDrops === 1 ? "" : "s"} bajaría{priceDrops === 1 ? "" : "n"} de precio con esta política</b>
+              Si los precios actuales de la sucursal están bien, elegí “Solo actualizar costos”, o revisá el precio por pulgada en Configuración.
+            </div>
+          )}
+
           {hasNegativeMargin && (
             <Card className="border-[var(--color-danger-200)]">
               <div className="hm-section-rule">Motivo — al menos una medida queda con margen negativo</div>
@@ -967,7 +1074,7 @@ function StepConfirmar({ trip, pricePolicy, setPricePolicy, onSaveFirst, onConfi
           )}
 
           <div className="flex justify-end">
-            <Button variant="primary" loading={confirming} disabled={hasNegativeMargin && !marginOverrideReason.trim()} onClick={confirm}>
+            <Button variant="primary" loading={confirming} disabled={preview.lines.length === 0 || (hasNegativeMargin && !marginOverrideReason.trim())} onClick={confirm}>
               ✓ Confirmar viaje e inyectar
             </Button>
           </div>
@@ -1139,6 +1246,14 @@ export function TimberConfigPanel() {
         </div>
       )}
 
+      <TimberBranchCostPanel
+        key={branchId || "global"}
+        branchId={branchId}
+        branchName={activeBranchName ?? ""}
+        savedCostPerFoot={config.isBranchOverride ? config.costPerFoot : null}
+        onApplied={(costPerFoot) => setConfig({ ...config, costPerFoot, isBranchOverride: true })}
+      />
+
       {showRecalcForBranch && (
         <TimberSalePriceRecalcPreviewPanel
           branchId={showRecalcForBranch}
@@ -1216,6 +1331,174 @@ export function TimberConfigPanel() {
         </div>
       </div>
     </div>
+  );
+}
+
+/* ─────────────────────────── Costo por pie por sucursal y existencias en pies ─────────────────────────── */
+
+type BranchCostRow = {
+  productId: string;
+  sku: string;
+  name: string;
+  thickness: number;
+  width: number;
+  lengthFeet: number;
+  boardFeet: number;
+  stock: number;
+  totalFeet: number;
+  currentCost: number | null;
+  newCost: number | null;
+  price: number | null;
+};
+type BranchCostPreview = {
+  rows: BranchCostRow[];
+  unreadable: string[];
+  totals: { pieces: number; feet: number; currentValue: number; newValue: number; saleValue: number; belowCost: number };
+  byBranch: Array<{ branchId: string; code: string; name: string; pieces: number; feet: number }>;
+};
+
+function TimberBranchCostPanel({ branchId, branchName, savedCostPerFoot, onApplied }: {
+  branchId: string; branchName: string; savedCostPerFoot: number | null; onApplied: (costPerFoot: number) => void;
+}) {
+  const [costText, setCostText] = useState(savedCostPerFoot ? String(savedCostPerFoot) : "");
+  const [preview, setPreview] = useState<BranchCostPreview | null>(null);
+  const [applying, setApplying] = useState(false);
+  const costPerFoot = Number(costText) > 0 ? Number(costText) : null;
+
+  const load = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (branchId) params.set("branchId", branchId);
+    if (costPerFoot) params.set("costPerFoot", String(costPerFoot));
+    try {
+      const res = await fetch(`/api/timber/branch-cost?${params.toString()}`);
+      const raw = await readJson(res);
+      if (!res.ok) { showToast("error", raw?.error?.message ?? "No se pudieron leer las existencias de madera."); return; }
+      setPreview(unwrapApiData(raw) as BranchCostPreview);
+    } catch {
+      showToast("error", "Error de red al leer las existencias de madera.");
+    }
+  }, [branchId, costPerFoot]);
+
+  useEffect(() => {
+    const handle = setTimeout(() => { void load(); }, 300);
+    return () => clearTimeout(handle);
+  }, [load]);
+
+  async function apply() {
+    if (!costPerFoot) return;
+    setApplying(true);
+    try {
+      const res = await apiFetch("/api/timber/branch-cost", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branchId, costPerFoot }),
+      });
+      const raw = await readJson(res);
+      if (!res.ok) { showToast("error", raw?.error?.message ?? "No se pudo fijar el costo."); return; }
+      showToast("success", `Costo de ${unwrapApiData(raw).applied} medidas fijado en ${branchName}.`);
+      onApplied(costPerFoot);
+      await load();
+    } catch {
+      showToast("error", "Error de red al fijar el costo.");
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  const totals = preview?.totals;
+  const costChanges = (preview?.rows ?? []).some((row) => row.newCost !== null && row.newCost !== row.currentCost);
+
+  return (
+    <Card noPadding>
+      <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3.5 py-2.5">
+        <b className="text-[12.5px]">Costo por pie y existencias de madera</b>
+        <p className="text-[11.5px] text-[var(--color-text-muted)]">Usa el mismo stock y costo del inventario general.</p>
+      </div>
+
+      <div className="flex flex-wrap gap-2 border-b border-[var(--color-border)] px-3.5 py-2.5">
+        {(preview?.byBranch ?? []).map((b) => (
+          <div key={b.branchId} className={`rounded-lg border px-3 py-1.5 text-[12px] ${b.branchId === branchId ? "border-[var(--color-master-500)]" : "border-[var(--color-border)]"}`}>
+            <b>{b.code}</b> <span className="font-mono">{fmt(b.feet)} pies</span> <span className="text-[var(--color-text-muted)]">· {fmt(b.pieces, 0)} piezas</span>
+          </div>
+        ))}
+      </div>
+
+      {!branchId ? (
+        <p className="px-3.5 py-6 text-center text-sm text-[var(--color-text-muted)]">Elegí una sucursal arriba para fijar su costo por pie y ver cada medida.</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-end gap-3 border-b border-[var(--color-border)] px-3.5 py-3">
+            <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
+              Costo total de la madera por pie en {branchName} (C$)
+              <input type="number" min={0} step="0.01" value={costText} onChange={(e) => setCostText(e.target.value)} placeholder="49" className="mt-1 block w-32 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-right font-mono text-sm" />
+            </label>
+            <Button variant="primary" loading={applying} disabled={!costPerFoot || !costChanges} onClick={apply}>
+              {costPerFoot ? `Fijar C$ ${fmt(costPerFoot)} por pie` : "Fijar costo"}
+            </Button>
+            {totals && (
+              <div className="ml-auto flex flex-wrap gap-x-5 gap-y-1 text-[12.5px]">
+                <span><span className="text-[var(--color-text-muted)]">Total </span><b className="font-mono">{fmt(totals.feet)} pies</b></span>
+                <span><span className="text-[var(--color-text-muted)]">Valor al costo </span><b className="font-mono">C$ {fmt(totals.newValue)}</b></span>
+                <span><span className="text-[var(--color-text-muted)]">Ganancia si se vende todo </span><b className="font-mono">C$ {fmt(totals.saleValue - totals.newValue)}</b></span>
+              </div>
+            )}
+          </div>
+
+          {totals && totals.belowCost > 0 && (
+            <div className="border-b border-[var(--color-warning-300)] bg-[var(--color-warning-50)] px-3.5 py-2 text-[12.5px] text-[var(--color-warning-800)]">
+              ⚠ {totals.belowCost} medida{totals.belowCost === 1 ? "" : "s"} con el precio por debajo de este costo. Revisá su precio en esta sucursal.
+            </div>
+          )}
+          {(preview?.unreadable.length ?? 0) > 0 && (
+            <div className="border-b border-[var(--color-warning-300)] bg-[var(--color-warning-50)] px-3.5 py-2 text-[12.5px] text-[var(--color-warning-800)]">
+              No reciben costo porque el nombre no trae la medida: {preview?.unreadable.join(", ")}.
+            </div>
+          )}
+
+          <div className="overflow-x-auto">
+            <table className="hm-sheet-table">
+              <thead>
+                <tr><th>Medida</th><th className="r">Existencia</th><th className="r">Pies/pza</th><th className="r">Pies total</th><th className="r">Costo</th><th className="r">Precio</th><th className="r">Ganancia/pza</th><th className="r">Margen</th></tr>
+              </thead>
+              <tbody>
+                {(preview?.rows ?? []).map((row) => {
+                  const cost = row.newCost ?? row.currentCost;
+                  const profit = cost !== null && row.price !== null ? row.price - cost : null;
+                  const negative = profit !== null && profit < 0;
+                  const changed = row.newCost !== null && row.newCost !== row.currentCost;
+                  return (
+                    <tr key={row.productId}>
+                      <td>
+                        <b>{row.name}</b>
+                        <br /><span className="text-[11px] text-[var(--color-text-muted)]">{row.thickness}×{row.width}×{row.lengthFeet} pies</span>
+                      </td>
+                      <td className="hm-num">{fmt(row.stock, 0)}</td>
+                      <td className="hm-num text-[var(--color-text-muted)]">{fmt(row.boardFeet, 3)}</td>
+                      <td className="hm-num">{fmt(row.totalFeet)}</td>
+                      <td className="hm-num">
+                        {changed && <span className="text-[var(--color-text-soft)]">{row.currentCost !== null ? fmt(row.currentCost) : "—"} → </span>}
+                        <b>{cost !== null ? fmt(cost) : "—"}</b>
+                      </td>
+                      <td className="hm-num">{row.price !== null ? fmt(row.price) : "—"}</td>
+                      <td className="hm-num" style={negative ? { color: "var(--color-danger-700)" } : undefined}>{profit !== null ? fmt(profit) : "—"}</td>
+                      <td className="hm-num" style={negative ? { color: "var(--color-danger-700)", fontWeight: 600 } : undefined}>{profit !== null && row.price ? `${fmt((profit / row.price) * 100, 1)}%` : "—"}</td>
+                    </tr>
+                  );
+                })}
+                {preview && preview.rows.length === 0 && (
+                  <tr><td colSpan={8} className="text-center text-[var(--color-text-muted)]">Esta sucursal no tiene productos de madera.</td></tr>
+                )}
+              </tbody>
+              {totals && preview && preview.rows.length > 0 && (
+                <tfoot>
+                  <tr><td>TOTALES</td><td className="hm-num">{fmt(totals.pieces, 0)}</td><td /><td className="hm-num">{fmt(totals.feet)}</td><td className="hm-num">{fmt(totals.newValue)}</td><td className="hm-num">{fmt(totals.saleValue)}</td><td /><td /></tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </>
+      )}
+    </Card>
   );
 }
 

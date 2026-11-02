@@ -521,6 +521,12 @@ const DESCRIPTORS: Record<string, Descriptor> = {
     label: "inyectó costos de madera al catálogo",
     headline: () => [seg("inyectó costos de un viaje de madera al catálogo")],
   },
+  TIMBER_BRANCH_COST_FIXED: {
+    sensitive: true,
+    role: "owner",
+    label: "fijó el costo por pie de la madera",
+    headline: (e) => [seg("fijó el costo de la madera a "), seg(money(e.metadataJson?.after), true), seg(` (C$ ${str(String(e.metadataJson?.costPerFoot ?? ""), "—")} por pie)`)],
+  },
 
   // ── Caja / Día operativo ──────────────────────────────────────────────────
   CASH_MOVEMENT_CREATED: {

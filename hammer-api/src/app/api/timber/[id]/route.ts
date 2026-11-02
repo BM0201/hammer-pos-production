@@ -59,6 +59,9 @@ export async function PUT(request: Request, { params }: Params) {
     if (err instanceof Error && err.message === "TIMBER_PRODUCT_NOT_FOUND") {
       return fail("ERROR", "Producto de madera no encontrado", 404);
     }
+    if (err instanceof Error && err.message === "TIMBER_PRODUCT_IN_USE") {
+      return fail("CONFLICT", "Esta medida ya tiene movimientos de inventario o viajes: no se pueden cambiar sus dimensiones.", 409);
+    }
     return toHttpErrorResponse(err);
   }
 }
@@ -80,6 +83,9 @@ export async function DELETE(request: Request, { params }: Params) {
   } catch (err: unknown) {
     if (err instanceof Error && err.message === "TIMBER_PRODUCT_NOT_FOUND") {
       return fail("ERROR", "Producto de madera no encontrado", 404);
+    }
+    if (err instanceof Error && err.message === "TIMBER_PRODUCT_IN_USE") {
+      return fail("CONFLICT", "Esta medida ya tiene movimientos de inventario o viajes: no se puede eliminar, seguiría vendiéndose en el POS.", 409);
     }
     return toHttpErrorResponse(err);
   }

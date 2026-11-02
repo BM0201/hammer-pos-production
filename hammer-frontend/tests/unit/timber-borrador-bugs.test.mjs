@@ -62,9 +62,9 @@ test("BUG 2: updateTimberTripSchema ya no exige mínimo 1 línea — un DRAFT a 
   assert.ok(updateStart !== -1, "debe existir updateTimberTripSchema");
   assert.ok(createStart !== -1, "debe existir createTimberTripSchema");
   const updateBlock = validators.slice(updateStart, updateStart + 800);
-  const createBlock = validators.slice(createStart, createStart + 800);
   assert.ok(!updateBlock.includes(".min(1)"), "updateTimberTripSchema no debe exigir mínimo de líneas");
-  assert.ok(createBlock.includes(".min(1"), "createTimberTripSchema SÍ debe seguir exigiendo al menos 1 línea al crear — el límite se movió, no se borró");
+  // "Al menos 1 línea" vive en confirmTimberTrip: el viaje nace vacío, sin la medida de relleno que había que borrar.
+  assert.ok(readApi("hammer-api/src/modules/timber/service.ts").includes('throw new Error("TRIP_HAS_NO_LINES")'), "confirmar sin líneas debe seguir rechazado");
 });
 
 test("BUG 2: el autoguardado del frontend sigue mandando `lines` siempre, incluso vacío — el fix es del lado del backend, no un parche para evitar mandar el campo", () => {

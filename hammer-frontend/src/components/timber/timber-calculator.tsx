@@ -10,7 +10,7 @@ import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 
 type PriceGroup = "TABLA" | "TABLILLA" | "CUADRO";
-type WoodSubtype = "TABLA" | "REGLA" | "CUARTON" | "CUADRO" | "LISTON" | "VIGA" | "OTRO";
+type WoodSubtype = "TABLA" | "TABLILLA" | "REGLA" | "CUARTON" | "CUADRO" | "LISTON" | "VIGA" | "OTRO";
 type Category = { id: string; code?: string; name: string; isActive: boolean };
 type Branch = { id: string; code: string; name: string };
 type TimberCatalogProduct = { catalogProductId?: string; product: { id: string; sku: string; name: string } };
@@ -103,6 +103,8 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
         const raw = await res.json();
         const data = unwrapApiData(raw);
         setCalc(data.perPiece);
+        // Con CUARTON fijo sugería "CUARTON 1X12X6" para la TABLA 1X12X6.
+        setWoodSubtype(data.catalogName.split(" ")[0] as WoodSubtype);
       } catch {
         // conserva el último cálculo válido
       }
@@ -174,9 +176,8 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
     }
   }, [pricing]);
 
-  const [duplicateWarning, setDuplicateWarning] = useState<{ sku: string; name: string } | null>(null);
-
-  const submitCreateProduct = useCallback(async () => {
+  // El servidor rechaza una medida que ya existe y el mensaje dice cuál es.
+  const createProductFromCalculation = useCallback(async () => {
     if (!maderaCategory) {
       showToast("error", "No existe una categoria activa de Madera.");
       return;
@@ -200,37 +201,12 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
         throw new Error(body?.error?.message ?? body?.message ?? "No se pudo crear el producto de madera.");
       }
       showToast("success", "Producto de madera creado en el catalogo.");
-      setDuplicateWarning(null);
     } catch (error) {
       showToast("error", error instanceof Error ? error.message : "Error al crear producto.");
     } finally {
       setCreatingProduct(false);
     }
   }, [maderaCategory, length, skuPreview, suggestedName, thickness, width]);
-
-  const createProductFromCalculation = useCallback(async () => {
-    if (!maderaCategory) {
-      showToast("error", "No existe una categoria activa de Madera.");
-      return;
-    }
-    try {
-      const duplicateResponse = await fetch(`/api/catalog/products?q=${encodeURIComponent(suggestedName)}&isActive=true`);
-      if (duplicateResponse.ok) {
-        const raw = await duplicateResponse.json();
-        const existing = unwrapApiData(raw) as Array<{ id: string; name: string; sku: string }>;
-        const duplicate = existing.find((product) => product.name.trim().toUpperCase() === suggestedName.trim().toUpperCase());
-        if (duplicate) {
-          // Sin confirm() nativo: se muestra una confirmación inline y se
-          // espera la decisión explícita del usuario antes de crear igual.
-          setDuplicateWarning({ sku: duplicate.sku, name: duplicate.name });
-          return;
-        }
-      }
-      await submitCreateProduct();
-    } catch (error) {
-      showToast("error", error instanceof Error ? error.message : "Error al verificar duplicados.");
-    }
-  }, [maderaCategory, suggestedName, submitCreateProduct]);
 
   const applyBranchPrice = useCallback(async () => {
     if (!selectedProductId || !selectedBranchId) {
@@ -350,6 +326,7 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
               className="w-full border border-[var(--color-border-strong)] rounded-lg px-3 py-2.5 text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-info-500)] focus:border-[var(--color-info-500)] transition-colors min-h-[44px] text-sm"
             >
               <option value="TABLA">Tabla</option>
+              <option value="TABLILLA">Tablilla</option>
               <option value="REGLA">Regla</option>
               <option value="CUARTON">Cuarton</option>
               <option value="CUADRO">Cuadro</option>
@@ -390,7 +367,7 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
               className="w-full border border-[var(--color-border-strong)] rounded-lg px-3 py-2.5 text-[var(--color-text)] placeholder-[var(--color-text-soft)] focus:ring-2 focus:ring-[var(--color-info-500)] focus:border-[var(--color-info-500)] transition-colors min-h-[44px] text-sm"
             >
               {LENGTHS.map((l) => (
-                <option key={l} value={l}>{FALLBACK_VARA_MAP[l]} pies</option>
+                <option key={l} value={l}>{l} pies ({FALLBACK_VARA_MAP[l]} varas)</option>
               ))}
             </select>
           </div>
@@ -463,14 +440,6 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
                 Crear producto
               </Button>
             </div>
-            {duplicateWarning && (
-              <div className="mt-3 flex flex-wrap items-center gap-2.5 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3 text-xs text-[var(--color-warning-700)]">
-                <span>Ya existe un producto similar: <b>{duplicateWarning.sku} — {duplicateWarning.name}</b>. ¿Crear otro de todos modos?</span>
-                <span className="flex-1" />
-                <Button variant="ghost" size="sm" onClick={() => setDuplicateWarning(null)}>Cancelar</Button>
-                <Button variant="primary" size="sm" loading={creatingProduct} onClick={submitCreateProduct}>Crear igual</Button>
-              </div>
-            )}
             <div className="mt-3 grid gap-2 border-t border-[var(--color-border)] pt-3 md:grid-cols-[1fr_1fr_auto]">
               <select
                 className="hm-input h-9 text-xs"

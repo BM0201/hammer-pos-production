@@ -376,11 +376,13 @@ export function calculateTimberTrip(
   // Phase 2: compute cost per foot of the WOOD ALONE (no expenses yet).
   // PER_FOOT mode → use the entered price per board foot directly.
   // TOTAL_COST mode → derive it from the trip total (woodTripTotalCost / totalFeet).
+  // Sin costo escrito queda en 0 — antes caía al costPerFoot de la config y un
+  // viaje sin costo real se confirmaba con un costo inventado.
   const computedCostPerFoot = roundTo(
     perFootMode
       ? (options.costPerFootInput as number)
-      : totalFeet > 0
-        ? (woodTripTotalCost > 0 ? woodTripTotalCost / totalFeet : pricing.costPerFoot)
+      : totalFeet > 0 && woodTripTotalCost > 0
+        ? woodTripTotalCost / totalFeet
         : 0,
     MONEY_DECIMALS,
   );

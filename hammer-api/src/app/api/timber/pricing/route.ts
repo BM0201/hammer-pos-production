@@ -47,8 +47,8 @@ export async function PUT(req: NextRequest) {
     }
 
     const branchId = typeof body?.branchId === "string" && body.branchId ? body.branchId : undefined;
-    const config = await updatePricingConfig(parsed.data, session.userId, branchId);
-    return ok(config);
+    await updatePricingConfig(parsed.data, session.userId, branchId);
+    return ok(await getPricingConfig(branchId));
   } catch (err: unknown) {
     console.error("[TIMBER_PRICING_PUT]", err);
     return toHttpErrorResponse(err);

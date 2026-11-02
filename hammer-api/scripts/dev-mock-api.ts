@@ -46,9 +46,65 @@ import {
   vacationPayout,
 } from "../src/modules/payroll/prestaciones-sociales";
 import { checkOutlier, computeCategoryStats } from "../src/modules/finance/expense-intelligence";
+import { calculateReconciliation, calculateTimber, calculateTimberTrip, DEFAULT_CLASSIFICATION_CONFIG, DEFAULT_PRICING } from "../src/modules/timber/calculator";
 
-const PORT = 4000;
+const PORT = Number(process.env.PORT) || 4000;
 const SESSION_COOKIE = "__Host-hammer_session=dev-preview; Path=/; Secure; HttpOnly; SameSite=Lax";
+
+/* ── Madera: viajes con la aritmética real y un catálogo corto, nombres en varas como el real ── */
+
+type MockTripBody = { lines?: Array<{ thickness: number; width: number; length: number; pieces: number }>; woodTripTotalCost?: number; costPerFoot?: number; expenses?: Record<string, number>; invoicedFeet?: number | null; pricePolicy?: string; supplierName?: string | null; origin?: string | null };
+type MockTrip = { id: string; tripCode: string; status: string; destinationBranchId: string; createdAt: string; body: MockTripBody };
+const mockTrips: MockTrip[] = [];
+const mockWood = [
+  { id: "wood-tabla", sku: "MAD-TAB-1126-0001", name: "TABLA 1X12X6", subtype: "TABLA", t: 1, w: 12, varas: 6, stock: 270, price: 1360, cost: 1150 },
+  { id: "wood-regla", sku: "MAD-REG-136-0001", name: "REGLA 1X3X6", subtype: "REGLA", t: 1, w: 3, varas: 6, stock: 3, price: 300, cost: 260 },
+  { id: "wood-cuarton", sku: "MAD-CUA-246-0001", name: "CUARTON 2X4X6", subtype: "CUARTON", t: 2, w: 4, varas: 6, stock: 116, price: 706, cost: 590 },
+  { id: "wood-tablilla", sku: "MAD-TAB-163-0001", name: "TABLILLA 1X6X3", subtype: "TABLILLA", t: 1, w: 6, varas: 3, stock: 7, price: 265, cost: 111 },
+];
+const MOCK_FEET_BY_VARAS: Record<number, number> = { 3: 8, 4: 11, 5: 14, 6: 16 };
+const mockFixedCostPerFoot = new Map<string, number>();
+
+function mockNextTripCode() {
+  return `VJM-2026-${String(mockTrips.filter((t) => t.status === "TRANSFERRED").length + 1).padStart(3, "0")}`;
+}
+
+function mockTripDetail(trip: MockTrip) {
+  const lines = trip.body.lines ?? [];
+  const calc = calculateTimberTrip(lines, trip.body.woodTripTotalCost ?? 0, DEFAULT_PRICING, { costPerFootInput: trip.body.costPerFoot, expenses: trip.body.expenses });
+  return {
+    ...trip,
+    ...trip.body,
+    destinationBranch: branches.find((b) => b.id === trip.destinationBranchId) ?? branches[0],
+    ...calc.totals,
+    totalCost: calc.totals.totalCostFeet,
+    marginPercent: calc.totals.globalMarginPct,
+    pricePolicy: trip.body.pricePolicy ?? "RECALC_FROM_PRICE_PER_INCH",
+    invoicedFeet: trip.body.invoicedFeet ?? null,
+    freightAmount: trip.body.expenses?.freightAmount ?? 0, fuelAmount: trip.body.expenses?.fuelAmount ?? 0, perDiemAmount: trip.body.expenses?.perDiemAmount ?? 0, permitsAmount: trip.body.expenses?.permitsAmount ?? 0, otherExpensesAmount: trip.body.expenses?.otherExpensesAmount ?? 0,
+    supplierName: trip.body.supplierName ?? null,
+    origin: trip.body.origin ?? null,
+    reconciliation: calculateReconciliation(calc.totals.totalFeet, trip.body.invoicedFeet ?? null, 0.01),
+    nextTripCode: trip.status === "DRAFT" ? mockNextTripCode() : null,
+    lines: calc.lines.map((line, i) => ({ id: `line-${i}`, thicknessIn: line.dimensions.thickness, widthIn: line.dimensions.width, lengthIn: line.dimensions.length, ...line })),
+  };
+}
+
+function mockTripPreview(trip: MockTrip) {
+  return {
+    tripId: trip.id, tripCode: trip.tripCode, pricePolicy: trip.body.pricePolicy, hash: "mock",
+    lines: mockTripDetail(trip).lines.map((line) => {
+      const wood = mockWood.find((w) => w.t === line.thicknessIn && w.w === line.widthIn && w.varas === line.varaLength);
+      const before = wood?.price ?? null;
+      const after = trip.body.pricePolicy === "COST_ONLY" ? (before ?? line.calculatedSalePricePerPiece) : line.calculatedSalePricePerPiece;
+      return {
+        lineId: line.id, dimensions: line.dimensions, isNewProduct: !wood, productName: wood?.name ?? `CUARTON ${line.thicknessIn}X${line.widthIn}X${line.varaLength}`, sku: wood?.sku ?? null, piecesToAdd: line.pieces,
+        costPerPiece: { before: wood?.cost ?? null, after: line.calculatedCostPerPiece }, wac: { before: wood?.cost ?? null, after: line.calculatedCostPerPiece },
+        branchCost: { before: null, after: line.calculatedCostPerPiece }, sellingPrice: { before, after },
+      };
+    }),
+  };
+}
 
 /* ── Estado en memoria ──────────────────────────────────────────────────────── */
 
@@ -1140,6 +1196,80 @@ const server = http.createServer(async (req, res) => {
     }
     const rates = currentRates();
     return ok(res, { rates, inss: resolveInssRates(rates.inssRegime, rates.activeEmployeeCount), irTableAnnual: IR_TABLE_ANNUAL });
+  }
+
+  // ── Madera ──
+  if (path === "/api/timber/trips" && method === "GET") {
+    const search = (url.searchParams.get("search") ?? "").toLowerCase();
+    const items = mockTrips.filter((t) => t.status !== "CANCELLED" && (t.tripCode.toLowerCase().includes(search) || (t.body.supplierName ?? "").toLowerCase().includes(search)));
+    return ok(res, { items: items.map((t) => mockTripDetail(t)).reverse(), total: items.length, nextTripCode: mockNextTripCode() });
+  }
+  if (path === "/api/timber/trips" && method === "POST") {
+    const body = await readJson(req);
+    const trip: MockTrip = { id: `trip-${randomUUID().slice(0, 8)}`, tripCode: `BOR-${randomUUID().slice(0, 8).toUpperCase()}`, status: "DRAFT", destinationBranchId: String(body.destinationBranchId), createdAt: new Date().toISOString(), body: { lines: [] } };
+    mockTrips.push(trip);
+    return ok(res, { trip: mockTripDetail(trip) });
+  }
+  const tripMatch = path.match(/^\/api\/timber\/trips\/([^/]+)(\/injection-preview)?$/);
+  const mockTrip = tripMatch ? mockTrips.find((t) => t.id === tripMatch[1]) : undefined;
+  if (tripMatch && !mockTrip) return send(res, 404, { ok: false, error: { code: "NOT_FOUND", message: "Viaje no encontrado." } });
+  if (mockTrip && tripMatch?.[2]) return ok(res, mockTripPreview(mockTrip));
+  if (mockTrip && method === "GET") return ok(res, mockTripDetail(mockTrip));
+  if (mockTrip && method === "PUT") {
+    mockTrip.body = await readJson(req);
+    return ok(res, { trip: mockTripDetail(mockTrip) });
+  }
+  if (mockTrip && method === "PATCH") {
+    const body = await readJson(req);
+    if (body.action === "cancel") mockTrip.status = "CANCELLED";
+    if (body.action === "confirm") {
+      mockTrip.tripCode = mockNextTripCode();
+      mockTrip.status = "TRANSFERRED";
+    }
+    return ok(res, mockTripDetail(mockTrip));
+  }
+  if (path === "/api/timber" && method === "GET") {
+    const tokens = (url.searchParams.get("search") ?? "").toUpperCase().split(/\s+/).filter(Boolean);
+    const type = url.searchParams.get("timberType");
+    const items = mockWood.filter((w) => (!type || w.subtype === type) && tokens.every((token) => w.name.includes(token) || w.sku.includes(token) || token === `${w.t}X${w.w}X${MOCK_FEET_BY_VARAS[w.varas]}`));
+    return ok(res, {
+      total: items.length, page: 1, limit: 15, totalPages: 1,
+      items: items.map((w) => {
+        const length = MOCK_FEET_BY_VARAS[w.varas];
+        return { id: `catalog:${w.id}`, catalogProductId: w.id, isCatalogOnly: true, timberType: w.subtype, woodSubtype: w.subtype, thickness: String(w.t), width: String(w.w), length: String(length), varaLength: w.varas, boardFeet: String((w.t * w.w * length) / 12), baseCost: String(w.cost), sellingPrice: String(w.price), stockOnHand: w.stock, effectiveCost: w.cost, effectivePrice: w.price, priceSource: "BRANCH", costSource: "WAC", product: { id: w.id, name: w.name, sku: w.sku, isActive: true, category: { name: "Madera" } } };
+      }),
+    });
+  }
+  if (path === "/api/timber/calculate" && method === "POST") {
+    const body = (await readJson(req)) as { thickness: number; width: number; length: number };
+    const perPiece = calculateTimber({ thickness: body.thickness, width: body.width, length: body.length });
+    const family = body.width >= 10 ? "TABLA" : body.thickness === 1 && body.width >= 6 ? "TABLILLA" : body.thickness === 1 ? "REGLA" : "CUARTON";
+    return ok(res, { perPiece, catalogName: `${family} ${body.thickness}X${body.width}X${perPiece.varaLength}`, quantity: 1, pricing: DEFAULT_PRICING });
+  }
+  if (path === "/api/timber/pricing" && method === "GET") {
+    const fixed = mockFixedCostPerFoot.get(url.searchParams.get("branchId") ?? "");
+    return ok(res, { ...DEFAULT_PRICING, costPerFoot: fixed ?? DEFAULT_PRICING.costPerFoot, classification: DEFAULT_CLASSIFICATION_CONFIG, targetMarginPercent: 0.4, targetMarginRoundingMultiple: 1, reconciliationTolerancePercent: 0.01, warnBelowTargetMargin: true, blockNegativeMargin: true, isBranchOverride: fixed !== undefined });
+  }
+  if (path === "/api/timber/branch-cost") {
+    const body = method === "POST" ? await readJson(req) : {};
+    const costPerFoot = method === "POST" ? Number(body.costPerFoot) : Number(url.searchParams.get("costPerFoot")) || null;
+    if (method === "POST") {
+      mockFixedCostPerFoot.set(String(body.branchId), costPerFoot as number);
+      for (const w of mockWood) w.cost = Math.round(((w.t * w.w * MOCK_FEET_BY_VARAS[w.varas]) / 12) * (costPerFoot as number) * 100) / 100;
+    }
+    const rows = (url.searchParams.get("branchId") || method === "POST" ? mockWood : []).map((w) => {
+      const lengthFeet = MOCK_FEET_BY_VARAS[w.varas];
+      const boardFeet = (w.t * w.w * lengthFeet) / 12;
+      return { productId: w.id, sku: w.sku, name: w.name, thickness: w.t, width: w.w, lengthFeet, boardFeet, stock: w.stock, totalFeet: w.stock * boardFeet, currentCost: w.cost, newCost: costPerFoot ? Math.round(boardFeet * costPerFoot * 100) / 100 : null, price: w.price };
+    });
+    const feet = rows.reduce((sum, r) => sum + r.totalFeet, 0);
+    const pieces = rows.reduce((sum, r) => sum + r.stock, 0);
+    const preview = {
+      rows, unreadable: [],
+      totals: { pieces, feet, currentValue: rows.reduce((sum, r) => sum + r.stock * r.currentCost, 0), newValue: rows.reduce((sum, r) => sum + r.stock * (r.newCost ?? r.currentCost), 0), saleValue: rows.reduce((sum, r) => sum + r.stock * r.price, 0), belowCost: rows.filter((r) => r.price < (r.newCost ?? r.currentCost)).length },
+      byBranch: branches.map((b, i) => ({ branchId: b.id, code: b.code, name: b.name, pieces: i === 0 ? mockWood.reduce((sum, w) => sum + w.stock, 0) : 0, feet: i === 0 ? mockWood.reduce((sum, w) => sum + (w.stock * w.t * w.w * MOCK_FEET_BY_VARAS[w.varas]) / 12, 0) : 0 })),
+    };
+    return ok(res, method === "POST" ? { applied: rows.length, preview } : preview);
   }
 
   // Todo lo demás: respuesta vacía inofensiva para que el shell no truene.

@@ -47,9 +47,6 @@ type TimberItem = {
   };
 };
 
-/** Conversion map: internal vara lengths → display pies */
-const VARA_TO_PIES: Record<number, number> = { 16: 6, 14: 5, 11: 4, 8: 3 };
-
 /**
  * "STANDARD" (precio general, sin fila por sucursal) no es "Sin precio" —
  * antes de que effective-pricing.ts respaldara al precio estándar, la única
@@ -79,12 +76,30 @@ export function TimberList() {
   const [page, setPage] = useState(1);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [branches, setBranches] = useState<Array<{ id: string; code: string; name: string }>>([]);
+  // null = todavía sin resolver. Precio y stock son por sucursal: el precio general del catálogo es un relleno (C$1).
+  const [branchId, setBranchId] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      fetch("/api/branches").then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/master/inventory/config/primary-branch").then((r) => (r.ok ? r.json() : null)),
+    ])
+      .then(([rawBranches, rawPrimary]) => {
+        const list = rawBranches ? unwrapApiData(rawBranches) ?? [] : [];
+        setBranches(list);
+        setBranchId((rawPrimary ? unwrapApiData(rawPrimary)?.branchId : null) ?? list[0]?.id ?? "");
+      })
+      .catch(() => setBranchId(""));
+  }, []);
 
   const fetchData = useCallback(async () => {
+    if (branchId === null) return;
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
+      if (branchId) params.set("branchId", branchId);
       if (search) params.set("search", search);
       if (typeFilter) params.set("timberType", typeFilter);
       params.set("page", String(page));
@@ -102,10 +117,11 @@ export function TimberList() {
     } finally {
       setLoading(false);
     }
-  }, [search, typeFilter, page]);
+  }, [search, typeFilter, page, branchId]);
 
   useEffect(() => {
-    fetchData();
+    const handle = setTimeout(() => { void fetchData(); }, 250);
+    return () => clearTimeout(handle);
   }, [fetchData]);
 
   const handleDelete = useCallback(async (id: string) => {
@@ -151,19 +167,19 @@ export function TimberList() {
 
       {/* Toolbar */}
       <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2 flex-1">
-          <div className="relative flex-1 max-w-xs">
+        <div className="flex flex-wrap items-center gap-2 flex-1">
+          <div className="relative flex-1 min-w-[14rem] max-w-xs">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--color-text-soft)]" />
             <Input
               type="text"
               className="pl-9"
-              placeholder="Buscar por nombre o SKU..."
+              placeholder="Buscar: tabla, 2x4, 1x12x16…"
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             />
           </div>
           <select
-            className="hm-input w-auto min-w-[140px]"
+            className="hm-input min-w-[140px]" style={{ width: "auto" }}
             value={typeFilter}
             onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
           >
@@ -177,6 +193,16 @@ export function TimberList() {
             <option value="VIGA">Viga</option>
             <option value="OTRO">Pieza especial</option>
           </select>
+          {branches.length > 0 && (
+            <select
+              className="hm-input min-w-[140px]" style={{ width: "auto" }}
+              aria-label="Sucursal"
+              value={branchId ?? ""}
+              onChange={(e) => { setBranchId(e.target.value); setPage(1); }}
+            >
+              {branches.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
+            </select>
+          )}
         </div>
 
         <Link href="/app/master/timber/new">
@@ -211,7 +237,8 @@ export function TimberList() {
                   <TH>Tipo</TH>
                   <TH className="text-center">Dimensiones</TH>
                   <TH className="text-right">Stock</TH>
-                  <TH className="text-right">Pies</TH>
+                  <TH className="text-right">Pies/pza</TH>
+                  <TH className="text-right">Pies total</TH>
                   <TH className="text-right">Costo Base</TH>
                   <TH className="text-right">Precio Venta</TH>
                   <TH className="text-right">Margen</TH>
@@ -236,9 +263,9 @@ export function TimberList() {
                           <p className="font-medium text-[var(--color-text)] truncate">{item.product.name}</p>
                           <p className="text-[0.65rem] text-[var(--color-text-soft)]">
                             {item.product.sku}
-                            {item.isCatalogOnly ? <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">Catalogo real</span> : null}
+                            {item.isCatalogOnly ? <span className="ml-2 rounded bg-[var(--color-info-50)] px-1.5 py-0.5 text-[var(--color-info-700)]">Catalogo real</span> : null}
                           </p>
-                          {item.warnings?.[0] ? <p className="mt-1 text-[0.65rem] text-amber-700">{item.warnings[0]}</p> : null}
+                          {item.warnings?.[0] ? <p className="mt-1 text-[0.65rem] text-[var(--color-warning-700)]">{item.warnings[0]}</p> : null}
                         </div>
                       </div>
                     </TD>
@@ -249,11 +276,13 @@ export function TimberList() {
                     </TD>
                     <TD className="text-center">
                       <span className="font-mono text-xs">
-                        {item.thickness.toString()}&quot;×{item.width.toString()}&quot;×{item.varaLength ?? VARA_TO_PIES[parseInt(item.length.toString())] ?? item.length.toString()} pies
+                        {item.thickness.toString()}&quot;×{item.width.toString()}&quot;×{item.length.toString()} pies
+                        {item.varaLength ? ` · ${item.varaLength} varas` : ""}
                       </span>
                     </TD>
                     <TD className="text-right font-mono">{item.stockOnHand !== undefined ? item.stockOnHand.toFixed(2) : "N/D"}</TD>
                     <TD className="text-right font-mono">{parseFloat(item.boardFeet.toString()).toFixed(2)}</TD>
+                    <TD className="text-right font-mono">{item.stockOnHand !== undefined ? (item.stockOnHand * parseFloat(item.boardFeet.toString())).toFixed(2) : "N/D"}</TD>
                     <TD className="text-right font-mono">
                       {baseCost > 0 ? `C$${baseCost.toFixed(2)}` : "N/D"}
                       {item.costSource ? <div className="text-[0.6rem] text-[var(--color-text-soft)]">{item.costSource}</div> : null}

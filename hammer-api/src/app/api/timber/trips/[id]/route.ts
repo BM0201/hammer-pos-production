@@ -67,7 +67,7 @@ export async function PUT(
         return fail("NOT_FOUND", err.message, 404);
       }
       if (err.message === "TRIP_NOT_EDITABLE") {
-        return fail("CONFLICT", err.message, 409);
+        return fail("CONFLICT", "El viaje ya no es un borrador (se confirmó o se canceló): no se guardaron los cambios.", 409);
       }
     }
     return toHttpErrorResponse(err);
@@ -111,8 +111,11 @@ export async function PATCH(
       if (err.message.includes("NOT_FOUND")) {
         return fail("NOT_FOUND", err.message, 404);
       }
-      if (err.message.includes("CANNOT") || err.message === "TRIP_HAS_NO_LINES" || err.message === "TRIP_ALREADY_CONFIRMED") {
+      if (err.message.includes("CANNOT") || err.message === "TRIP_ALREADY_CONFIRMED") {
         return fail("CONFLICT", err.message, 409);
+      }
+      if (err.message === "TRIP_HAS_NO_LINES") {
+        return fail("VALIDATION_ERROR", "Agregá al menos una medida antes de ingresar el viaje.", 400);
       }
       if (err.message === "TRIP_REQUIRES_COST") {
         return fail("VALIDATION_ERROR", "El viaje necesita un costo (total o por pie) antes de inyectarse al inventario.", 400);

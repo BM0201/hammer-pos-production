@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
-import { applyTimberCostsTx, applyTimberSalePriceRecalcRowsTx, recalcTimberSalePrice, resolveSellingPriceForPolicy, type TimberSalePriceRecalcRow } from "@/modules/timber/service";
+import { applyTimberCostsTx, applyTimberSalePriceRecalcRowsTx, catalogSliceForCombinedPage, hasNegativeMarginInPreview, recalcTimberSalePrice, resolveSellingPriceForPolicy, type TimberSalePriceRecalcRow } from "@/modules/timber/service";
 
 /**
  * Madera v2 Fase 2 — el bug a matar: resolveTimberProductForLineTx retornaba
@@ -345,4 +345,55 @@ test("applyTimberSalePriceRecalcRowsTx: solo escribe branchPrice de las filas da
   const logged = auditLogs[0].metadataJson as { before: number; after: number };
   assert.equal(logged.before, 640.8);
   assert.equal(logged.after, 700);
+});
+
+const BASE_INPUT = {
+  actorUserId: "user-1",
+  branchId: BRANCH_ID,
+  productId: PRODUCT_ID,
+  timberProductId: TIMBER_PRODUCT_ID,
+  priceGroup: "TABLA" as const,
+  boardFeet: 16,
+  pricePerInch: 8.9,
+  varaLength: 6,
+  costPerPiece: 825.54,
+  recalculatedSellingPrice: 1447.2,
+  targetMarginPercent: 0.4,
+  targetMarginRoundingMultiple: 1,
+};
+
+test("COST_ONLY: 'los precios de venta quedan como están' — el precio propio de la sucursal NO se pisa con el de otro viaje", async () => {
+  // MSY tiene su precio puesto a mano (700); el último viaje de OTRA sucursal dejó la madera en 640.80.
+  const { tx, getProduct, getTimberProduct, getBranchSetting } = createTimberFakeTx({
+    baseCost: 320, sellingPrice: 640.8, standardSalePrice: 640.8, branchCost: 320, branchPrice: 700,
+  });
+  const result = await applyTimberCostsTx(tx, { ...BASE_INPUT, pricePolicy: "COST_ONLY" });
+  assert.equal(getBranchSetting()?.branchPrice?.toNumber(), 700, "antes quedaba en 640.80");
+  assert.equal(getBranchSetting()?.branchCost?.toNumber(), 825.54, "el costo SÍ se actualiza");
+  assert.equal(getProduct().standardSalePrice.toNumber(), 640.8);
+  assert.equal(getTimberProduct().sellingPrice.toNumber(), 640.8);
+  assert.equal(result.after.branchPrice, 700);
+});
+
+test("precio de una sucursal con config propia (updateGlobalPrice=false): se escribe en esa sucursal, NO en el precio general que heredan las demás", async () => {
+  const { tx, getProduct, getTimberProduct, getBranchSetting } = createTimberFakeTx({
+    baseCost: 320, sellingPrice: 640.8, standardSalePrice: 640.8, branchCost: 320, branchPrice: 640.8,
+  });
+  await applyTimberCostsTx(tx, { ...BASE_INPUT, pricePolicy: "RECALC_FROM_PRICE_PER_INCH", updateGlobalPrice: false });
+  assert.equal(getBranchSetting()?.branchPrice?.toNumber(), 1447.2);
+  assert.equal(getProduct().standardSalePrice.toNumber(), 640.8, "el general de las demás sucursales queda igual");
+  assert.equal(getTimberProduct().sellingPrice.toNumber(), 640.8);
+});
+
+test("catálogo de madera paginado: el catálogo sigue a TODAS las medidas, sin repetirse en cada página", () => {
+  // 25 medidas de madera + catálogo, 20 por página.
+  assert.deepEqual(catalogSliceForCombinedPage({ skip: 0, limit: 20, timberTotal: 25, timberOnPage: 20 }), { offset: 0, count: 0 });
+  assert.deepEqual(catalogSliceForCombinedPage({ skip: 20, limit: 20, timberTotal: 25, timberOnPage: 5 }), { offset: 0, count: 15 });
+  assert.deepEqual(catalogSliceForCombinedPage({ skip: 40, limit: 20, timberTotal: 25, timberOnPage: 0 }), { offset: 15, count: 20 });
+});
+
+test("margen negativo según la política: con el precio que deja el viaje, no con el calculado por pulgada", () => {
+  // Por pulgada quedaba bajo costo (640 < 825), pero "margen objetivo" lo sube a 1376: no hay margen negativo.
+  assert.equal(hasNegativeMarginInPreview([{ costPerPiece: { before: 320, after: 825.54 }, sellingPrice: { before: 640.8, after: 1376 } }]), false);
+  assert.equal(hasNegativeMarginInPreview([{ costPerPiece: { before: 320, after: 825.54 }, sellingPrice: { before: 640.8, after: 640.8 } }]), true);
 });

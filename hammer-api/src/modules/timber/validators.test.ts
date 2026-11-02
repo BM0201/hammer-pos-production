@@ -7,10 +7,8 @@ import { createTimberTripSchema, updateTimberTripSchema } from "@/modules/timber
  * (timber-workspace.tsx save()) SIEMPRE manda `lines`, incluso vacío,
  * mientras el usuario edita (por ejemplo, quitó todas las líneas antes
  * de volver a agregar) — un 400 en ese momento es el bug real. La
- * exigencia de "al menos 1 línea" sigue viva donde corresponde: al
- * CREAR un viaje (createTimberTripSchema, sin cambios) y al CONFIRMARLO
- * de verdad (confirmTimberTrip → TRIP_HAS_NO_LINES, sin tocar en este
- * ciclo).
+ * exigencia de "al menos 1 línea" vive al CONFIRMARLO de verdad
+ * (confirmTimberTrip → TRIP_HAS_NO_LINES): crear también acepta vacío.
  */
 
 const VALID_LINE = { thickness: 1, width: 12, length: 16, pieces: 10 };
@@ -30,12 +28,9 @@ test("updateTimberTripSchema sigue aceptando el campo lines omitido por completo
   assert.equal(result.success, true);
 });
 
-test("createTimberTripSchema SIGUE exigiendo al menos 1 línea al crear un viaje nuevo — este límite no se tocó", () => {
-  const result = createTimberTripSchema.safeParse({
-    destinationBranchId: "branch-1",
-    lines: [],
-  });
-  assert.equal(result.success, false, "crear un viaje sin ninguna línea debe seguir rechazado");
+test("createTimberTripSchema acepta un viaje sin líneas — antes la pantalla mandaba una medida de relleno que había que borrar", () => {
+  const result = createTimberTripSchema.safeParse({ destinationBranchId: "branch-1", lines: [] });
+  assert.equal(result.success, true);
 });
 
 test("createTimberTripSchema acepta crear con al menos 1 línea", () => {

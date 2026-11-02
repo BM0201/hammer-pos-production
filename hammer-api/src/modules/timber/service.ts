@@ -24,10 +24,12 @@ import type {
   UpdateTimberPricingConfigInput,
 } from "./validators";
 import { Decimal } from "@prisma/client/runtime/library";
-import { createHash } from "crypto";
-import { parseWoodDimensions } from "@/modules/catalog/sku-generator";
-import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
-import { resolveGlobalCostWriteTarget, branchProductScopeFilter } from "@/modules/catalog/service";
+import { Prisma as PrismaRuntime } from "@prisma/client";
+import { createHash, randomUUID } from "crypto";
+import { generateSkuForProduct, parseWoodDimensions } from "@/modules/catalog/sku-generator";
+import { buildProductSearchWhere, tokenize, type SearchableField } from "@/modules/catalog/product-search";
+import { getEffectiveProductPricing, getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
+import { resolveGlobalCostWriteTarget, branchProductScopeFilter, excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { getProductStockConversion } from "@/modules/inventory/unit-conversion";
 import type { Prisma, TimberTripLine } from "@prisma/client";
@@ -46,71 +48,133 @@ async function resolveTimberCategoryTx(tx: Prisma.TransactionClient): Promise<st
   return created.id;
 }
 
+const WOOD_CATEGORY_WHERE: Prisma.CategoryWhereInput = {
+  OR: [
+    { code: { startsWith: TIMBER_CATEGORY_CODE, mode: "insensitive" } },
+    { name: { contains: TIMBER_CATEGORY_NAME, mode: "insensitive" } },
+  ],
+};
+
+/**
+ * Nombre de una medida con la convención del catálogo real: el tercer número
+ * son VARAS, no pies ("TABLA 1X12X6" = 1"×12"×16 pies, ver cubicationTable).
+ * Familia según el catálogo: TABLA ≥10" · TABLILLA 1×6/1×8 · REGLA 1×2..4 · el resto CUARTON.
+ */
+export function timberCatalogName(thickness: number, width: number, varaLength: number): string {
+  const family = width >= 10 ? "TABLA" : thickness === 1 && width >= 6 ? "TABLILLA" : thickness === 1 ? "REGLA" : "CUARTON";
+  return `${family} ${thickness}X${width}X${varaLength}`;
+}
+
+function timberDescription(priceGroup: string, thickness: number, width: number, lengthFeet: number, varaLength: number, boardFeet: number): string {
+  return `Madera ${priceGroup} — ${thickness}"×${width}"×${lengthFeet} pies (${varaLength} varas) — ${boardFeet} pies tablares`;
+}
+
+/** De los productos que contienen la medida en el nombre: el de medida exacta, activo y con el nombre esperado primero. */
+export function pickCatalogWoodProduct<T extends { name: string; isActive: boolean }>(
+  candidates: T[],
+  line: { thicknessIn: number; widthIn: number; varaLength: number },
+): T | null {
+  const expected = timberCatalogName(line.thicknessIn, line.widthIn, line.varaLength);
+  const rank = (candidate: T) => (candidate.isActive ? 0 : 2) + (candidate.name.trim().toUpperCase() === expected ? 0 : 1);
+  return candidates
+    .filter((candidate) => {
+      const parsed = parseWoodDimensions(candidate.name);
+      return parsed.thicknessInches === line.thicknessIn && parsed.widthInches === line.widthIn && parsed.lengthFeet === line.varaLength;
+    })
+    .sort((a, b) => rank(a) - rank(b))[0] ?? null;
+}
+
+type WoodIdentity = {
+  product: { id: string; sku: string; name: string; isActive: boolean; isTimber: boolean } | null;
+  timberProductId: string | null;
+};
+const WOOD_PRODUCT_SELECT = { id: true, sku: true, name: true, isActive: true, isTimber: true } as const;
+
+/**
+ * A qué producto va una medida — sin escribir: la vista previa y la confirmación
+ * usan esta misma búsqueda. Orden: línea ya enlazada → medida de madera registrada
+ * → producto del catálogo con esa medida en el nombre (los de categoría Madera
+ * vienen de la importación con isTimber=false y SON los que vende el POS).
+ */
+export async function findWoodIdentity(
+  client: Pick<Prisma.TransactionClient, "timberProduct" | "product">,
+  line: Pick<TimberTripLine, "timberProductId" | "thicknessIn" | "widthIn" | "lengthIn" | "varaLength">,
+): Promise<WoodIdentity> {
+  const include = { product: { select: WOOD_PRODUCT_SELECT } };
+  const registered =
+    (line.timberProductId ? await client.timberProduct.findUnique({ where: { id: line.timberProductId }, include }) : null) ??
+    (await client.timberProduct.findFirst({ where: { thickness: line.thicknessIn, width: line.widthIn, length: line.lengthIn }, include }));
+  if (registered) return { product: registered.product, timberProductId: registered.id };
+
+  const candidates = await client.product.findMany({
+    where: { name: { contains: `${line.thicknessIn}X${line.widthIn}X${line.varaLength}`, mode: "insensitive" }, category: WOOD_CATEGORY_WHERE },
+    select: { ...WOOD_PRODUCT_SELECT, timberProduct: { select: { id: true } } },
+  });
+  const match = pickCatalogWoodProduct(candidates, line);
+  return { product: match, timberProductId: match?.timberProduct?.id ?? null };
+}
+
 /**
  * Find-or-create the Product + TimberProduct IDENTITY that represents a given trip line
- * dimension. The SKU pattern matches createTimberProduct (`MAD-<GRP>-<T>x<W>x<L>`) so the same
- * physical measure always maps to the same inventory product across trips.
+ * dimension, so the same physical measure always maps to the same inventory product.
  *
  * Madera v2 Fase 2 — esta función SOLO resuelve identidad (encuentra o crea la fila). Los
  * costos/precios los escribe SIEMPRE applyTimberCostsTx, exista o no el producto — antes,
  * cuando el producto ya existía, esta función retornaba temprano sin actualizar nada, y del
  * segundo viaje en adelante TimberProduct.baseCost/sellingPrice, Product.standardSalePrice y el
  * BranchProductSetting de la sucursal destino quedaban congelados en los valores del primer viaje.
+ *
+ * Antes buscaba solo el SKU `MAD-TAB-1x12x16`, que ningún producto del catálogo tiene: el primer
+ * viaje habría creado un duplicado de cada medida, con el stock en un producto que nadie vende.
  */
-async function resolveTimberProductIdentityTx(
+export async function resolveTimberProductIdentityTx(
   tx: Prisma.TransactionClient,
   line: TimberTripLine,
 ): Promise<{ productId: string; timberProductId: string; isNewProduct: boolean }> {
+  const found = await findWoodIdentity(tx, line);
+  // Un producto inactivo no se ve en el POS: el stock entrante quedaría invisible.
+  if (found.product && (!found.product.isActive || !found.product.isTimber)) {
+    await tx.product.update({ where: { id: found.product.id }, data: { isActive: true, isTimber: true } });
+  }
+  if (found.product && found.timberProductId) {
+    return { productId: found.product.id, timberProductId: found.timberProductId, isNewProduct: false };
+  }
+
   // El priceGroup/varaLength de la línea ya quedaron fijados al cubicar el viaje
   // (con la config vigente en ese momento) — se reutilizan tal cual en vez de
   // re-clasificar con la config ACTUAL, que podría haber cambiado desde entonces.
   const priceGroup = line.priceGroup as TimberPriceGroup;
-  const sku = `MAD-${priceGroup.substring(0, 3)}-${line.thicknessIn}x${line.widthIn}x${line.lengthIn}`;
 
-  // Already linked on the line → reuse it.
-  if (line.timberProductId) {
-    const existing = await tx.timberProduct.findUnique({ where: { id: line.timberProductId } });
-    if (existing) return { productId: existing.productId, timberProductId: existing.id, isNewProduct: false };
-  }
-
-  // Existing product with the deterministic SKU → reuse it.
-  const existingProduct = await tx.product.findUnique({
-    where: { sku },
-    include: { timberProduct: true },
-  });
-  if (existingProduct?.timberProduct) {
-    return { productId: existingProduct.id, timberProductId: existingProduct.timberProduct.id, isNewProduct: false };
-  }
-
-  // Otherwise create both Product and TimberProduct. Costos/precios iniciales son
-  // provisionales (tomados de la línea tal cual quedó cubicada) — applyTimberCostsTx
-  // los sobreescribe con los valores reales inmediatamente después, siempre, en el
-  // mismo flujo que los productos existentes.
+  // Costos/precios iniciales provisionales (tomados de la línea tal cual quedó cubicada) —
+  // applyTimberCostsTx los sobreescribe con los valores reales inmediatamente después.
   const boardFeetPerPiece = line.pieces > 0 ? line.calculatedFeet.div(line.pieces).toNumber() : 0;
   const costPerPiece = line.calculatedCostPerPiece.toNumber();
   const sellingPrice = line.calculatedSalePricePerPiece.toNumber();
   const denom = line.thicknessIn * line.widthIn * line.varaLength;
   const pricePerInch = denom > 0 ? sellingPrice / denom : 0;
 
-  const categoryId = await resolveTimberCategoryTx(tx);
-  const product = existingProduct
-    ?? (await tx.product.create({
+  let productId = found.product?.id;
+  if (!productId) {
+    const name = timberCatalogName(line.thicknessIn, line.widthIn, line.varaLength);
+    const product = await tx.product.create({
       data: {
-        sku,
-        name: `Madera ${priceGroup} ${line.thicknessIn}"×${line.widthIn}"×${line.varaLength} pies`,
-        description: `Madera ${priceGroup} — ${line.thicknessIn}"×${line.widthIn}"×${line.varaLength} pies — ${boardFeetPerPiece} pies tablares`,
-        categoryId,
-        unit: "pieza",
+        sku: await generateSkuForProduct(tx, { productName: name, categoryName: TIMBER_CATEGORY_NAME }),
+        name,
+        description: timberDescription(priceGroup, line.thicknessIn, line.widthIn, line.lengthIn, line.varaLength, boardFeetPerPiece),
+        categoryId: await resolveTimberCategoryTx(tx),
+        unit: "UNIDAD",
         isActive: true,
         allowsFraction: false,
         isTimber: true,
         standardSalePrice: new Decimal(sellingPrice),
       },
-    }));
+    });
+    productId = product.id;
+  }
 
   const timberProduct = await tx.timberProduct.create({
     data: {
-      productId: product.id,
+      productId,
       timberType: priceGroup,
       thickness: new Decimal(line.thicknessIn),
       width: new Decimal(line.widthIn),
@@ -123,7 +187,7 @@ async function resolveTimberProductIdentityTx(
     },
   });
 
-  return { productId: product.id, timberProductId: timberProduct.id, isNewProduct: true };
+  return { productId, timberProductId: timberProduct.id, isNewProduct: !found.product };
 }
 
 export type TimberCostInjectionSnapshot = {
@@ -159,6 +223,31 @@ export function resolveSellingPriceForPolicy(input: {
   }
 }
 
+/** Precio vigente EN la sucursal destino: el propio, si no el general, si no el último de madera. */
+export function currentBranchSellingPrice(current: Pick<TimberCostInjectionSnapshot, "branchPrice" | "standardSalePrice" | "sellingPrice">): number | null {
+  return current.branchPrice ?? current.standardSalePrice ?? current.sellingPrice;
+}
+
+/** El precio que deja un viaje — misma regla para la vista previa y para applyTimberCostsTx. COST_ONLY = el vigente en ESTA sucursal. */
+export function resolveTripSellingPrice(input: {
+  pricePolicy: string;
+  recalculatedSellingPrice: number;
+  current: Pick<TimberCostInjectionSnapshot, "branchPrice" | "standardSalePrice" | "sellingPrice">;
+  costPerPiece: number;
+  targetMarginPercent: number;
+  targetMarginRoundingMultiple: number;
+}): number {
+  if (input.pricePolicy === "COST_ONLY") return currentBranchSellingPrice(input.current) ?? input.recalculatedSellingPrice;
+  return resolveSellingPriceForPolicy({
+    pricePolicy: input.pricePolicy,
+    recalculatedSellingPrice: input.recalculatedSellingPrice,
+    existingSellingPrice: input.current.sellingPrice,
+    costPerPiece: input.costPerPiece,
+    targetMarginPercent: input.targetMarginPercent,
+    targetMarginRoundingMultiple: input.targetMarginRoundingMultiple,
+  });
+}
+
 /**
  * Escribe SIEMPRE los 4 costos/precios de una medida de madera — exista o no el producto.
  * Este es el corazón del fix de Fase 2: antes del segundo viaje en adelante estos valores
@@ -181,6 +270,15 @@ export async function applyTimberCostsTx(
     pricePolicy: string;
     targetMarginPercent: number;
     targetMarginRoundingMultiple: number;
+    /**
+     * true = el precio resultante vale para TODAS las sucursales que heredan
+     * el general (RECALC con la config global, sin override de la sucursal
+     * destino). false = es un precio de ESTA sucursal (override propio, o
+     * margen objetivo sobre el costo de este viaje): no se escribe en
+     * Product.standardSalePrice ni en TimberProduct.sellingPrice, que son
+     * el respaldo de las demás sucursales. Default true (comportamiento previo).
+     */
+    updateGlobalPrice?: boolean;
   },
 ): Promise<{ before: TimberCostInjectionSnapshot; after: TimberCostInjectionSnapshot }> {
   const [productBefore, timberProductBefore, branchSettingBefore] = await Promise.all([
@@ -200,14 +298,20 @@ export async function applyTimberCostsTx(
     branchPrice: branchSettingBefore?.branchPrice?.toNumber() ?? null,
   };
 
-  const sellingPrice = resolveSellingPriceForPolicy({
+  // COST_ONLY: "los precios de venta quedan como están" — el vigente EN ESTA
+  // sucursal (branchPrice ?? general), y no se escribe ningún precio. Antes
+  // tomaba TimberProduct.sellingPrice (puede venir del viaje de otra
+  // sucursal) y lo escribía como branchPrice, pisando el precio propio.
+  const costOnly = input.pricePolicy === "COST_ONLY";
+  const sellingPrice = resolveTripSellingPrice({
     pricePolicy: input.pricePolicy,
     recalculatedSellingPrice: input.recalculatedSellingPrice,
-    existingSellingPrice: before.sellingPrice,
+    current: before,
     costPerPiece: input.costPerPiece,
     targetMarginPercent: input.targetMarginPercent,
     targetMarginRoundingMultiple: input.targetMarginRoundingMultiple,
   });
+  const writeGlobalPrice = !costOnly && (input.updateGlobalPrice ?? true);
 
   await tx.timberProduct.update({
     where: { id: input.timberProductId },
@@ -216,15 +320,17 @@ export async function applyTimberCostsTx(
       boardFeet: new Decimal(input.boardFeet),
       baseCost: new Decimal(input.costPerPiece),
       pricePerInch: new Decimal(input.pricePerInch),
-      sellingPrice: new Decimal(sellingPrice),
+      ...(writeGlobalPrice ? { sellingPrice: new Decimal(sellingPrice) } : {}),
       varaLength: input.varaLength,
     },
   });
 
-  await tx.product.update({
-    where: { id: input.productId },
-    data: { standardSalePrice: new Decimal(sellingPrice) },
-  });
+  if (writeGlobalPrice) {
+    await tx.product.update({
+      where: { id: input.productId },
+      data: { standardSalePrice: new Decimal(sellingPrice) },
+    });
+  }
 
   // "revisa todo... para evitar bugs" — si input.productId es un miembro
   // DERIVADO de una fusión (un producto de madera podría estarlo, nada lo
@@ -239,24 +345,14 @@ export async function applyTimberCostsTx(
     enteredCost: input.costPerPiece,
     conversion: timberConversion,
   });
+  const priceFields = costOnly
+    ? {}
+    : { branchPrice: new Decimal(sellingPrice), priceSource: "TIMBER_TRIP", lastPriceUpdateAt: new Date(), priceUpdatedByUserId: input.actorUserId };
+  const costFields = timberCostTarget.redirected ? {} : { branchCost: new Decimal(timberCostTarget.costForTarget) };
   await tx.branchProductSetting.upsert({
     where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
-    create: {
-      branchId: input.branchId,
-      productId: input.productId,
-      branchPrice: new Decimal(sellingPrice),
-      priceSource: "TIMBER_TRIP",
-      lastPriceUpdateAt: new Date(),
-      priceUpdatedByUserId: input.actorUserId,
-      ...(timberCostTarget.redirected ? {} : { branchCost: new Decimal(timberCostTarget.costForTarget) }),
-    },
-    update: {
-      branchPrice: new Decimal(sellingPrice),
-      priceSource: "TIMBER_TRIP",
-      lastPriceUpdateAt: new Date(),
-      priceUpdatedByUserId: input.actorUserId,
-      ...(timberCostTarget.redirected ? {} : { branchCost: new Decimal(timberCostTarget.costForTarget) }),
-    },
+    create: { branchId: input.branchId, productId: input.productId, ...priceFields, ...costFields },
+    update: { ...priceFields, ...costFields },
   });
   if (timberCostTarget.redirected) {
     const canonicalBranchCost = new Decimal(timberCostTarget.costForTarget);
@@ -269,10 +365,10 @@ export async function applyTimberCostsTx(
 
   const after: TimberCostInjectionSnapshot = {
     baseCost: input.costPerPiece,
-    sellingPrice,
-    standardSalePrice: sellingPrice,
+    sellingPrice: writeGlobalPrice ? sellingPrice : before.sellingPrice,
+    standardSalePrice: writeGlobalPrice ? sellingPrice : before.standardSalePrice,
     branchCost: input.costPerPiece,
-    branchPrice: sellingPrice,
+    branchPrice: costOnly ? before.branchPrice : sellingPrice,
   };
 
   await tx.auditLog.create({
@@ -374,6 +470,7 @@ export async function updatePricingConfig(
   input: UpdateTimberPricingConfigInput,
   userId?: string,
   branchId?: string | null,
+  client: Pick<Prisma.TransactionClient, "timberPricingConfig"> = prisma,
 ) {
   const data = {
     costPerFoot: new Decimal(input.costPerFoot),
@@ -392,12 +489,12 @@ export async function updatePricingConfig(
   };
 
   if (branchId) {
-    const existing = await prisma.timberPricingConfig.findFirst({ where: { branchId } });
+    const existing = await client.timberPricingConfig.findFirst({ where: { branchId } });
     if (existing) {
-      return prisma.timberPricingConfig.update({ where: { id: existing.id }, data });
+      return client.timberPricingConfig.update({ where: { id: existing.id }, data });
     }
-    const globalDefault = await prisma.timberPricingConfig.findFirst({ where: { branchId: null } });
-    return prisma.timberPricingConfig.create({
+    const globalDefault = await client.timberPricingConfig.findFirst({ where: { branchId: null } });
+    return client.timberPricingConfig.create({
       data: {
         branchId,
         cubicationTable: globalDefault?.cubicationTable ?? undefined,
@@ -413,11 +510,11 @@ export async function updatePricingConfig(
     });
   }
 
-  const existing = await prisma.timberPricingConfig.findFirst({ where: { branchId: null } });
+  const existing = await client.timberPricingConfig.findFirst({ where: { branchId: null } });
   if (existing) {
-    return prisma.timberPricingConfig.update({ where: { id: existing.id }, data });
+    return client.timberPricingConfig.update({ where: { id: existing.id }, data });
   }
-  return prisma.timberPricingConfig.create({ data });
+  return client.timberPricingConfig.create({ data });
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -600,6 +697,233 @@ export async function applyTimberSalePriceRecalc(
 }
 
 /* ══════════════════════════════════════════════════════════
+   Costo por pie fijado por sucursal y existencias en pies
+   ══════════════════════════════════════════════════════════ */
+
+/** Largo en pies de un nombre del catálogo, donde el tercer número son varas: "2X4X6" = 16 pies. */
+function catalogLengthFeet(varas: number, cubicationTable: CubicationRow[]): number {
+  return cubicationTable.find((row) => row.varas === varas)?.lengthFeet ?? varas;
+}
+
+type WoodMeasureSource = {
+  name: string;
+  timberProduct?: { thickness: Prisma.Decimal; width: Prisma.Decimal; length: Prisma.Decimal; varaLength: number } | null;
+};
+
+/** Medida y pies por pieza de un producto de madera: la registrada, o la de su nombre. null si no se puede leer. */
+export function woodMeasureOf(product: WoodMeasureSource, cubicationTable: CubicationRow[]) {
+  const registered = product.timberProduct;
+  const parsed = registered ? null : parseWoodDimensions(product.name);
+  const thickness = registered ? registered.thickness.toNumber() : parsed?.thicknessInches;
+  const width = registered ? registered.width.toNumber() : parsed?.widthInches;
+  const varaLength = registered ? registered.varaLength : parsed?.lengthFeet;
+  if (!thickness || !width || !varaLength) return null;
+  const lengthFeet = registered ? registered.length.toNumber() : catalogLengthFeet(varaLength, cubicationTable);
+  return { thickness, width, varaLength, lengthFeet, boardFeet: calculateBoardFeet({ thickness, width, length: lengthFeet }) };
+}
+
+export type TimberBranchCostRow = {
+  productId: string;
+  timberProductId: string | null;
+  sku: string;
+  name: string;
+  thickness: number;
+  width: number;
+  lengthFeet: number;
+  varaLength: number;
+  boardFeet: number;
+  stock: number;
+  totalFeet: number;
+  currentCost: number | null;
+  /** Pies por pieza × costo por pie. null si todavía no se escribió un costo por pie. */
+  newCost: number | null;
+  price: number | null;
+};
+
+export type TimberBranchCostPreview = {
+  costPerFoot: number | null;
+  rows: TimberBranchCostRow[];
+  /** Productos de madera de la sucursal sin medida legible en el nombre: no reciben costo. */
+  unreadable: string[];
+  totals: { pieces: number; feet: number; currentValue: number; newValue: number; saleValue: number; belowCost: number };
+  byBranch: Array<{ branchId: string; code: string; name: string; pieces: number; feet: number }>;
+};
+
+/** Totales de la sucursal. Con costo nuevo, "bajo costo" se mide contra él: es lo que verá el POS. */
+export function summarizeTimberBranchCost(rows: TimberBranchCostRow[]): TimberBranchCostPreview["totals"] {
+  const totals = { pieces: 0, feet: 0, currentValue: 0, newValue: 0, saleValue: 0, belowCost: 0 };
+  for (const row of rows) {
+    const cost = row.newCost ?? row.currentCost;
+    totals.pieces += row.stock;
+    totals.feet += row.totalFeet;
+    totals.currentValue += row.stock * (row.currentCost ?? 0);
+    totals.newValue += row.stock * (cost ?? 0);
+    totals.saleValue += row.stock * (row.price ?? 0);
+    if (cost !== null && row.price !== null && row.price < cost) totals.belowCost += 1;
+  }
+  return {
+    pieces: totals.pieces,
+    feet: roundFeet(totals.feet),
+    currentValue: roundMoney(totals.currentValue),
+    newValue: roundMoney(totals.newValue),
+    saleValue: roundMoney(totals.saleValue),
+    belowCost: totals.belowCost,
+  };
+}
+
+/**
+ * Lee la madera del inventario general (mismos saldos y mismo costo efectivo que el POS y
+ * Catálogo e Inventario), sin una copia aparte. Los miembros derivados de una fusión se
+ * excluyen: su stock y su costo viven en el canónico. Sin branchId solo arma el resumen.
+ */
+export async function previewTimberBranchCost(branchId: string | null, costPerFoot?: number): Promise<TimberBranchCostPreview> {
+  if (branchId && !(await prisma.branch.findUnique({ where: { id: branchId }, select: { id: true } }))) {
+    throw new Error("BRANCH_NOT_FOUND");
+  }
+  const { classification } = await getPricingConfig(branchId);
+  const table = classification.cubicationTable;
+  const baseWhere: Prisma.ProductWhereInput = { isActive: true, category: WOOD_CATEGORY_WHERE, ...excludeDerivedStockGroupMembers() };
+  const [products, branches, scoped] = await Promise.all([
+    prisma.product.findMany({
+      where: baseWhere,
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        timberProduct: { select: { id: true, thickness: true, width: true, length: true, varaLength: true } },
+        inventoryBalances: { select: { branchId: true, quantityOnHand: true } },
+      },
+      orderBy: { name: "asc" },
+    }),
+    prisma.branch.findMany({ where: { isActive: true }, select: { id: true, code: true, name: true }, orderBy: { code: "asc" } }),
+    // Solo los productos de la sucursal: escribirle costo a otro crearía su fila y lo haría visible ahí.
+    branchId ? prisma.product.findMany({ where: { ...baseWhere, AND: [branchProductScopeFilter(branchId)] }, select: { id: true } }) : [],
+  ]);
+  const measured = products.map((product) => ({ product, measure: woodMeasureOf(product, table) }));
+
+  const byBranch = branches.map((branch) => {
+    let pieces = 0;
+    let feet = 0;
+    for (const { product, measure } of measured) {
+      const stock = product.inventoryBalances.find((balance) => balance.branchId === branch.id)?.quantityOnHand.toNumber() ?? 0;
+      pieces += stock;
+      feet += stock * (measure?.boardFeet ?? 0);
+    }
+    return { branchId: branch.id, code: branch.code, name: branch.name, pieces, feet: roundFeet(feet) };
+  });
+
+  const scopedIds = new Set(scoped.map((product) => product.id));
+  const inScope = measured.filter(({ product }) => scopedIds.has(product.id));
+  const pricing = branchId
+    ? await getEffectiveProductPricingBatch(prisma, inScope.map(({ product }) => ({ branchId, productId: product.id })))
+    : new Map<string, never>();
+
+  const rows: TimberBranchCostRow[] = [];
+  for (const { product, measure } of inScope) {
+    if (!measure) continue;
+    const effective = pricing.get(`${branchId}:${product.id}`);
+    const stock = product.inventoryBalances.find((balance) => balance.branchId === branchId)?.quantityOnHand.toNumber() ?? 0;
+    rows.push({
+      productId: product.id,
+      timberProductId: product.timberProduct?.id ?? null,
+      sku: product.sku,
+      name: product.name,
+      thickness: measure.thickness,
+      width: measure.width,
+      lengthFeet: measure.lengthFeet,
+      varaLength: measure.varaLength,
+      boardFeet: roundFeet(measure.boardFeet),
+      stock,
+      totalFeet: roundFeet(stock * measure.boardFeet),
+      currentCost: effective?.effectiveCost ? roundMoney(effective.effectiveCost.toNumber()) : null,
+      newCost: costPerFoot ? roundMoney(measure.boardFeet * costPerFoot) : null,
+      price: effective?.effectivePrice ? effective.effectivePrice.toNumber() : null,
+    });
+  }
+
+  return {
+    costPerFoot: costPerFoot ?? null,
+    rows,
+    unreadable: inScope.filter(({ measure }) => !measure).map(({ product }) => product.name),
+    totals: summarizeTimberBranchCost(rows),
+    byBranch,
+  };
+}
+
+/**
+ * Escribe el costo donde lo lee todo el sistema: branchCost (primero en la cadena de costo: margen
+ * de cada venta nueva, Precios, POS) y el saldo de la sucursal (valor de inventario de Finanzas).
+ * No toca ventas ni movimientos pasados: esos guardan el costo de su momento.
+ */
+export async function applyTimberBranchCostRowsTx(
+  tx: Prisma.TransactionClient,
+  input: { branchId: string; costPerFoot: number; rows: TimberBranchCostRow[]; userId?: string },
+): Promise<number> {
+  const rows = input.rows.filter((row) => row.newCost !== null);
+  if (rows.length === 0) return 0;
+  const productIds = rows.map((row) => row.productId);
+  // Mismo candado que el checkout: una venta en medio dejaría inventoryValue con la cantidad vieja.
+  await tx.$queryRaw`SELECT id FROM "InventoryBalance" WHERE "branchId" = ${input.branchId} AND "productId" = ANY(ARRAY[${PrismaRuntime.join(productIds)}]) ORDER BY id FOR UPDATE`;
+  const balances = await tx.inventoryBalance.findMany({
+    where: { branchId: input.branchId, productId: { in: productIds } },
+    select: { id: true, productId: true, quantityOnHand: true, weightedAverageCost: true },
+  });
+  const balanceByProduct = new Map(balances.map((balance) => [balance.productId, balance]));
+
+  for (const row of rows) {
+    const cost = new Decimal(row.newCost as number);
+    await tx.branchProductSetting.upsert({
+      where: { branchId_productId: { branchId: input.branchId, productId: row.productId } },
+      create: { branchId: input.branchId, productId: row.productId, branchCost: cost },
+      update: { branchCost: cost },
+    });
+    const balance = balanceByProduct.get(row.productId);
+    if (balance) {
+      await tx.inventoryBalance.update({
+        where: { id: balance.id },
+        data: { weightedAverageCost: cost, inventoryValue: balance.quantityOnHand.mul(cost) },
+      });
+    }
+    if (row.timberProductId) {
+      await tx.timberProduct.update({ where: { id: row.timberProductId }, data: { baseCost: cost } });
+    }
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.userId,
+        branchId: input.branchId,
+        module: "timber",
+        action: "TIMBER_BRANCH_COST_FIXED",
+        entityType: "Product",
+        entityId: row.productId,
+        metadataJson: { costPerFoot: input.costPerFoot, boardFeet: row.boardFeet, before: row.currentCost, after: row.newCost, previousWac: balance?.weightedAverageCost.toNumber() ?? null },
+      },
+    });
+  }
+  return rows.length;
+}
+
+/** Recalcula al escribir, como applyTimberSalePriceRecalc, y recuerda el valor en la config de la sucursal. */
+export async function applyTimberBranchCost(branchId: string, costPerFoot: number, userId?: string): Promise<{ applied: number; preview: TimberBranchCostPreview }> {
+  const preview = await previewTimberBranchCost(branchId, costPerFoot);
+  const config = await getPricingConfig(branchId);
+  const applied = await prisma.$transaction(async (tx) => {
+    await updatePricingConfig(
+      {
+        costPerFoot,
+        pricePerInchTabla: config.pricePerInchTabla,
+        pricePerInchTablilla: config.pricePerInchTablilla,
+        pricePerInchCuadro: config.pricePerInchCuadro,
+      },
+      userId,
+      branchId,
+      tx,
+    );
+    return applyTimberBranchCostRowsTx(tx, { branchId, costPerFoot, rows: preview.rows, userId });
+  }, { timeout: 60000, maxWait: 10000 });
+  return { applied, preview };
+}
+
+/* ══════════════════════════════════════════════════════════
    Timber Products CRUD
    ══════════════════════════════════════════════════════════ */
 
@@ -614,16 +938,27 @@ export async function createTimberProduct(input: CreateTimberProductInput) {
     pricing.classification,
   );
 
-  const sku = input.sku || `MAD-${calc.priceGroup.substring(0, 3)}-${input.thickness}x${input.width}x${input.length}`;
+  // Una medida es un solo producto: el viaje la enlazaría a uno de los dos y el otro quedaría sin stock.
+  const existing = await findWoodIdentity(prisma, {
+    timberProductId: null,
+    thicknessIn: input.thickness,
+    widthIn: input.width,
+    lengthIn: input.length,
+    varaLength: calc.varaLength,
+  });
+  if (existing.product) {
+    throw new Error(`TIMBER_PRODUCT_DUPLICATE: Esa medida ya existe en el catálogo: ${existing.product.name} (${existing.product.sku}).`);
+  }
 
   const result = await prisma.$transaction(async (tx) => {
+    const sku = input.sku || (await generateSkuForProduct(tx, { productName: input.name, categoryName: TIMBER_CATEGORY_NAME }));
     const product = await tx.product.create({
       data: {
         sku,
         name: input.name,
-        description: `Madera ${calc.priceGroup} — ${input.thickness}"×${input.width}"×${calc.varaLength} pies — ${calc.boardFeet} pies tablares`,
+        description: timberDescription(calc.priceGroup, input.thickness, input.width, input.length, calc.varaLength, calc.boardFeet),
         categoryId: input.categoryId,
-        unit: "pieza",
+        unit: "UNIDAD",
         isActive: true,
         allowsFraction: false,
         isTimber: true,
@@ -652,6 +987,15 @@ export async function createTimberProduct(input: CreateTimberProductInput) {
   return result;
 }
 
+/** Con movimientos de inventario o viajes, la medida ya tiene historia: ni se borra ni cambia de dimensiones. */
+async function timberProductHasHistory(timberProductId: string, productId: string): Promise<boolean> {
+  const [movements, tripLines] = await Promise.all([
+    prisma.inventoryMovement.count({ where: { productId } }),
+    prisma.timberTripLine.count({ where: { timberProductId } }),
+  ]);
+  return movements > 0 || tripLines > 0;
+}
+
 export async function updateTimberProduct(id: string, input: UpdateTimberProductInput) {
   const existing = await prisma.timberProduct.findUnique({
     where: { id },
@@ -659,12 +1003,21 @@ export async function updateTimberProduct(id: string, input: UpdateTimberProduct
   });
   if (!existing) throw new Error("TIMBER_PRODUCT_NOT_FOUND");
 
-  // Mismo motivo que createTimberProduct: el producto sigue sin sucursal
-  // propia, así que se recalcula contra el default global.
-  const pricing = await getPricingConfig();
   const thickness = input.thickness ?? existing.thickness.toNumber();
   const width = input.width ?? existing.width.toNumber();
   const length = input.length ?? existing.length.toNumber();
+
+  // El formulario manda siempre las medidas: renombrar pisaba el costo real y el
+  // precio del último viaje con los de la config. Solo se recalcula si cambió la medida.
+  if (thickness === existing.thickness.toNumber() && width === existing.width.toNumber() && length === existing.length.toNumber()) {
+    if (input.name) await prisma.product.update({ where: { id: existing.productId }, data: { name: input.name } });
+    return { timberProduct: existing, calculation: null };
+  }
+  if (await timberProductHasHistory(existing.id, existing.productId)) throw new Error("TIMBER_PRODUCT_IN_USE");
+
+  // Mismo motivo que createTimberProduct: el producto sigue sin sucursal
+  // propia, así que se recalcula contra el default global.
+  const pricing = await getPricingConfig();
 
   const calc = calculateTimber({ thickness, width, length }, pricing, pricing.classification);
 
@@ -688,7 +1041,7 @@ export async function updateTimberProduct(id: string, input: UpdateTimberProduct
       where: { id: existing.productId },
       data: {
         ...(input.name ? { name: input.name } : {}),
-        description: `Madera ${calc.priceGroup} — ${thickness}"×${width}"×${calc.varaLength} pies — ${calc.boardFeet} pies tablares`,
+        description: timberDescription(calc.priceGroup, thickness, width, length, calc.varaLength, calc.boardFeet),
         standardSalePrice: new Decimal(calc.sellingPrice),
       },
     });
@@ -716,6 +1069,32 @@ export async function getTimberProduct(id: string) {
   return { ...tp, calculation: calc };
 }
 
+/** Lista [medidas de madera… | catálogo…]: qué tramo del catálogo cae en la página que empieza en `skip`. */
+export function catalogSliceForCombinedPage(input: { skip: number; limit: number; timberTotal: number; timberOnPage: number }): { offset: number; count: number } {
+  return { offset: Math.max(0, input.skip - input.timberTotal), count: Math.max(0, input.limit - input.timberOnPage) };
+}
+
+/**
+ * Palabra por palabra, sin distinguir mayúsculas (misma regla de catalog/product-search).
+ * Una medida en pies también busca su nombre del catálogo: "2x4x16" encuentra "CUARTON 2X4X6".
+ */
+export function timberProductSearchWhere(search: string, cubicationTable: CubicationRow[]): Prisma.ProductWhereInput {
+  const fields: SearchableField[] = ["name", "sku"];
+  return {
+    AND: tokenize(search).map((token) => {
+      const normalized = token.replace(/[×*]/g, "X");
+      const measure = normalized.match(/^(\d+)X(\d+)X(\d+)$/);
+      const varas = measure ? cubicationTable.find((row) => row.lengthFeet === Number(measure[3]))?.varas : undefined;
+      return {
+        OR: [
+          buildProductSearchWhere(normalized, fields),
+          ...(measure && varas ? [buildProductSearchWhere(`${measure[1]}X${measure[2]}X${varas}`, fields)] : []),
+        ],
+      };
+    }),
+  };
+}
+
 export async function listTimberProducts(filters?: {
   timberType?: string;
   search?: string;
@@ -727,21 +1106,23 @@ export async function listTimberProducts(filters?: {
   const limit = filters?.limit ?? 20;
   const skip = (page - 1) * limit;
 
+  const { classification } = await getPricingConfig(filters?.branchId);
+  const search = filters?.search ? timberProductSearchWhere(filters.search, classification.cubicationTable) : {};
+
   const where: Record<string, unknown> = {};
-  if (filters?.timberType) where.timberType = filters.timberType;
-  if (filters?.search) {
-    where.product = {
-      OR: [
-        { name: { contains: filters.search } },
-        { sku: { contains: filters.search } },
-      ],
-    };
-  }
+  // El tipo del catálogo (REGLA, CUARTON…) no es el grupo de precio guardado en timberType.
+  if (filters?.timberType) where.OR = [{ timberType: filters.timberType }, { product: { name: { startsWith: filters.timberType, mode: "insensitive" } } }];
+  if (filters?.search) where.product = search;
+
+  const inventoryBalances = {
+    ...(filters?.branchId ? { where: { branchId: filters.branchId } } : {}),
+    select: { quantityOnHand: true, weightedAverageCost: true },
+  };
 
   const [timberItems, timberTotal] = await Promise.all([
     prisma.timberProduct.findMany({
       where,
-      include: { product: { include: { category: true } } },
+      include: { product: { include: { category: true, inventoryBalances } } },
       orderBy: { createdAt: "desc" },
       skip,
       take: limit,
@@ -749,64 +1130,30 @@ export async function listTimberProducts(filters?: {
     prisma.timberProduct.count({ where }),
   ]);
 
-  const timberProductIds = timberItems.map((item) => item.productId);
+  // Lista combinada: TODAS las medidas de madera primero (paginadas en la
+  // base) y después los productos de catálogo de categoría Madera SIN
+  // TimberProduct. Antes se excluían solo los de la página actual — los de
+  // otras páginas reaparecían como "Catálogo real" — y el catálogo se
+  // repetía (recortado) en cada página.
   const catalogWhere = {
     isActive: true,
-    ...(timberProductIds.length > 0 ? { id: { notIn: timberProductIds } } : {}),
-    category: {
-      OR: [
-        { code: { startsWith: "MAD" } },
-        { name: { contains: "Madera" } },
-        { name: { contains: "madera" } },
-      ],
-    },
-    ...(filters?.search
-      ? {
-          OR: [
-            { name: { contains: filters.search } },
-            { sku: { contains: filters.search } },
-          ],
-        }
-      : {}),
+    timberProduct: { is: null },
+    category: WOOD_CATEGORY_WHERE,
+    ...search,
   };
 
   const catalogProducts = await prisma.product.findMany({
     where: catalogWhere,
     include: {
       category: true,
-      inventoryBalances: filters?.branchId
-        ? { where: { branchId: filters.branchId }, select: { quantityOnHand: true, weightedAverageCost: true } }
-        : { select: { quantityOnHand: true, weightedAverageCost: true } },
+      inventoryBalances,
     },
     orderBy: { name: "asc" },
     take: 1000,
   });
 
-  const mappedTimber = timberItems.map((item) => ({
-    id: item.id,
-    catalogProductId: item.productId,
-    isCatalogOnly: false,
-    timberType: item.timberType,
-    woodSubtype: item.timberType,
-    thickness: item.thickness.toString(),
-    width: item.width.toString(),
-    length: item.length.toString(),
-    varaLength: item.varaLength,
-    boardFeet: item.boardFeet.toString(),
-    baseCost: item.baseCost.toString(),
-    sellingPrice: item.sellingPrice.toString(),
-    product: item.product,
-    detectedDimensions: {
-      thicknessInches: item.thickness.toNumber(),
-      widthInches: item.width.toNumber(),
-      lengthFeet: item.length.toNumber(),
-      subtype: item.timberType,
-    },
-  }));
-
-  const mappedCatalog = await Promise.all(catalogProducts.map(async (product) => {
-    const detected = parseWoodDimensions(product.name);
-    if (filters?.timberType && detected.subtype !== filters.timberType) return null;
+  // Stock, costo y precio de la sucursal pedida: el precio general del catálogo es un relleno (C$1).
+  const branchFigures = async (product: (typeof catalogProducts)[number] | (typeof timberItems)[number]["product"]) => {
     const effective = filters?.branchId
       ? await getEffectiveProductPricing(prisma, { branchId: filters.branchId, productId: product.id })
       : null;
@@ -818,9 +1165,57 @@ export async function listTimberProducts(filters?: {
     const effectivePrice = effective
       ? (effective.effectivePrice === null ? null : Number(effective.effectivePrice))
       : product.standardSalePrice.toNumber();
+    return {
+      stockOnHand,
+      effectiveCost,
+      effectivePrice,
+      priceSource: effective?.priceSource ?? "MISSING",
+      costSource: effective?.costSource ?? (weightedCost !== null ? "WAC" : "NONE"),
+    };
+  };
+
+  const mappedTimber = await Promise.all(timberItems.map(async (item) => {
+    const subtype = parseWoodDimensions(item.product.name).subtype;
+    return {
+      id: item.id,
+      catalogProductId: item.productId,
+      isCatalogOnly: false,
+      timberType: item.timberType,
+      woodSubtype: subtype && subtype !== "OTRO" ? subtype : item.timberType,
+      thickness: item.thickness.toString(),
+      width: item.width.toString(),
+      length: item.length.toString(),
+      varaLength: item.varaLength,
+      boardFeet: item.boardFeet.toString(),
+      baseCost: item.baseCost.toString(),
+      sellingPrice: item.sellingPrice.toString(),
+      ...(await branchFigures(item.product)),
+      product: item.product,
+      detectedDimensions: {
+        thicknessInches: item.thickness.toNumber(),
+        widthInches: item.width.toNumber(),
+        lengthFeet: item.length.toNumber(),
+        subtype: item.timberType,
+      },
+    };
+  }));
+
+  const catalogCandidates = catalogProducts
+    .map((product) => ({ product, detected: parseWoodDimensions(product.name) }))
+    .filter(({ detected }) => !filters?.timberType || detected.subtype === filters.timberType);
+  const total = timberTotal + catalogCandidates.length;
+  // La parte de catálogo de ESTA página: sigue a las medidas de madera en el orden global.
+  const slice = catalogSliceForCombinedPage({ skip, limit, timberTotal, timberOnPage: timberItems.length });
+  const catalogPage = catalogCandidates.slice(slice.offset, slice.offset + slice.count);
+
+  // Precio/costo efectivo solo de los de esta página (antes: de hasta 1000, uno por uno).
+  const mappedCatalog = await Promise.all(catalogPage.map(async ({ product, detected }) => {
+    const { stockOnHand, effectiveCost, effectivePrice, priceSource, costSource } = await branchFigures(product);
     const thickness = detected.thicknessInches ?? 0;
     const width = detected.widthInches ?? 0;
-    const length = detected.lengthFeet ?? 0;
+    // En el nombre del catálogo el tercer número son varas: "2X4X6" = 16 pies = 10.67 pies tablares, no 4.
+    const varaLength = detected.lengthFeet ?? 0;
+    const length = catalogLengthFeet(varaLength, classification.cubicationTable);
     const boardFeet = thickness > 0 && width > 0 && length > 0 ? (thickness * width * length) / 12 : 0;
     return {
       id: `catalog:${product.id}`,
@@ -831,15 +1226,15 @@ export async function listTimberProducts(filters?: {
       thickness: String(thickness),
       width: String(width),
       length: String(length),
-      varaLength: length,
+      varaLength,
       boardFeet: String(boardFeet),
       baseCost: String(effectiveCost ?? 0),
       sellingPrice: effectivePrice === null ? "" : String(effectivePrice),
       stockOnHand,
       effectiveCost,
       effectivePrice,
-      priceSource: effective?.priceSource ?? "MISSING",
-      costSource: effective?.costSource ?? (weightedCost !== null ? "WAC" : "NONE"),
+      priceSource,
+      costSource,
       product,
       detectedDimensions: detected,
       warnings: [
@@ -850,16 +1245,16 @@ export async function listTimberProducts(filters?: {
     };
   }));
 
-  const items = [...mappedTimber, ...mappedCatalog.filter((item): item is NonNullable<typeof item> => item !== null)];
-  const total = timberTotal + mappedCatalog.filter((item) => item !== null).length;
-  const pageItems = items.slice(0, limit);
+  const items = [...mappedTimber, ...mappedCatalog];
 
-  return { items: pageItems, total, page, limit, totalPages: Math.ceil(total / limit) };
+  return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
 }
 
 export async function deleteTimberProduct(id: string) {
   const existing = await prisma.timberProduct.findUnique({ where: { id } });
   if (!existing) throw new Error("TIMBER_PRODUCT_NOT_FOUND");
+  // Desactivaba el producto aunque tuviera stock o ventas: desaparecía del POS.
+  if (await timberProductHasHistory(id, existing.productId)) throw new Error("TIMBER_PRODUCT_IN_USE");
 
   await prisma.$transaction(async (tx) => {
     await tx.timberProduct.delete({ where: { id } });
@@ -876,18 +1271,53 @@ export async function deleteTimberProduct(id: string) {
    Timber Trips (Viajes de Madera)
    ══════════════════════════════════════════════════════════ */
 
-/** Generate next trip code */
-async function generateTripCode(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `VJM-${year}-`;
+/** Código de trabajo de un viaje sin número: BOR = borrador, CAN = cancelado. Solo el ingreso consume correlativo. */
+function provisionalTripCode(prefix: "BOR" | "CAN"): string {
+  return `${prefix}-${randomUUID().slice(0, 8).toUpperCase()}`;
+}
 
-  const lastTrip = await prisma.timberTrip.findFirst({
-    where: { tripCode: { startsWith: prefix } },
-    orderBy: { tripCode: "desc" },
+/** Año de Managua: el servidor corre en UTC y el 31/12 por la noche ya sería el año siguiente. */
+export function tripCodePrefix(at: Date = new Date()): string {
+  const year = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Managua", year: "numeric" }).format(at);
+  return `VJM-${year}-`;
+}
+
+/** Comparación numérica: como texto, "VJM-2026-1000" ordena antes que "VJM-2026-999". */
+export function nextTripCodeFrom(prefix: string, confirmedCodes: string[]): string {
+  const last = confirmedCodes.reduce((max, code) => {
+    const number = code.startsWith(prefix) ? Number(code.slice(prefix.length)) : 0;
+    return Number.isInteger(number) && number > max ? number : max;
+  }, 0);
+  return `${prefix}${String(last + 1).padStart(3, "0")}`;
+}
+
+/** Número que saldría si se ingresa un viaje ahora: el siguiente a los YA ingresados. Cancelados y borradores no cuentan. */
+export async function getNextTripCode(client: Pick<Prisma.TransactionClient, "timberTrip"> = prisma): Promise<string> {
+  const prefix = tripCodePrefix();
+  const confirmed = await client.timberTrip.findMany({
+    where: { tripCode: { startsWith: prefix }, status: { in: ["CONFIRMED", "TRANSFERRED"] } },
+    select: { tripCode: true },
   });
+  return nextTripCodeFrom(prefix, confirmed.map((trip) => trip.tripCode));
+}
 
-  const lastNum = lastTrip ? parseInt(lastTrip.tripCode.replace(prefix, ""), 10) || 0 : 0;
-  return `${prefix}${String(lastNum + 1).padStart(3, "0")}`;
+/**
+ * Asigna el número definitivo dentro de la transacción de confirmar. El candado serializa dos
+ * ingresos simultáneos (dos borradores abiertos no pueden sacar el mismo número). Si el número
+ * lo tiene un viaje viejo sin ingresar (antes se numeraba al crear), ese viaje lo cede.
+ */
+export async function assignTripCodeTx(tx: Prisma.TransactionClient, tripId: string): Promise<string> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('timber_trip_code'))`;
+  const tripCode = await getNextTripCode(tx);
+  const holder = await tx.timberTrip.findUnique({ where: { tripCode }, select: { id: true, status: true } });
+  if (holder && holder.id !== tripId) {
+    await tx.timberTrip.update({
+      where: { id: holder.id },
+      data: { tripCode: provisionalTripCode(holder.status === "CANCELLED" ? "CAN" : "BOR") },
+    });
+  }
+  await tx.timberTrip.update({ where: { id: tripId }, data: { tripCode } });
+  return tripCode;
 }
 
 /** Create a new timber trip with lines */
@@ -915,12 +1345,11 @@ export async function createTimberTrip(input: CreateTimberTripInput, userId?: st
     targetMarginPercent: pricing.targetMarginPercent,
     classification: pricing.classification,
   });
-  const tripCode = await generateTripCode();
 
   const trip = await prisma.$transaction(async (tx) => {
     const newTrip = await tx.timberTrip.create({
       data: {
-        tripCode,
+        tripCode: provisionalTripCode("BOR"),
         destinationBranchId: input.destinationBranchId,
         status: "DRAFT",
         woodTripTotalCost: new Decimal(calc.totals.woodTripTotalCost),
@@ -1021,6 +1450,13 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
   );
 
   const trip = await prisma.$transaction(async (tx) => {
+    // El chequeo de DRAFT de arriba es fuera de la transacción: un
+    // autoguardado que llega justo después de confirmar reemplazaba las
+    // líneas y totales de un viaje ya inyectado. Candado + rechequeo acá.
+    await tx.$queryRaw`SELECT id FROM "TimberTrip" WHERE id = ${id} FOR UPDATE`;
+    const locked = await tx.timberTrip.findUniqueOrThrow({ where: { id }, select: { status: true } });
+    if (locked.status !== "DRAFT") throw new Error("TRIP_NOT_EDITABLE");
+
     // Delete old lines
     await tx.timberTripLine.deleteMany({ where: { tripId: id } });
 
@@ -1100,6 +1536,8 @@ type ResolvedLineForInjection = {
   productId: string | null;
   timberProductId: string | null;
   isNewProduct: boolean;
+  productName: string;
+  sku: string | null;
   costPerPiece: number;
   pricePerInch: number;
   recalculatedSellingPrice: number;
@@ -1112,24 +1550,8 @@ async function resolveLinesForInjectionReadOnly(
   const resolved: ResolvedLineForInjection[] = [];
   for (const line of trip.lines) {
     if (line.pieces <= 0) continue;
-    const sku = `MAD-${line.priceGroup.substring(0, 3)}-${line.thicknessIn}x${line.widthIn}x${line.lengthIn}`;
-    let productId: string | null = null;
-    let timberProductId: string | null = null;
-
-    if (line.timberProductId) {
-      const existing = await prisma.timberProduct.findUnique({ where: { id: line.timberProductId } });
-      if (existing) {
-        productId = existing.productId;
-        timberProductId = existing.id;
-      }
-    }
-    if (!productId) {
-      const existingProduct = await prisma.product.findUnique({ where: { sku }, include: { timberProduct: true } });
-      if (existingProduct?.timberProduct) {
-        productId = existingProduct.id;
-        timberProductId = existingProduct.timberProduct.id;
-      }
-    }
+    const { product, timberProductId } = await findWoodIdentity(prisma, line);
+    const productId = product?.id ?? null;
 
     const costPerPiece = line.calculatedCostPerPiece.gt(0)
       ? line.calculatedCostPerPiece.toNumber()
@@ -1147,6 +1569,8 @@ async function resolveLinesForInjectionReadOnly(
       productId,
       timberProductId,
       isNewProduct: productId === null,
+      productName: product?.name ?? timberCatalogName(line.thicknessIn, line.widthIn, line.varaLength),
+      sku: product?.sku ?? null,
       costPerPiece,
       pricePerInch: line.calculatedSalePricePerPiece.div(line.thicknessIn * line.widthIn * line.varaLength || 1).toNumber(),
       recalculatedSellingPrice: line.calculatedSalePricePerPiece.toNumber(),
@@ -1160,6 +1584,9 @@ export type TimberInjectionLinePreview = {
   dimensions: { thickness: number; width: number; length: number };
   isNewProduct: boolean;
   productId: string | null;
+  /** Producto del catálogo que recibe el stock (o el nombre con el que se creará). */
+  productName: string;
+  sku: string | null;
   piecesToAdd: number;
   costPerPiece: { before: number | null; after: number };
   wac: { before: number | null; after: number };
@@ -1205,11 +1632,15 @@ export async function getTimberTripInjectionPreview(id: string): Promise<TimberI
     const wacActual = balanceBefore?.weightedAverageCost.toNumber() ?? 0;
     const wacAfter = (qohActual * wacActual + line.pieces * line.costPerPiece) / (qohActual + line.pieces || 1);
 
-    const sellingPriceBefore = timberProductBefore?.sellingPrice.toNumber() ?? null;
-    const sellingPriceAfter = resolveSellingPriceForPolicy({
+    const current = {
+      branchPrice: branchSettingBefore?.branchPrice?.toNumber() ?? null,
+      standardSalePrice: productBefore?.standardSalePrice.toNumber() ?? null,
+      sellingPrice: timberProductBefore?.sellingPrice.toNumber() ?? null,
+    };
+    const sellingPriceAfter = resolveTripSellingPrice({
       pricePolicy: trip.pricePolicy,
       recalculatedSellingPrice: line.recalculatedSellingPrice,
-      existingSellingPrice: sellingPriceBefore,
+      current,
       costPerPiece: line.costPerPiece,
       targetMarginPercent: marginConfig.targetMarginPercent,
       targetMarginRoundingMultiple: marginConfig.targetMarginRoundingMultiple,
@@ -1220,16 +1651,27 @@ export async function getTimberTripInjectionPreview(id: string): Promise<TimberI
       dimensions: line.dimensions,
       isNewProduct: line.isNewProduct,
       productId: line.productId,
+      productName: line.productName,
+      sku: line.sku,
       piecesToAdd: line.pieces,
       costPerPiece: { before: timberProductBefore?.baseCost.toNumber() ?? null, after: line.costPerPiece },
       wac: { before: balanceBefore ? wacActual : null, after: roundMoney(wacAfter) },
       branchCost: { before: branchSettingBefore?.branchCost?.toNumber() ?? null, after: line.costPerPiece },
-      sellingPrice: { before: productBefore?.standardSalePrice.toNumber() ?? sellingPriceBefore, after: sellingPriceAfter },
+      // "antes" = el precio vigente EN la sucursal destino (lo que se pisa), no el general.
+      sellingPrice: { before: currentBranchSellingPrice(current), after: sellingPriceAfter },
     });
   }
 
-  const hash = createHash("sha256").update(JSON.stringify(lines)).digest("hex");
+  // Sin lineId: updateTimberTrip borra y recrea las líneas en cada guardado
+  // (ids nuevos), y la pantalla guarda justo antes de confirmar — con el id
+  // en el hash, confirmar desde la UI daba "preview viejo" siempre.
+  const hash = createHash("sha256").update(JSON.stringify(lines.map(({ lineId: _lineId, ...rest }) => rest))).digest("hex");
   return { tripId: trip.id, tripCode: trip.tripCode, pricePolicy: trip.pricePolicy, lines, hash };
+}
+
+/** Alguna medida queda vendiéndose bajo su costo con el precio que deja la política del viaje. */
+export function hasNegativeMarginInPreview(lines: Array<Pick<TimberInjectionLinePreview, "costPerPiece" | "sellingPrice">>): boolean {
+  return lines.some((line) => line.sellingPrice.after < line.costPerPiece.after);
 }
 
 function roundMoney(value: number): number {
@@ -1407,7 +1849,8 @@ export async function confirmTimberTrip(
     throw new Error("TRIP_HAS_NO_LINES");
   }
   // A positive landed cost per board foot is required so inbound inventory movements have a real cost.
-  if (trip.landedCostPerFoot.lte(0)) {
+  // Y un costo de la MADERA > 0: solo con gastos (flete, etc.) el costo aterrizado salía > 0 sin costo de compra.
+  if (trip.woodTripTotalCost.lte(0) || trip.landedCostPerFoot.lte(0)) {
     throw new Error("TRIP_REQUIRES_COST");
   }
 
@@ -1421,14 +1864,6 @@ export async function confirmTimberTrip(
     throw new Error("RECONCILIATION_REQUIRES_ACK");
   }
 
-  // Madera v2 Fase 3 — margen negativo en CUALQUIER línea bloquea la confirmación salvo
-  // override explícito con motivo (queda auditado). Margen bajo el objetivo NUNCA bloquea
-  // por sí solo — eso es solo un aviso visible en el frontend (Fase 5).
-  const hasNegativeMarginLine = trip.lines.some((line) => line.calculatedMarginPct.lt(0));
-  if (config.blockNegativeMargin && hasNegativeMarginLine && !options.marginOverrideReason?.trim()) {
-    throw new Error("NEGATIVE_MARGIN_REQUIRES_OVERRIDE");
-  }
-
   if (!options.expectedHash) {
     throw new Error("INJECTION_PREVIEW_REQUIRED");
   }
@@ -1437,7 +1872,32 @@ export async function confirmTimberTrip(
     throw new Error("INJECTION_PREVIEW_STALE");
   }
 
+  // Madera v2 Fase 3 — margen negativo en CUALQUIER línea bloquea la confirmación salvo
+  // override explícito con motivo (queda auditado). Margen bajo el objetivo NUNCA bloquea
+  // por sí solo — eso es solo un aviso visible en el frontend (Fase 5).
+  // Con el precio que deja la POLÍTICA del viaje (el de la vista previa), no el
+  // calculado por pulgada: "margen objetivo" nunca queda bajo costo y pedía motivo igual.
+  const hasNegativeMarginLine = hasNegativeMarginInPreview(freshPreview.lines);
+  if (config.blockNegativeMargin && hasNegativeMarginLine && !options.marginOverrideReason?.trim()) {
+    throw new Error("NEGATIVE_MARGIN_REQUIRES_OVERRIDE");
+  }
+
   return prisma.$transaction(async (tx) => {
+    // Mismo candado que updateTimberTrip/cancelTimberTrip: serializa confirmar
+    // contra el autoguardado. Si el viaje cambió desde que se leyó arriba (un
+    // autoguardado entró en medio), las líneas de `trip` ya no son las reales.
+    await tx.$queryRaw`SELECT id FROM "TimberTrip" WHERE id = ${id} FOR UPDATE`;
+    const locked = await tx.timberTrip.findUniqueOrThrow({ where: { id }, select: { status: true, updatedAt: true } });
+    if (locked.status !== "DRAFT" && locked.status !== "CUBICADO") throw new Error("TRIP_ALREADY_CONFIRMED");
+    if (locked.updatedAt.getTime() !== trip.updatedAt.getTime()) throw new Error("INJECTION_PREVIEW_STALE");
+
+    const tripCode = await assignTripCodeTx(tx, id);
+
+    // updateGlobalPrice: solo si el precio sale de la config GLOBAL por
+    // pulgada — un override de sucursal o un margen sobre el costo de ESTE
+    // viaje es un precio de esa sucursal, no el respaldo de las demás.
+    const updateGlobalPrice = trip.pricePolicy === "RECALC_FROM_PRICE_PER_INCH" && !config.isBranchOverride;
+
     for (const line of trip.lines) {
       if (line.pieces <= 0) continue;
       const { productId, timberProductId } = await resolveTimberProductIdentityTx(tx, line);
@@ -1464,6 +1924,7 @@ export async function confirmTimberTrip(
         pricePolicy: trip.pricePolicy,
         targetMarginPercent: config.targetMarginPercent,
         targetMarginRoundingMultiple: config.targetMarginRoundingMultiple,
+        updateGlobalPrice,
       });
 
       await createInventoryMovementTx(tx, {
@@ -1475,7 +1936,7 @@ export async function confirmTimberTrip(
         unitCost,
         referenceType: "TIMBER_TRIP",
         referenceId: trip.id,
-        notes: `Viaje de madera ${trip.tripCode} — ${line.thicknessIn}"×${line.widthIn}"×${line.varaLength} pies`,
+        notes: `Viaje de madera ${tripCode} — ${line.thicknessIn}"×${line.widthIn}"×${line.lengthIn} pies`,
       });
 
       // Link the line to the resolved product for traceability.
@@ -1522,7 +1983,7 @@ export async function confirmTimberTrip(
         entityType: "TimberTrip",
         entityId: trip.id,
         metadataJson: {
-          tripCode: trip.tripCode,
+          tripCode,
           totalPieces: trip.totalPieces,
           totalFeet: trip.totalFeet.toString(),
           totalCost: trip.totalCost.toString(),
@@ -1540,7 +2001,8 @@ export async function confirmTimberTrip(
     // calculado arriba en esta función) — evita que un futuro consumidor de
     // este trip caiga en el mismo `trip.reconciliation.status` sobre undefined.
     return { ...updated, reconciliation };
-  });
+    // El default de 5 s no alcanza: la hoja real trae ~50 medidas y cada una son ~20 consultas.
+  }, { timeout: 60000, maxWait: 10000 });
 }
 
 /** Cancel a timber trip */
@@ -1551,9 +2013,15 @@ export async function cancelTimberTrip(id: string) {
     throw new Error("TRIP_CANNOT_BE_CANCELLED");
   }
 
-  const cancelled = await prisma.timberTrip.update({
-    where: { id },
+  // Condicionado al estado: si un confirmar entró en medio (ya TRANSFERRED),
+  // no se marca cancelado un viaje que ya está en inventario.
+  const transition = await prisma.timberTrip.updateMany({
+    where: { id, status: { notIn: ["TRANSFERRED", "CANCELLED"] } },
     data: { status: "CANCELLED" },
+  });
+  if (transition.count === 0) throw new Error("TRIP_CANNOT_BE_CANCELLED");
+  const cancelled = await prisma.timberTrip.findUniqueOrThrow({
+    where: { id },
     include: { lines: true, destinationBranch: true },
   });
 
@@ -1585,7 +2053,7 @@ export async function getTimberTrip(id: string) {
     config.reconciliationTolerancePercent,
   );
 
-  return { ...trip, reconciliation };
+  return { ...trip, reconciliation, nextTripCode: trip.status === "DRAFT" ? await getNextTripCode() : null };
 }
 
 /** List timber trips with filtering */
@@ -1613,13 +2081,13 @@ export async function listTimberTrips(filters?: {
   if (filters?.destinationBranchId) where.destinationBranchId = filters.destinationBranchId;
   if (filters?.search) {
     where.OR = [
-      { tripCode: { contains: filters.search } },
-      { supplierName: { contains: filters.search } },
-      { origin: { contains: filters.search } },
+      { tripCode: { contains: filters.search, mode: "insensitive" } },
+      { supplierName: { contains: filters.search, mode: "insensitive" } },
+      { origin: { contains: filters.search, mode: "insensitive" } },
     ];
   }
 
-  const [items, total] = await Promise.all([
+  const [items, total, nextTripCode] = await Promise.all([
     prisma.timberTrip.findMany({
       where,
       include: {
@@ -1631,7 +2099,8 @@ export async function listTimberTrips(filters?: {
       take: limit,
     }),
     prisma.timberTrip.count({ where }),
+    getNextTripCode(),
   ]);
 
-  return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+  return { items, total, page, limit, totalPages: Math.ceil(total / limit), nextTripCode };
 }

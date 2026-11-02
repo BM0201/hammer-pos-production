@@ -58,6 +58,9 @@ export async function POST(request: Request) {
     if (err instanceof z.ZodError) {
       return fail("VALIDATION_ERROR", "Validación fallida", 422);
     }
+    if (err instanceof Error && err.message.startsWith("TIMBER_PRODUCT_DUPLICATE: ")) {
+      return fail("CONFLICT", err.message.replace("TIMBER_PRODUCT_DUPLICATE: ", ""), 409);
+    }
     if (err instanceof Error && err.message.includes("Unique constraint")) {
       return fail("ERROR", "Ya existe un producto con ese SKU", 409);
     }

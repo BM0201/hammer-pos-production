@@ -79,7 +79,9 @@ export const createTimberTripSchema = z.object({
   expenses: timberTripExpensesSchema.optional(),
   invoicedFeet: z.number().positive("Los pies de factura deben ser mayor a 0").max(10000000).optional(),
   pricePolicy: timberPricePolicySchema.optional(),
-  lines: z.array(timberTripLineSchema).min(1, "Debe tener al menos una línea"),
+  // El viaje nace vacío (antes la pantalla mandaba una medida de relleno que había que borrar);
+  // "al menos 1 línea" se exige al confirmar (TRIP_HAS_NO_LINES).
+  lines: z.array(timberTripLineSchema).default([]),
 });
 
 export const updateTimberTripSchema = z.object({
@@ -128,6 +130,11 @@ export const updateTimberPricingConfigSchema = z.object({
   reconciliationTolerancePercent: z.number().min(0, "La tolerancia debe ser ≥ 0").max(1, "La tolerancia debe ser ≤ 100%").optional(),
   warnBelowTargetMargin: z.boolean().optional(),
   blockNegativeMargin: z.boolean().optional(),
+});
+
+export const timberBranchCostSchema = z.object({
+  branchId: z.string().min(1, "Sucursal requerida"),
+  costPerFoot: z.number().positive("El costo por pie debe ser mayor a 0").max(10000),
 });
 
 export type CreateTimberProductInput = z.infer<typeof createTimberProductSchema>;

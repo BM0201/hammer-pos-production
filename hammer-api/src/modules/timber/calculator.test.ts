@@ -270,3 +270,11 @@ test("timber trip: lines vacío con gastos del viaje ya cargados sigue sin rompe
   assert.equal(result.totals.landedCostPerFoot, 0);
   assert.ok(Number.isFinite(result.totals.landedCostPerFoot));
 });
+
+test("timber trip: modo TOTAL sin costo escrito NO inventa uno con el costPerFoot de la config (antes se confirmaba con un costo falso)", () => {
+  const lines = [{ thickness: 1, width: 12, length: 12, pieces: 10 }];
+  const result = calculateTimberTrip(lines, 0, PRICING);
+  assert.equal(result.totals.computedCostPerFoot, 0);
+  assert.equal(result.totals.woodTripTotalCost, 0);
+  assert.equal(result.totals.landedCostPerFoot, 0);
+});

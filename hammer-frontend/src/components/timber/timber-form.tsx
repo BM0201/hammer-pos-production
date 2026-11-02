@@ -35,6 +35,12 @@ export function TimberForm({ categories, initialData, mode }: TimberFormProps) {
   const [length, setLength] = useState(String(initialData?.length ?? "16"));
   const [categoryId, setCategoryId] = useState(initialData?.categoryId ?? "");
 
+  // La categoría casi siempre es Madera: preseleccionada, sin pedirla.
+  useEffect(() => {
+    if (mode !== "create") return;
+    setCategoryId((current) => current || (categories.find((c) => /madera/i.test(c.name))?.id ?? ""));
+  }, [categories, mode]);
+
   // El cálculo vive SOLO en el servidor (calculator.ts) — se pide con debounce,
   // nunca se duplica la fórmula en el cliente.
   const [preview, setPreview] = useState<CalcPreview | null>(null);
@@ -88,8 +94,8 @@ export function TimberForm({ categories, initialData, mode }: TimberFormProps) {
           body: JSON.stringify(body),
         });
         if (!res.ok) {
-          const data = unwrapApiData(await res.json());
-          throw new Error(data.error || "Error al crear producto");
+          const raw = await res.json().catch(() => null);
+          throw new Error(raw?.error?.message ?? "Error al crear producto");
         }
       } else {
         const res = await apiFetch(`/api/timber/${initialData?.id}`, {
@@ -98,8 +104,8 @@ export function TimberForm({ categories, initialData, mode }: TimberFormProps) {
           body: JSON.stringify(body),
         });
         if (!res.ok) {
-          const data = unwrapApiData(await res.json());
-          throw new Error(data.error || "Error al actualizar producto");
+          const raw = await res.json().catch(() => null);
+          throw new Error(raw?.error?.message ?? "Error al actualizar producto");
         }
       }
 
@@ -136,7 +142,7 @@ export function TimberForm({ categories, initialData, mode }: TimberFormProps) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Ej: Tabla 1×12×16"
+          placeholder="Ej: TABLA 1X12X6"
           required
         />
 
@@ -172,8 +178,8 @@ export function TimberForm({ categories, initialData, mode }: TimberFormProps) {
             type="number"
             value={thickness}
             onChange={(e) => setThickness(e.target.value)}
-            min="0.25"
-            step="0.25"
+            min="1"
+            step="1"
             required
           />
           <Input
@@ -195,10 +201,10 @@ export function TimberForm({ categories, initialData, mode }: TimberFormProps) {
               onChange={(e) => setLength(e.target.value)}
               required
             >
-              <option value="8">3 pies</option>
-              <option value="11">4 pies</option>
-              <option value="14">5 pies</option>
-              <option value="16">6 pies</option>
+              <option value="8">8 pies (3 varas)</option>
+              <option value="11">11 pies (4 varas)</option>
+              <option value="14">14 pies (5 varas)</option>
+              <option value="16">16 pies (6 varas)</option>
             </select>
           </div>
         </div>

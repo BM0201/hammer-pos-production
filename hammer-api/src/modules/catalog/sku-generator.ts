@@ -164,12 +164,13 @@ export function parseWoodDimensions(productName: string): {
   thicknessInches?: number;
   widthInches?: number;
   lengthFeet?: number;
-  subtype?: "TABLA" | "REGLA" | "CUARTON" | "CUADRO" | "LISTON" | "VIGA" | "OTRO";
+  subtype?: "TABLA" | "TABLILLA" | "REGLA" | "CUARTON" | "CUADRO" | "LISTON" | "VIGA" | "OTRO";
 } {
   const text = cleanText(productName);
   const subtype =
     /\bCUARTON\b/.test(text) ? "CUARTON" :
     /\bTABLA\b/.test(text) ? "TABLA" :
+    /\bTABLILLA\b/.test(text) ? "TABLILLA" :
     /\bREGLA\b/.test(text) ? "REGLA" :
     /\bCUADRO\b/.test(text) ? "CUADRO" :
     /\bLISTON\b/.test(text) ? "LISTON" :
