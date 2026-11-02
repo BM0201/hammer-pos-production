@@ -165,6 +165,11 @@ export function computeBarCounts(rows: RowStatus[]): BarCounts {
   return counts;
 }
 
+/** El motivo se pide antes de la confirmación: sin él, el servidor rechazaba la entrada al final. Corregir una entrada ya lo trae. */
+export function intakeNeedsReason(reason: string, isEditing: boolean): boolean {
+  return !isEditing && reason.trim().length === 0;
+}
+
 /**
  * "Revisar y confirmar" deshabilitado con errores, sin ninguna fila
  * todavía, con alguna fila aún calculando, o si la vista previa falló del

@@ -32,7 +32,7 @@ const lineSchema = z.object({
 const createSchema = z.object({
   clientRequestId: z.string().min(1),
   kind: z.nativeEnum(MultiBranchIntakeKind),
-  reason: z.string().trim().min(1),
+  reason: z.string().trim().min(1, "Elegí o escribí el motivo de la entrada."),
   notes: z.string().optional().nullable(),
   // Fase 1 — "permitir 1 sucursal. Hoy exige 2: esa regla pasa a ser solo
   // de la pantalla de compras" (PurchaseOrderGroup, un módulo aparte).
@@ -70,7 +70,10 @@ export async function POST(request: Request) {
     await requireCsrf(request, session);
 
     const parsed = createSchema.safeParse(await request.json());
-    if (!parsed.success) return fail("VALIDATION_ERROR", "Parámetros inválidos.", 400, parsed.error.flatten());
+    if (!parsed.success) {
+      const details = parsed.error.flatten();
+      return fail("VALIDATION_ERROR", details.fieldErrors.reason?.[0] ?? "Parámetros inválidos.", 400, details);
+    }
 
     const branches = await prisma.branch.findMany({ where: { id: { in: parsed.data.branchIds } }, select: { id: true, code: true, name: true } });
     const branchById = new Map(branches.map((b) => [b.id, b]));

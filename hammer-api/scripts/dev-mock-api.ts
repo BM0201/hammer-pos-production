@@ -1198,6 +1198,20 @@ const server = http.createServer(async (req, res) => {
     return ok(res, { rates, inss: resolveInssRates(rates.inssRegime, rates.activeEmployeeCount), irTableAnnual: IR_TABLE_ANNUAL });
   }
 
+  // ── Entrada de inventario (lo mínimo para llegar a confirmar) ──
+  if (path === "/api/inventory/intake/preview" && method === "POST") {
+    const body = (await readJson(req)) as { branchIds: string[]; lines: Array<{ productId: string }> };
+    const cells = body.lines.flatMap((line) => body.branchIds.map((branchId) => ({ productId: line.productId, branchId, status: "OK", messages: [], currentEffectiveCost: 100 })));
+    return ok(res, { cells, totals: {}, lineMessages: {} });
+  }
+  if (path === "/api/inventory/multi-branch-intake" && method === "GET") return ok(res, { intakes: [], nextCursor: null });
+  if (path === "/api/inventory/multi-branch-intake" && method === "POST") {
+    const body = await readJson(req);
+    console.log("[mock] entrada con motivo:", body.reason);
+    if (!String(body.reason ?? "").trim()) return send(res, 400, { ok: false, error: { code: "VALIDATION_ERROR", message: "Elegí o escribí el motivo de la entrada." } });
+    return send(res, 400, { ok: false, error: { code: "VALIDATION_ERROR", message: "Mock: entrada recibida, no se simula el guardado." } });
+  }
+
   // ── Madera ──
   if (path === "/api/timber/trips" && method === "GET") {
     const search = (url.searchParams.get("search") ?? "").toLowerCase();

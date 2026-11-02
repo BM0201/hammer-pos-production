@@ -10,6 +10,7 @@ import {
   productIdsWithPackageCostWarning,
   buildPreviewRequestLines,
   canConfirmIntake,
+  intakeNeedsReason,
   clearIntakeDraft,
   computeBarCounts,
   computeMarginPercent,
@@ -182,6 +183,13 @@ test("'para todas' vacío pero con un override puntual: esa sucursal SÍ viaja, 
   assert.equal(payload.length, 1, "la línea tiene algo escrito para b1, no se omite");
   assert.deepEqual(payload[0].overrides, { b1: 12 });
   assert.equal(payload[0].quantity, 0, "el valor de 'para todas' nunca se usa para b2 — b2 queda sin cubrir y su celda marcará ERROR en la vista previa, no 0 silencioso");
+});
+
+test("motivo: sin él no se llega a confirmar (antes el servidor respondía 'Parámetros inválidos' al final); corregir una entrada ya lo trae", () => {
+  assert.equal(intakeNeedsReason("", false), true);
+  assert.equal(intakeNeedsReason("   ", false), true);
+  assert.equal(intakeNeedsReason("Llegó pedido", false), false);
+  assert.equal(intakeNeedsReason("", true), false);
 });
 
 test("LA QUE IMPORTA — armado del payload por kind: clientRequestId, reason recortado, notes vacías → undefined", () => {

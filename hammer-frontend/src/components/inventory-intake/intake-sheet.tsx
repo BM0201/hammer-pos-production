@@ -25,6 +25,7 @@ import {
   buildIntakePayloadLines,
   buildPreviewRequestLines,
   canConfirmIntake,
+  intakeNeedsReason,
   clearIntakeDraft,
   computeBarCounts,
   computeMarginPercent,
@@ -220,6 +221,7 @@ export function IntakeSheet({
   const [draftBanner, setDraftBanner] = useState<{ savedAt: string } | null>(null);
   const draftCheckedKinds = useRef(new Set<IntakeKind>());
   const quantityRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const reasonInputRef = useRef<HTMLInputElement>(null);
 
   // ── Borrador: avisar si hay uno guardado para el kind actual ────────────
   // En modo edición no hay borrador — las líneas ya vienen precargadas de la entrada que falló.
@@ -471,6 +473,7 @@ export function IntakeSheet({
   const barCounts = useMemo(() => computeBarCounts(rowStatuses.map((r) => ({ productId: r.productId, status: r.status }))), [rowStatuses]);
   const anyRowLoading = rowStatuses.some((r) => r.loading);
   const canConfirm = canConfirmIntake(barCounts, lines.length, previewFailed) && !anyRowLoading;
+  const needsReason = intakeNeedsReason(reason, !!editMode);
   const hasReviewWarnings = barCounts.review > 0;
   const firstErrorId = useMemo(() => firstErrorProductId(rowStatuses), [rowStatuses]);
 
@@ -690,7 +693,7 @@ export function IntakeSheet({
                         </button>
                       ))}
                     </div>
-                    <Input className="mt-2" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motivo (podés escribir el tuyo)" />
+                    <Input ref={reasonInputRef} className="mt-2" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motivo (podés escribir el tuyo)" />
                     <button type="button" onClick={() => setNotesOpen((v) => !v)} className="mt-2 flex items-center gap-1 text-xs font-semibold text-[var(--color-master-600)]">
                       <ChevronDown className={`h-3 w-3 transition-transform ${notesOpen ? "rotate-180" : ""}`} /> Nota opcional
                     </button>
@@ -923,6 +926,12 @@ export function IntakeSheet({
                       if (firstErrorId) requestAnimationFrame(() => { const el = quantityRefs.current[firstErrorId]; el?.scrollIntoView({ block: "center", behavior: "smooth" }); el?.focus(); });
                       return;
                     }
+                    if (canConfirm && needsReason) {
+                      toast.error("Elegí o escribí el motivo de la entrada.");
+                      reasonInputRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+                      reasonInputRef.current?.focus();
+                      return;
+                    }
                     if (canConfirm) setShowConfirm(true);
                   }}
                   icon={<Check className="h-3.5 w-3.5" />}
@@ -933,7 +942,9 @@ export function IntakeSheet({
                       ? `Corregí ${barCounts.error} error${barCounts.error === 1 ? "" : "es"} →`
                       : anyRowLoading
                         ? "Calculando…"
-                        : editMode
+                        : canConfirm && needsReason
+                          ? "Falta el motivo →"
+                          : editMode
                           ? `Ver vista previa y reintentar ${editMode.branchCode}`
                           : "Revisar y confirmar"}
                 </Button>
