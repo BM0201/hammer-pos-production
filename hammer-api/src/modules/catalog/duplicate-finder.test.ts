@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   normalizeForDuplicateMatch,
   diceCoefficient,
+  duplicateNameSimilarity,
   suggestPrimary,
   findDuplicateCandidates,
   dismissedPairKey,
@@ -93,12 +94,39 @@ test("findDuplicateCandidates — par parecido, misma categoría+unidad: aparece
   assert.equal(pairs[0].similarity, 1);
 });
 
-test("findDuplicateCandidates — misma categoría pero DISTINTA unidad: no se comparan (bloques separados)", () => {
+test("findDuplicateCandidates — DISTINTA unidad: se sugiere igual (la fusión pide confirmar la unidad)", () => {
   const products = [
     product({ id: "a", name: "Cemento Canal", categoryId: "cat-1", unit: "SACO" }),
     product({ id: "b", name: "Cemento Canal", categoryId: "cat-1", unit: "KG" }),
   ];
-  assert.equal(findDuplicateCandidates(products).length, 0);
+  assert.equal(findDuplicateCandidates(products).length, 1);
+});
+
+// Caso real 2026-11-06: el mismo galón cargado en Pinturas y en Ferretería con
+// las palabras en otro orden y "GL" de más — nunca se comparaban.
+test("findDuplicateCandidates — DISTINTA categoría, palabras en otro orden y una de más: aparece", () => {
+  const products = [
+    product({ id: "pin", name: "FASTYL SUR VERDE OXIDO 1/4 GL", categoryId: "pinturas", unit: "UNIDAD" }),
+    product({ id: "fer", name: "SUR FASTYL VERDE OXIDO 1/4", categoryId: "ferreteria", unit: "UNIDAD" }),
+  ];
+  const pairs = findDuplicateCandidates(products);
+  assert.equal(pairs.length, 1);
+  assert.ok(pairs[0].similarity > 0.9);
+});
+
+test("duplicateNameSimilarity — otra medida, otro color u otra presentación NO son duplicados", () => {
+  assert.equal(duplicateNameSimilarity("SUR FASTYL VERDE OXIDO 1/4", "SUR FASTYL VERDE OXIDO GL"), null, "1/4 vs galón");
+  assert.equal(duplicateNameSimilarity("FASTYL SUR VERDE OXIDO 1/4 GL", "SUR FASTYL VERDE OXIDO GL"), null, "la palabra de más es una medida");
+  assert.equal(duplicateNameSimilarity("SUR FASTYL ROJO OXIDO 1/4", "SUR FASTYL VERDE OXIDO 1/4"), null, "otro color (antes daba 0.8 y se sugería)");
+  assert.equal(duplicateNameSimilarity("SUR FASTYL NEGRO 1/4", "SUR FASTYL NEGRO GALON"), null);
+  assert.equal(duplicateNameSimilarity("Cemento Canal 42.5kg", "Cemento Canal 50kg"), null);
+  assert.equal(duplicateNameSimilarity("SUR FASTYL", "SUR FASTYL ROJO OXIDO GL"), null, "contención con muy poco en común");
+});
+
+test("duplicateNameSimilarity — mismo producto: otro orden, palabra de más o error de tipeo", () => {
+  assert.equal(duplicateNameSimilarity("SUR FASTYL VERDE OXIDO 1/4", "fastyl sur verde óxido 1/4"), 1);
+  assert.ok((duplicateNameSimilarity("SUR FASTYL NEGRO 1/4", "SUR FASTYL NEGRO 1/4 GL") ?? 0) > 0.8);
+  assert.ok((duplicateNameSimilarity("SUR FASTYL VERDE OXIDO 1/4", "SUR FASTYL VERDE OXIDOO 1/4") ?? 0) >= 0.8, "OXIDO/OXIDOO");
 });
 
 test("findDuplicateCandidates — nombres distintos: no aparecen (por debajo del umbral)", () => {

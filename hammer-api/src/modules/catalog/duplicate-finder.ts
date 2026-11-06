@@ -114,39 +114,75 @@ export function dismissedPairKey(productAId: string, productBId: string): Dismis
   return [productAId, productBId].sort().join(":");
 }
 
+/** Contención (una incluye todas las palabras de la otra) pide al menos esto de parecido: "SUR FASTYL" no es duplicado de "SUR FASTYL ROJO OXIDO GL". */
+export const CONTAINMENT_MIN_SIMILARITY = 0.6;
+
+function levenshtein(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    const curr = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = curr;
+  }
+  return prev[b.length];
+}
+
+/** OXIDO/OXIDOO sí; ROJO/ROSA o ROJO/VERDE no — esos son otro producto. */
+function looksLikeTypo(a: string, b: string): boolean {
+  if (Math.min(a.length, b.length) < 4) return false;
+  return levenshtein(a, b) <= (Math.min(a.length, b.length) >= 7 ? 2 : 1);
+}
+
 /**
- * Candidatos a duplicado: compara DENTRO de cada bloque (misma categoría +
- * misma unidad — comparar entre categorías distintas no tiene sentido y
- * multiplicaría el costo por nada) y descarta los pares ya marcados "no son
- * duplicados" por un humano. O(n²) DENTRO de cada bloque, nunca entre
- * bloques — el catálogo real tiene pocas decenas de productos por
- * categoría+unidad, no miles.
+ * ¿Mismo producto escrito distinto? Devuelve el parecido (Dice) o null.
+ * Las palabras que NO comparten deciden, no un umbral ciego (0.8 marcaba
+ * "SUR FASTYL ROJO OXIDO 1/4" ≈ "SUR FASTYL VERDE OXIDO 1/4"):
+ *  - una palabra distinta con dígitos (1/4 vs nada, 42.5KG vs 50KG) = otra medida → no;
+ *  - una contiene todas las palabras de la otra, en cualquier orden ("SUR FASTYL
+ *    VERDE OXIDO 1/4" ⊂ "FASTYL SUR VERDE OXIDO 1/4 GL") → sí;
+ *  - todo igual salvo UNA palabra que parece error de tipeo → sí.
+ */
+function tokenMatch(tokensA: Set<string>, tokensB: Set<string>): number | null {
+  const onlyA = [...tokensA].filter((t) => !tokensB.has(t));
+  const onlyB = [...tokensB].filter((t) => !tokensA.has(t));
+  const shared = tokensA.size - onlyA.length;
+  if (shared === 0) return null;
+  if (onlyA.length === 0 && onlyB.length === 0) return 1;
+  if ([...onlyA, ...onlyB].some((t) => /\d/.test(t))) return null;
+  const similarity = (2 * shared) / (tokensA.size + tokensB.size);
+  if ((onlyA.length === 0 || onlyB.length === 0) && shared >= 2 && similarity >= CONTAINMENT_MIN_SIMILARITY) return similarity;
+  if (onlyA.length === 1 && onlyB.length === 1 && similarity >= DUPLICATE_SIMILARITY_THRESHOLD && looksLikeTypo(onlyA[0], onlyB[0])) return similarity;
+  return null;
+}
+
+export function duplicateNameSimilarity(a: string, b: string): number | null {
+  return tokenMatch(tokenize(normalizeForDuplicateMatch(a)), tokenize(normalizeForDuplicateMatch(b)));
+}
+
+/**
+ * Candidatos a duplicado en TODO el catálogo activo: antes solo se comparaba
+ * dentro de misma categoría+unidad, y el duplicado típico es justo el que se
+ * creó en otra categoría ("FASTYL SUR VERDE OXIDO 1/4 GL" en Pinturas vs "SUR
+ * FASTYL VERDE OXIDO 1/4" en Ferretería). Unidad distinta no bloquea la
+ * sugerencia: la fusión ya pide confirmarla (UNIT_MISMATCH). Tokens una sola
+ * vez por producto; ~1,300 productos = ~850k pares de conjuntos chicos, ms.
  */
 export function findDuplicateCandidates(
   products: DuplicateCandidateProduct[],
   dismissedPairs: Set<DismissedPairKey> = new Set(),
 ): DuplicateCandidatePair[] {
-  const blocks = new Map<string, DuplicateCandidateProduct[]>();
-  for (const product of products) {
-    const key = `${product.categoryId}::${product.unit}`;
-    const block = blocks.get(key) ?? [];
-    block.push(product);
-    blocks.set(key, block);
-  }
-
+  const tokens = products.map((p) => tokenize(normalizeForDuplicateMatch(p.name)));
   const pairs: DuplicateCandidatePair[] = [];
-  for (const block of blocks.values()) {
-    for (let i = 0; i < block.length; i += 1) {
-      for (let j = i + 1; j < block.length; j += 1) {
-        const productA = block[i];
-        const productB = block[j];
-        if (dismissedPairs.has(dismissedPairKey(productA.id, productB.id))) continue;
-
-        const similarity = diceCoefficient(productA.name, productB.name);
-        if (similarity >= DUPLICATE_SIMILARITY_THRESHOLD) {
-          pairs.push({ productA, productB, similarity, suggestedPrimaryId: suggestPrimary(productA, productB) });
-        }
-      }
+  for (let i = 0; i < products.length; i += 1) {
+    for (let j = i + 1; j < products.length; j += 1) {
+      const productA = products[i];
+      const productB = products[j];
+      const similarity = tokenMatch(tokens[i], tokens[j]);
+      if (similarity === null) continue;
+      if (dismissedPairs.has(dismissedPairKey(productA.id, productB.id))) continue;
+      pairs.push({ productA, productB, similarity, suggestedPrimaryId: suggestPrimary(productA, productB) });
     }
   }
 

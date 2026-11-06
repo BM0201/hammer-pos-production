@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { normalizeManualSku } from "@/modules/catalog/sku-generator";
 import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
+import { normalizePresentationUnit } from "@/modules/catalog/presentation-units";
 
 /**
  * prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados.
@@ -206,7 +207,8 @@ export async function previewMerge(
   // de quien ve los dos productos y decide que las cantidades SÍ son
   // comparables 1:1 (no hay fusión de stock-group de por medio: eso ya se
   // bloquea aparte, abajo).
-  if (survivor.unit !== merged.unit && !input.confirmUnitMismatch) {
+  // UN y UNIDAD son la misma unidad (alias del alta vieja): no es una diferencia que confirmar.
+  if (normalizePresentationUnit(survivor.unit) !== normalizePresentationUnit(merged.unit) && !input.confirmUnitMismatch) {
     blockers.push({
       code: "UNIT_MISMATCH",
       message: `Unidad distinta: ${survivor.sku} usa "${survivor.unit}", ${merged.sku} usa "${merged.unit}". Confirmá que las cantidades son equivalentes antes de continuar.`,

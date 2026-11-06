@@ -277,6 +277,12 @@ test("previewMerge — unidad distinta sin confirmar: bloquea", async () => {
   assert.ok(preview.blockers.some((b) => b.code === "UNIT_MISMATCH"));
 });
 
+test("previewMerge — UN vs UNIDAD es la misma unidad (alias): no pide confirmar", async () => {
+  const { db } = buildFakeDb({ survivor: { ...SURVIVOR, unit: "UNIDAD" }, merged: { ...MERGED, unit: "UN" } });
+  const preview = await previewMerge({ survivingProductId: SURVIVOR.id, mergedProductId: MERGED.id }, db);
+  assert.ok(!preview.blockers.some((b) => b.code === "UNIT_MISMATCH"));
+});
+
 test("previewMerge — unidad distinta CONFIRMADA: ya no bloquea por esa razón", async () => {
   const { db } = buildFakeDb({ survivor: SURVIVOR, merged: { ...MERGED, unit: "UN" } });
   const preview = await previewMerge({ survivingProductId: SURVIVOR.id, mergedProductId: MERGED.id, confirmUnitMismatch: true }, db);
