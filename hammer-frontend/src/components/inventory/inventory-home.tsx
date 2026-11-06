@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import { useSearchParams } from "next/navigation";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { DollarSign, Box, CircleMinus, Hourglass, Tag, Pause, Package, ScanLine, Plus, Boxes, ClipboardCheck } from "lucide-react";
+import { ChevronRight, Package, ScanLine, Plus, Boxes, ClipboardCheck } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useInventoryScope } from "@/hooks/use-inventory-scope";
 import { money, money0, moneyCompact, qty, fmtDate } from "@/lib/format";
@@ -148,10 +148,10 @@ export function InventoryHome() {
     </div>
   );
 
+  // Franja única (mismo estilo que el perfil de producto); cada número con problema abre la lista que lo explica.
   const kpis = (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+    <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] md:grid-cols-3">
       <HomeKpiCard
-        icon={DollarSign}
         label="Valor a costo"
         value={moneyCompact(overview.totalValueAtCost)}
         exactTooltip={money(overview.totalValueAtCost)}
@@ -159,30 +159,29 @@ export function InventoryHome() {
         subline={`Con costo: ${withCost.toLocaleString("es-NI")} de ${overview.activeProducts.toLocaleString("es-NI")} productos`}
       />
       <HomeKpiCard
-        icon={Box}
         label="Productos activos"
         value={qty(overview.activeProducts)}
         tone="neutral"
         subline={`${overview.createdThisMonth.toLocaleString("es-NI")} creados este mes`}
+        href="/app/master/catalog-inventory?tab=products"
       />
       <HomeKpiCard
-        icon={CircleMinus}
         label="Stock negativo"
         value={qty(overview.negativeStock)}
         tone={kpiTone("negativeStock", overview.negativeStock)}
         subline={overview.negativeStock > 0 ? "Revisar antes de vender" : "Sin problemas"}
         sublineOk={overview.negativeStock === 0}
+        href={overview.negativeStock > 0 ? "/app/master/catalog-inventory?tab=stock&filter=NEGATIVE_STOCK" : undefined}
       />
       <HomeKpiCard
-        icon={Hourglass}
         label="Por agotarse"
         value={qty(overview.lowStock)}
         tone={kpiTone("lowStock", overview.lowStock)}
         subline={overview.lowStock > 0 ? "Podrían quedarse sin stock pronto" : "Sin problemas"}
         sublineOk={overview.lowStock === 0}
+        href={overview.lowStock > 0 ? "/app/master/catalog-inventory?tab=stock&filter=LOW_STOCK" : undefined}
       />
       <HomeKpiCard
-        icon={Tag}
         label="Sin costo o sin precio"
         value={qty(overview.noCostOrPrice)}
         tone={kpiTone("noCostOrPrice", overview.noCostOrPrice)}
@@ -194,9 +193,9 @@ export function InventoryHome() {
               : `${overview.noCostOrPrice.toLocaleString("es-NI")} productos`
         }
         sublineOk={overview.noCostOrPrice === 0}
+        href={overview.noCostOrPrice > 0 ? "/app/master/catalog-inventory?tab=products&filter=NO_COST" : undefined}
       />
       <HomeKpiCard
-        icon={Pause}
         label="Sin movimiento 90 días"
         value={qty(overview.noMovement90d.count)}
         tone="neutral"
@@ -343,48 +342,39 @@ function AttentionItemRow({ item }: { item: AttentionItem }) {
   );
 }
 
-const KPI_TONE_BORDER: Record<KpiTone, string> = {
-  neutral: "border-[var(--color-border-strong)]",
-  danger: "border-[var(--color-danger-300)]",
-  warning: "border-[var(--color-warning-300)]",
-};
 const KPI_TONE_TEXT: Record<KpiTone, string> = {
   neutral: "text-[var(--color-text)]",
-  danger: "text-[var(--color-danger-600)]",
-  warning: "text-[var(--color-warning-500)]",
-};
-const KPI_TONE_ICON: Record<KpiTone, string> = {
-  neutral: "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]",
-  danger: "bg-[var(--color-danger-100)] text-[var(--color-danger-600)]",
-  warning: "bg-[var(--color-warning-100)] text-[var(--color-warning-600)]",
+  danger: "text-[var(--color-danger-700)]",
+  warning: "text-[var(--color-warning-700)]",
 };
 
-function HomeKpiCard({ icon: Icon, label, value, exactTooltip, subline, sublineOk, tone }: {
-  icon: typeof DollarSign;
+/** Celda de la franja de KPIs. Con href es un enlace a la lista filtrada (sin href, solo lectura). */
+function HomeKpiCard({ label, value, exactTooltip, subline, sublineOk, tone, href }: {
   label: string;
   value: string;
   exactTooltip?: string;
   subline: string;
   sublineOk?: boolean;
   tone: KpiTone;
+  href?: string;
 }) {
-  return (
-    <div className={`rounded-xl border p-4 ${KPI_TONE_BORDER[tone]}`}>
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-medium text-[var(--color-text-secondary)]">{label}</p>
-        <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${KPI_TONE_ICON[tone]}`}>
-          <Icon className="h-3.5 w-3.5" />
-        </span>
-      </div>
-      <p
-        className={`mt-1 font-bold leading-tight ${KPI_TONE_TEXT[tone]}`}
-        style={{ fontSize: "clamp(1.1rem, 2.4vw, 1.5rem)" }}
-        title={exactTooltip}
-      >
+  const body = (
+    <>
+      <p className="flex items-center justify-between gap-2 text-xs font-semibold text-[var(--color-text-muted)]">
+        {label}
+        {href ? <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-60" aria-hidden="true" /> : null}
+      </p>
+      <p className={`mt-0.5 text-xl font-extrabold tabular-nums leading-tight ${KPI_TONE_TEXT[tone]}`} title={exactTooltip}>
         {value}
       </p>
-      <p className={`mt-1 text-xs ${sublineOk ? "text-[var(--color-success-600)]" : "text-[var(--color-text-muted)]"}`}>{subline}</p>
-    </div>
+      <p className={`mt-0.5 text-xs ${sublineOk ? "text-[var(--color-success-700)]" : "text-[var(--color-text-soft)]"}`}>{subline}</p>
+    </>
+  );
+  const cell = "-mb-px -mr-px block min-w-0 border-b border-r border-[var(--color-border)] px-4 py-3";
+  return href ? (
+    <Link href={href as Route} className={`${cell} transition-colors hover:bg-[var(--color-surface-alt)]`}>{body}</Link>
+  ) : (
+    <div className={cell}>{body}</div>
   );
 }
 

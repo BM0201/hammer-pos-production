@@ -164,9 +164,9 @@ export function WacHistoryTab({ productId, branches }: { productId: string; bran
 
           {/* ── Línea de tiempo ── */}
           <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
-            <div className="hm-card-header-green px-5 py-3 flex items-center gap-2">
+            <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] text-[var(--color-text)] px-5 py-3 flex items-center gap-2">
               <History className="h-5 w-5" />
-              <h2 className="font-semibold">Cómo se formó el costo promedio</h2>
+              <h2 className="font-semibold" style={{ fontSize: "0.9375rem" }}>Cómo se formó el costo promedio</h2>
               <span className="ml-auto text-xs opacity-80">{data.rows.length} filas</span>
             </div>
             {data.rows.length === 0 ? (

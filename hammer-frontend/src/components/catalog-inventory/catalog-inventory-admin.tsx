@@ -7,7 +7,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
-  AlertTriangle, BarChart3, Boxes, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
+  AlertTriangle, BarChart3, Boxes, Check, ChevronDown, ChevronLeft, ChevronRight, MoreHorizontal, Power,
   CheckCircle2, Copy, DollarSign, Download, FileSpreadsheet, FileUp, History, Info, Loader2, Merge, Package, Pencil,
   Plus, RefreshCcw, Save, ScanLine, Search, Settings2, Shuffle, Sparkles, Tags, Trash2,
   TrendingUp, Wand2, X, Zap,
@@ -379,6 +379,53 @@ function effectivePriceAndMargin(product: ProductRow, costBranchId: string | nul
 }
 
 /* ── Pagination Bar ── */
+/** Lista: un filtro a la vez — los mismos valores de ?filter= que ya entiende el backend. */
+const LIST_FILTER_CHIPS = [
+  { value: "NO_COST", label: "Sin costo" },
+  { value: "NO_PRICE", label: "Sin precio" },
+  { value: "NO_CODE", label: "Sin código" },
+  { value: "LOW_STOCK", label: "Stock bajo" },
+] as const;
+
+const MARGIN_TEXT: Record<ReturnType<typeof marginBadgeVariant>, string> = {
+  neutral: "text-[var(--color-text-soft)]",
+  danger: "text-[var(--color-danger-700)]",
+  warning: "text-[var(--color-warning-700)]",
+  success: "text-[var(--color-success-700)]",
+};
+
+const ICON_BUTTON = "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-border)] hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-text)] aria-expanded:border-[var(--color-border)] aria-expanded:bg-[var(--color-surface-alt)]";
+const MENU_ITEM_BASE = "flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium disabled:opacity-50";
+const MENU_ITEM = `${MENU_ITEM_BASE} text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]`;
+const MENU_ITEM_DANGER = `${MENU_ITEM_BASE} text-[var(--color-danger-700)] hover:bg-[var(--color-danger-50)]`;
+
+/** Menú ⋯ / desplegable: se cierra al elegir, al tocar afuera o con Escape. */
+function ActionMenu({ label, trigger, triggerClassName = ICON_BUTTON, children }: { label: string; trigger: React.ReactNode; triggerClassName?: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  return (
+    // text-xs en el contenedor: globals.css hace `button { font: inherit }` fuera de capa y le gana a text-xs en el botón.
+    <div ref={ref} className="relative text-xs">
+      <button type="button" aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)} className={triggerClassName}>
+        {trigger}
+      </button>
+      {open ? (
+        <div role="menu" onClick={() => setOpen(false)} className="absolute right-0 top-full z-30 mt-1 min-w-[12.5rem] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl">
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PaginationBar({ pagination, onPageChange }: { pagination: Pagination; onPageChange: (p: number) => void }) {
   const { page, totalPages, total } = pagination;
   if (totalPages <= 1) return null;
@@ -829,22 +876,66 @@ export function CatalogInventoryAdmin() {
           llegó desde "Ver los N resultados", el texto buscado con su ✕.
           Cada control en su propio contenedor de ancho fijo: .hm-input
           declara width:100% y sin eso ocupaba la fila entera. */}
-      <div className="flex flex-wrap items-end gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {q.trim() ? (
+          <span className="inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--color-master-300)] bg-[var(--color-master-50)] pl-3 pr-1 text-sm font-medium text-[var(--color-master-700)]">
+            <Search className="h-3.5 w-3.5" />
+            Resultados para «{q.trim()}»
+            <button type="button" onClick={clearSearch} aria-label="Quitar búsqueda" className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-[var(--color-master-100)]">
+              <X className="h-4 w-4" />
+            </button>
+          </span>
+        ) : null}
         <div className="w-[170px]">
-          <label htmlFor="cat-category" className="mb-1 block text-xs" style={{ color: "var(--color-text-muted)" }}>Categoría</label>
-          <select id="cat-category" className="hm-input h-10" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}>
+          <label htmlFor="cat-category" className="sr-only">Categoría</label>
+          <select id="cat-category" className="hm-input h-9" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}>
             <option value="">Todas las categorías</option>
             {data?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
           </select>
         </div>
-        {q.trim() ? (
-          <span className="inline-flex h-10 items-center gap-2 rounded-lg border border-[var(--color-master-300)] bg-[var(--color-master-50)] pl-3 pr-1 text-sm text-[var(--color-master-700)]">
-            <Search className="h-3.5 w-3.5" />
-            Resultados para «{q.trim()}»
-            <button type="button" onClick={clearSearch} aria-label="Quitar búsqueda" className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-[var(--color-master-100)]">
-              <X className="h-4 w-4" />
-            </button>
-          </span>
+        {/* Lista: un filtro a la vez (el backend acepta uno), como chips —
+            antes "Sin código" era un botón suelto y el resto vivía en otra pestaña. */}
+        {data && tab === "products" ? (
+          <>
+            {LIST_FILTER_CHIPS.map((chip) => (
+              <button
+                key={chip.value}
+                type="button"
+                className="hm-kpi-filter h-9 items-center!"
+                data-active={filter === chip.value}
+                aria-pressed={filter === chip.value}
+                onClick={() => { setFilter((prev) => (prev === chip.value ? "" : chip.value)); setPage(1); }}
+              >
+                {chip.label}
+              </button>
+            ))}
+            <span className="flex-1" />
+            <span className="text-xs tabular-nums text-[var(--color-text-muted)]">
+              {qty(data.pagination?.total ?? data.products.length)} productos
+            </span>
+            <ActionMenu
+              label="Nuevo producto"
+              triggerClassName="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]"
+              trigger={<><Plus className="h-4 w-4" /> Nuevo producto <ChevronDown className="h-3.5 w-3.5" /></>}
+            >
+              <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => setShowCreateForm(true)}>
+                <Pencil className="h-3.5 w-3.5" /> Crear a mano
+              </button>
+              {/* prompt-alta-productos-qr.md Fase 2 — alta en serie con lector USB/Bluetooth: pantalla aparte (flujo secuencial). */}
+              <Link href={"/app/master/catalog/products/quick-add" as Route} role="menuitem" className={MENU_ITEM}>
+                <ScanLine className="h-3.5 w-3.5" /> Escanear productos
+              </Link>
+            </ActionMenu>
+            {/* Borrar todo el catálogo: solo sin filtros — el backend compara
+                expectedCount contra el total real y el conteo filtrado no coincidiría. */}
+            {totalProductCount > 0 && !q.trim() && !categoryId && !filter ? (
+              <ActionMenu label="Más acciones de la lista" trigger={<MoreHorizontal className="h-4 w-4" />}>
+                <button type="button" role="menuitem" className={MENU_ITEM_DANGER} onClick={() => { setMassDeleteConfirmation(""); setShowMassDeleteDialog(true); }}>
+                  <Trash2 className="h-3.5 w-3.5" /> Borrar todo el catálogo…
+                </button>
+              </ActionMenu>
+            ) : null}
+          </>
         ) : null}
       </div>
 
@@ -881,45 +972,15 @@ export function CatalogInventoryAdmin() {
       {/* ════════════ TAB: PRODUCTOS (con edición inline) ════════════ */}
       {data && tab === "products" ? (
         <>
-        {/* prompt-alta-productos-qr.md Fase 2 — alta en serie con lector
-            USB/Bluetooth (escribe el código como teclado + Enter): pantalla
-            aparte porque el flujo es secuencial (código → ¿existe? →
-            guardar → siguiente código), no encaja en este formulario de un
-            solo producto a la vez. */}
-        <div className="flex flex-wrap items-center gap-2">
-          <Link
-            href={"/app/master/catalog/products/quick-add" as Route}
-            className="inline-flex items-center gap-2 self-start rounded-lg border border-[var(--color-master-300)] bg-[var(--color-master-50)] px-4 py-2 text-sm font-semibold text-[var(--color-master-700)] hover:bg-[var(--color-master-100)]"
-          >
-            <ScanLine className="h-4 w-4" />
-            Escanear productos
-          </Link>
-          {/* prompt-codigos-y-duplicados.md Fase 2 — mismo patrón que
-              onlyMissing/onToggleOnlyMissing de PricingPanel (NO_BRANCH_PRICE):
-              un toggle en la pestaña donde realmente importa, no otro valor
-              más perdido en el select genérico de la pestaña Existencias. */}
-          <Button
-            variant={filter === "NO_CODE" ? "primary" : "secondary"}
-            size="sm"
-            onClick={() => { setFilter((prev) => (prev === "NO_CODE" ? "" : "NO_CODE")); setPage(1); }}
-          >
-            {filter === "NO_CODE" ? "Mostrando: sin código" : "Sin código"}
-          </Button>
-        </div>
-        {/* ── Panel para crear producto manual ── */}
+        {/* ── Crear producto a mano: se abre desde "Nuevo producto ▾" ── */}
+        {showCreateForm ? (
         <Card noPadding>
-          <div className="hm-card-header-green">
-            <button
-              type="button"
-              className="flex items-center gap-2 text-sm font-semibold w-full"
-              onClick={() => setShowCreateForm(!showCreateForm)}
-            >
-              <Plus className="h-4 w-4" />
-              Crear producto manualmente
-              {showCreateForm ? <ChevronUp className="h-4 w-4 ml-auto" /> : <ChevronDown className="h-4 w-4 ml-auto" />}
+          <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3">
+            <p className="text-sm font-semibold text-[var(--color-text)]">Nuevo producto</p>
+            <button type="button" onClick={() => setShowCreateForm(false)} aria-label="Cerrar" className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]">
+              <X className="h-4 w-4" />
             </button>
           </div>
-          {showCreateForm && (
             <div className="p-5 space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <Input
@@ -1071,41 +1132,32 @@ export function CatalogInventoryAdmin() {
                 </Button>
               </div>
             </div>
-          )}
         </Card>
+        ) : null}
 
-        <Card noPadding>
-          <div className="hm-card-header-blue flex items-center justify-between">
-            <h2 className="text-sm font-semibold flex items-center gap-2"><Package className="h-4 w-4" /> Productos ({data.pagination?.total ?? data.products.length})</h2>
-            {totalProductCount > 0 && (
-              <Button variant="danger" size="sm" onClick={() => { setMassDeleteConfirmation(""); setShowMassDeleteDialog(true); }} icon={<Trash2 className="h-3.5 w-3.5" />}>
-                Borrar todos
-              </Button>
-            )}
-          </div>
-
-          {/* ── Diálogo de confirmación de borrado masivo ── */}
+          {/* ── Diálogo de confirmación de borrado masivo (desde el menú ⋯ de la lista) ── */}
           {showMassDeleteDialog && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-fade-in">
-              <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden animate-scale-in">
-                <div className="hm-card-header-red px-5 py-3.5">
-                  <h3 className="text-white font-bold flex items-center gap-2 relative z-10"><AlertTriangle className="h-5 w-5" /> Borrado masivo de productos</h3>
+              <div role="dialog" aria-modal="true" aria-labelledby="mass-delete-title" className="max-w-md w-full mx-4 overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl animate-scale-in">
+                <div className="border-b border-[var(--color-border)] px-5 py-3.5">
+                  <h3 id="mass-delete-title" className="flex items-center gap-2 font-bold text-[var(--color-danger-700)]"><AlertTriangle className="h-5 w-5" /> Borrar todo el catálogo</h3>
                 </div>
                 <div className="p-5 space-y-4">
-                  <p className="text-sm text-gray-700">
-                    Esta acción eliminará <strong className="text-red-600">{totalProductCount} productos</strong> y todos sus datos asociados (inventario, movimientos, ventas, configuraciones).
+                  <p className="text-sm text-[var(--color-text-secondary)]">
+                    Esta acción eliminará <strong className="text-[var(--color-danger-700)]">{totalProductCount} productos</strong> y todos sus datos asociados (inventario, movimientos, ventas, configuraciones).
                   </p>
-                  <p className="text-sm text-gray-700 font-semibold">
+                  <p className="text-sm font-semibold text-[var(--color-text-secondary)]">
                     Esta acción es irreversible.
                   </p>
                   <div>
-                    <label className="block text-xs font-bold text-gray-600 mb-1.5">
+                    <label htmlFor="mass-delete-confirm" className="mb-1.5 block text-xs font-bold text-[var(--color-text-muted)]">
                       Para confirmar, escriba exactamente:
                     </label>
-                    <p className="mb-2 rounded bg-red-50 border border-red-200 px-3 py-2 text-sm font-mono text-red-700 select-all">
+                    <p className="mb-2 select-all rounded border border-[var(--color-danger-100)] bg-[var(--color-danger-50)] px-3 py-2 font-mono text-sm text-[var(--color-danger-700)]">
                       {massDeletePhrase}
                     </p>
                     <Input
+                      id="mass-delete-confirm"
                       value={massDeleteConfirmation}
                       onChange={(e) => setMassDeleteConfirmation(e.target.value)}
                       placeholder="Escriba la frase de confirmación..."
@@ -1135,48 +1187,78 @@ export function CatalogInventoryAdmin() {
             </div>
           )}
 
-          <div className="overflow-x-auto">
-            <table className="hm-table min-w-[1100px] w-full">
+        <Card noPadding>
+          {/* Celular: filas apiladas (nombre, stock, precio); tocar abre el perfil. */}
+          <div className="md:hidden">
+            {data.products.map((product) => {
+              const sharedStock = formatSharedStock(product);
+              const { price: rowEffectivePrice, margin: rowMarginPercent } = effectivePriceAndMargin(product, data.costBranchId);
+              return (
+                <Link key={product.id} href={`/app/master/catalog-inventory/products/${product.id}` as Route} className={`hm-row-dense ${product.isActive ? "" : "opacity-60"}`}>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-[var(--color-text)]">{product.name}</p>
+                    <p className="truncate font-mono text-[0.7rem] text-[var(--color-text-soft)]">{product.sku}{product.isActive ? "" : " · inactivo"}</p>
+                  </div>
+                  <div className="shrink-0 text-right text-xs tabular-nums">
+                    <p className="font-semibold text-[var(--color-text)]">{formatCostOrDash(rowEffectivePrice)}</p>
+                    <p className="text-[var(--color-text-muted)]">
+                      {sharedStock?.primary ?? `${qty(product.totalStock)} ${product.stockConversion?.saleUnit ?? product.unit}`}
+                      {rowMarginPercent !== null ? <span className={`ml-1.5 ${MARGIN_TEXT[marginBadgeVariant(rowMarginPercent)]}`}>{formatMarginOrDash(rowMarginPercent)}</span> : null}
+                    </p>
+                  </div>
+                </Link>
+              );
+            })}
+            {data.products.length === 0 ? <p className="py-6 text-center text-sm text-[var(--color-text-muted)]">No hay productos que coincidan con los filtros.</p> : null}
+          </div>
+
+          <div className="hidden overflow-x-auto md:block">
+            <table className="hm-sheet-table min-w-[860px]">
               <thead>
                 <tr>
-                  <th>SKU</th><th>Producto</th><th>Categoria</th><th>Unidad principal</th><th>Stock resumen</th>
+                  <th>Producto</th><th>Categoría</th><th className="text-right!">Stock</th>
                   {/* docs/COSTO-UNA-FUENTE.md, C.1/C.3 — con sucursal elegida, el
                       encabezado la nombra (igual que "PRECIO DE VENTA · RIV" en
                       Precios y costos); sin ninguna, un ícono con tooltip explica
                       por qué la columna está vacía en vez de dejarlo sin decir. */}
-                  <th title={data.costScope === "NETWORK" ? "Elegí una sucursal para ver costos y precios" : undefined}>
+                  <th className="text-right!" title={data.costScope === "NETWORK" ? "Elegí una sucursal para ver costos y precios" : undefined}>
                     Costo{data.costScope === "BRANCH" && costBranchCode ? ` · ${costBranchCode}` : ""}
                     {data.costScope === "NETWORK" ? (
                       <Info className="ml-1 inline h-3 w-3 align-text-top" style={{ color: "var(--color-text-muted)" }} />
                     ) : null}
                   </th>
-                  <th title={data.costScope === "NETWORK" ? "Elegí una sucursal para ver costos y precios" : undefined}>
+                  <th className="text-right!" title={data.costScope === "NETWORK" ? "Elegí una sucursal para ver costos y precios" : undefined}>
                     Precio{data.costScope === "BRANCH" && costBranchCode ? ` · ${costBranchCode}` : ""}
                     {data.costScope === "NETWORK" ? (
                       <Info className="ml-1 inline h-3 w-3 align-text-top" style={{ color: "var(--color-text-muted)" }} />
                     ) : null}
                   </th>
-                  <th>Margen</th>
-                  <th>Estado</th><th className="text-right">Acciones</th>
+                  <th className="text-right!">Margen</th>
+                  <th><span className="sr-only">Acciones</span></th>
                 </tr>
               </thead>
               <tbody>
                 {data.products.map((product) => {
                   const sharedStock = formatSharedStock(product);
                   const { price: rowEffectivePrice, margin: rowMarginPercent } = effectivePriceAndMargin(product, data.costBranchId);
+                  const profileHref = `/app/master/catalog-inventory/products/${product.id}`;
                   return (
-                  <tr key={product.id}>
-                    <td>
-                      <span className="font-semibold">{product.sku}</span>
-                      {/* prompt-codigos-y-duplicados.md Fase 2 — no se agrega
-                          el código al editor inline (editDraft no lo toca):
-                          se gestiona desde la ficha, donde el historial y el
-                          chequeo de duplicados tienen contexto completo. */}
-                      <div className="relative mt-1 flex items-center gap-1.5 text-[0.68rem]">
+                  <tr
+                    key={product.id}
+                    // La fila entera abre el perfil (antes era el botón "Ver"); los controles de adentro siguen siendo suyos.
+                    onClick={(event) => { if (!(event.target as HTMLElement).closest("a,button,input,select,[role=menu]")) router.push(profileHref as Route); }}
+                    className={`cursor-pointer hover:bg-[var(--color-surface-alt)] ${product.isActive ? "" : "opacity-60"}`}
+                  >
+                    <td className="max-w-[340px]">
+                      <Link href={profileHref as Route} className="block truncate font-semibold text-[var(--color-text)] hover:underline">{product.name}</Link>
+                      {/* prompt-codigos-y-duplicados.md Fase 2 — el código se gestiona
+                          desde la ficha; acá solo el menú rápido (Editar / Quitar / Ir a Códigos). */}
+                      <div className="relative mt-0.5 flex items-center gap-1.5 text-[0.68rem]">
+                        <span className="font-mono text-[var(--color-text-soft)]">{product.sku}</span>
                         <button
                           type="button"
                           onClick={() => { setCodeMenuProductId((id) => (id === product.id ? null : product.id)); setCodeMenuConfirmId(null); }}
-                          className="rounded border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-alt)]"
+                          className={`rounded border px-1.5 font-mono transition-colors hover:bg-[var(--color-surface-alt)] ${product.barcode ? "border-[var(--color-border)] text-[var(--color-text-muted)]" : "border-transparent bg-[var(--color-warning-50)] font-sans font-semibold text-[var(--color-warning-700)]"}`}
                         >
                           {product.barcode ? (
                             <>
@@ -1187,15 +1269,10 @@ export function CatalogInventoryAdmin() {
                             "Sin código"
                           )}
                         </button>
-                        <Link
-                          href={`/app/master/catalog-inventory/products/${product.id}?tab=barcodes` as Route}
-                          className="font-medium text-[var(--color-info-600)] hover:underline"
-                        >
-                          Códigos…
-                        </Link>
+                        {product.isActive ? null : <span className="rounded border border-[var(--color-border)] px-1.5 font-semibold text-[var(--color-text-muted)]">Inactivo</span>}
 
                         {codeMenuProductId === product.id && (
-                          <div className="absolute left-0 top-full z-20 mt-1 w-44 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl">
+                          <div role="menu" className="absolute left-0 top-full z-20 mt-1 w-44 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl">
                             {product.barcode ? (
                               <>
                                 <Link
@@ -1244,59 +1321,46 @@ export function CatalogInventoryAdmin() {
                         )}
                       </div>
                     </td>
-                    <td>
-                      {product.name}
+                    <td className="text-[var(--color-text-secondary)]">
+                      {product.category?.name ?? "Sin categoría"}
                     </td>
-                    <td>
-                      {product.category?.name ?? "Sin categoria"}
-                    </td>
-                    <td>
-                      {product.stockConversion?.saleUnit ?? product.unit}
-                    </td>
-                    <td>
-                      <div>{sharedStock?.primary ?? qty(product.totalStock)}</div>
+                    <td className="text-right tabular-nums">
+                      <div className={product.totalStock <= 0 ? "text-[var(--color-text-soft)]" : undefined}>
+                        {sharedStock?.primary ?? `${qty(product.totalStock)} ${product.stockConversion?.saleUnit ?? product.unit}`}
+                      </div>
                       {sharedStock ? (
-                        <div className="mt-1 space-y-1 text-[0.65rem] text-[var(--color-text-muted)]">
-                          <div>{sharedStock.secondary}</div>
-                          <div className="inline-flex rounded border border-[var(--color-border)] px-1.5 py-0.5 font-medium">
-                            {sharedStock.chip}
-                          </div>
-                        </div>
+                        <div className="mt-0.5 text-[0.65rem] text-[var(--color-text-muted)]" title={sharedStock.chip}>{sharedStock.secondary}</div>
                       ) : null}
                     </td>
-                    <td className="font-mono text-xs">{formatCostOrDash(product.effectiveCost)}</td>
-                    <td className="font-mono text-xs">{formatCostOrDash(rowEffectivePrice)}</td>
-                    <td><Badge variant={marginBadgeVariant(rowMarginPercent)}>{formatMarginOrDash(rowMarginPercent)}</Badge></td>
-                    <td><Badge variant={product.isActive ? "success" : "warning"}>{product.isActive ? "Activo" : "Inactivo"}</Badge></td>
+                    <td className="text-right font-mono text-xs">{formatCostOrDash(product.effectiveCost)}</td>
+                    <td className="text-right font-mono text-xs">{formatCostOrDash(rowEffectivePrice)}</td>
+                    <td className={`text-right text-xs font-semibold tabular-nums ${MARGIN_TEXT[marginBadgeVariant(rowMarginPercent)]}`}>{formatMarginOrDash(rowMarginPercent)}</td>
                     <td>
-                      <div className="flex justify-end gap-1.5">
-                        <>
-                          <Button variant="secondary" size="sm" onClick={() => setEditingProductId(product.id)} icon={<Pencil className="h-3.5 w-3.5" />}>Editar</Button>
-                          <Link href={`/app/master/catalog-inventory/products/${product.id}` as Route} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--color-border)] px-2 text-xs font-medium hover:bg-[var(--color-surface-alt)]">
-                            <Search className="h-3 w-3" /> Ver
+                      <div className="flex justify-end gap-1">
+                        <button type="button" onClick={() => setEditingProductId(product.id)} aria-label={`Editar ${product.name}`} title="Editar" className={ICON_BUTTON}>
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <ActionMenu label={`Más acciones de ${product.name}`} trigger={deletingProductId === product.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}>
+                          <Link href={profileHref as Route} role="menuitem" className={MENU_ITEM}>
+                            <Package className="h-3.5 w-3.5" /> Abrir perfil
                           </Link>
-                          <Link href={`/app/master/catalog-inventory/products/${product.id}?tab=pricing` as Route} className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium hover:bg-[var(--color-surface-alt)]">
-                            <DollarSign className="h-3.5 w-3.5" /> Precio
+                          <Link href={`/app/master/catalog-inventory/products/${product.id}?tab=pricing` as Route} role="menuitem" className={MENU_ITEM}>
+                            <DollarSign className="h-3.5 w-3.5" /> Cambiar precio
                           </Link>
-                          <Button variant={product.isActive ? "danger" : "success"} size="sm" onClick={() => toggleProduct(product).catch((error) => toast.error(error.message))}>
-                            {product.isActive ? "Desactivar" : "Activar"}
-                          </Button>
-                          <Button
-                            variant="danger"
-                            size="sm"
-                            onClick={() => handleDeleteProduct(product)}
-                            disabled={deletingProductId === product.id}
-                            icon={deletingProductId === product.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                          >
-                            Eliminar
-                          </Button>
-                        </>
-                    </div>
+                          <div className="my-1 border-t border-[var(--color-border)]" />
+                          <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => toggleProduct(product).catch((error) => toast.error(error.message))}>
+                            <Power className="h-3.5 w-3.5" /> {product.isActive ? "Desactivar" : "Activar"}
+                          </button>
+                          <button type="button" role="menuitem" className={MENU_ITEM_DANGER} disabled={deletingProductId === product.id} onClick={() => handleDeleteProduct(product)}>
+                            <Trash2 className="h-3.5 w-3.5" /> Eliminar…
+                          </button>
+                        </ActionMenu>
+                      </div>
                     </td>
                   </tr>
                   );
                 })}
-                {data.products.length === 0 ? <tr><td colSpan={10} className="text-center py-6 text-[var(--color-text-muted)]">No hay productos que coincidan con los filtros.</td></tr> : null}
+                {data.products.length === 0 ? <tr><td colSpan={7} className="text-center py-6 text-[var(--color-text-muted)]">No hay productos que coincidan con los filtros.</td></tr> : null}
               </tbody>
             </table>
           </div>

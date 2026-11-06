@@ -310,9 +310,9 @@ export function ProductBarcodesTab({
       ) : null}
 
       <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
-        <div className="hm-card-header-blue px-5 py-3 flex items-center gap-2">
+        <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] text-[var(--color-text)] px-5 py-3 flex items-center gap-2">
           <Barcode className="h-5 w-5" />
-          <h2 className="font-semibold">Códigos de barra</h2>
+          <h2 className="font-semibold" style={{ fontSize: "0.9375rem" }}>Códigos de barra</h2>
         </div>
 
         {rows === null ? (
