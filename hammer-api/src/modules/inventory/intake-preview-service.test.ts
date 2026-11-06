@@ -298,6 +298,38 @@ test("LA QUE IMPORTA — un miembro DERIVADO de una fusión se acepta (no es un 
   assert.equal(cell.finalQty, 128);
 });
 
+test("LA QUE IMPORTA — arena: 12 metros (×46 latas) a C$541.67 vale C$6,500, no 552 × 541.67; en LATA el costo no se divide otra vez", async () => {
+  const db = buildFakeDb({
+    products: [{ id: "lata" }, { id: "metro" }],
+    fusionMembers: [
+      { productId: "lata", stockGroupId: "arena", isCanonical: true, conversionFactor: 1, saleUnit: "UN" },
+      { productId: "metro", stockGroupId: "arena", isCanonical: false, conversionFactor: 46, saleUnit: "METRO" },
+    ],
+  });
+  const metro = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "metro", quantity: 12, unitCost: 541.67, unit: "METRO" }] }, db);
+  assert.equal(metro.cells[0].finalQty, 552);
+  assert.ok(Math.abs(metro.totals[BRANCH_1].value! - 6500.04) < 0.01, `valor ${metro.totals[BRANCH_1].value}`);
+  assert.ok(Math.abs(metro.cells[0].newWac! - 541.67 / 46) < 1e-6);
+
+  // La unidad base del fake es "UN": 12 latas a C$13.54 c/u.
+  const lata = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "metro", quantity: 12, unitCost: 13.54, unit: "UN" }] }, db);
+  assert.equal(lata.cells[0].finalQty, 12);
+  assert.ok(Math.abs(lata.cells[0].newWac! - 13.54) < 1e-6, `wac ${lata.cells[0].newWac}`);
+  assert.ok(Math.abs(lata.totals[BRANCH_1].value! - 162.48) < 0.01, `valor ${lata.totals[BRANCH_1].value}`);
+
+  // Con costo vigente C$491/metro (10.68/lata ×46), C$13.54/lata no es "precio de paquete".
+  const withCost = buildFakeDb({
+    products: [{ id: "lata" }, { id: "metro" }],
+    balances: [{ branchId: BRANCH_1, productId: "lata", quantityOnHand: 100, weightedAverageCost: 10.68 }],
+    fusionMembers: [
+      { productId: "lata", stockGroupId: "arena", isCanonical: true, conversionFactor: 1, saleUnit: "UN" },
+      { productId: "metro", stockGroupId: "arena", isCanonical: false, conversionFactor: 46, saleUnit: "METRO" },
+    ],
+  });
+  const lataVsMetro = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "metro", quantity: 12, unitCost: 13.54, unit: "UN" }] }, withCost);
+  assert.ok(!lataVsMetro.cells[0].messages.some((m) => m.code === "COST_DEVIATION"), JSON.stringify(lataVsMetro.cells[0].messages));
+});
+
 test("producto con mergedIntoProductId → PRODUCT_BLOCKED con el nombre del principal, no 'inactivo' ni 'unificado' genérico", async () => {
   const db = buildFakeDb({
     products: [{ id: "p-merged", mergedIntoProductId: "p-survivor", mergedInto: { sku: "SKU-1", name: "Producto Principal" } }],

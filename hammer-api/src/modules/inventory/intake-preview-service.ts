@@ -173,6 +173,8 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
     const canonicalProductId = conversion?.canonicalProductId ?? line.productId;
     const isBaseUnit = !!conversion && (line.unit ?? conversion.saleUnit).toUpperCase() === conversion.baseUnit.toUpperCase();
     const factor = conversion?.conversionFactor ?? new Prisma.Decimal(1);
+    // El costo tecleado es por la unidad elegida: con la base (LATA) ya es costo base, igual que createOpeningBalanceTx.
+    const enteredCostFactor = conversion && !isBaseUnit ? factor : new Prisma.Decimal(1);
 
     for (const branchId of branchIds) {
       const key = `${branchId}:${line.productId}`;
@@ -196,7 +198,7 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
             // baseMovementQty = convertSaleQtyToBaseQty(qty, factor) — acá, directo desde
             // el delta ya en base (equivalente exacto, sin round-trip) — y
             // baseMovementUnitCost = convertSaleUnitCostToBaseUnitCost(costo, factor) = costo/factor.
-            const baseUnitCost = conversion ? new Prisma.Decimal(line.unitCost!).div(factor) : new Prisma.Decimal(line.unitCost!);
+            const baseUnitCost = new Prisma.Decimal(line.unitCost!).div(enteredCostFactor);
             newWacBase = recalculateWeightedAverage({ currentQty: currentBaseQty, currentWac: currentBaseWac, movementQty: stockChange.deltaBaseQty.abs(), movementUnitCost: baseUnitCost, inbound: true }).newWac;
           } catch (error) {
             if (!(error instanceof WacValidationError)) throw error;
@@ -231,7 +233,7 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
       const costForGuard = line.unitCost != null && line.unitCost > 0 ? line.unitCost : currentEffectiveCost;
       if (kind === "ADD_STOCK" && conversion && delta > 0 && costForGuard !== null && costForGuard > 0 && currentBaseWac.lte(2)) {
         // Con la unidad base elegida, el movimiento va al canónico (factor 1), igual que createOpeningBalanceTx.
-        const movementFactor = isBaseUnit ? new Prisma.Decimal(1) : factor;
+        const movementFactor = enteredCostFactor;
         const baseUnitCost = new Prisma.Decimal(costForGuard).div(movementFactor);
         const packageFactor = conversion.conversionFactorToBase ?? movementFactor;
         const referenceSalePrice = referenceSalePricePerBaseUnit({
@@ -249,7 +251,8 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
         kind,
         quantity: resolvedQty,
         currentQty: Number(currentBaseQty),
-        enteredCost: line.unitCost ?? null,
+        // A la unidad del producto (metro), la misma de currentEffectiveCost y del precio de venta.
+        enteredCost: line.unitCost != null ? line.unitCost * Number(factor) / Number(enteredCostFactor) : null,
         currentEffectiveCost,
         lastPurchaseCost,
         newPrice: salePriceForBranch(line, branchId),
@@ -280,7 +283,10 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
 
       if (validation.status !== "ERROR" && resolvedQty !== null && delta !== 0) {
         totals[branchId].units += Math.abs(delta);
-        const costForValue = line.unitCost ?? currentEffectiveCost;
+        // delta está en unidad BASE (12 metros ×40 = 480 latas): el costo tiene que ir por unidad base también.
+        const costForValue = line.unitCost != null
+          ? line.unitCost / Number(enteredCostFactor)
+          : currentEffectiveCost !== null ? currentEffectiveCost / Number(factor) : null;
         if (costForValue !== null && costForValue > 0) {
           totals[branchId].value = (totals[branchId].value ?? 0) + Math.abs(delta) * costForValue;
         } else {
