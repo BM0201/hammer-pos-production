@@ -7,6 +7,7 @@ import {
   groupTone,
   buildNavSearchResults,
   shouldTriggerSearchShortcut,
+  searchFiltersListInPlace,
 } from "@/lib/inventory-nav-logic";
 
 // ── Commit 1 (prompt-inventario-unificado.md) — "un test de configuración
@@ -197,4 +198,20 @@ test("shouldTriggerSearchShortcut: nunca se dispara mientras se escribe en un in
   assert.equal(shouldTriggerSearchShortcut("k", true, "INPUT"), false);
   assert.equal(shouldTriggerSearchShortcut("/", false, "TEXTAREA"), false);
   assert.equal(shouldTriggerSearchShortcut("k", true, "SELECT"), false);
+});
+
+// Bug 2026-11-06: escribir "Arena" en la barra con Productos → Lista abierta
+// no filtraba la tabla — la barra solo abría el desplegable que navega.
+test("searchFiltersListInPlace: solo Productos → Lista filtra la tabla en el sitio", () => {
+  const list = "/app/master/catalog-inventory";
+  assert.equal(searchFiltersListInPlace(list, resolveActiveNav(list, "products")), true);
+  assert.equal(searchFiltersListInPlace(list, resolveActiveNav(list, "products", { q: "arena" })), true);
+  // El perfil y el alta rápida resuelven a "list" pero no tienen tabla.
+  const profile = "/app/master/catalog-inventory/products/p1";
+  assert.equal(searchFiltersListInPlace(profile, resolveActiveNav(profile, null)), false);
+  const quickAdd = "/app/master/catalog/products/quick-add";
+  assert.equal(searchFiltersListInPlace(quickAdd, resolveActiveNav(quickAdd, null)), false);
+  // Otras pestañas del mismo path siguen con el desplegable.
+  assert.equal(searchFiltersListInPlace(list, resolveActiveNav(list, "stock")), false);
+  assert.equal(searchFiltersListInPlace(list, null), false);
 });

@@ -154,6 +154,15 @@ export function resolveActiveNav(pathname: string, tab: string | null, extraPara
 }
 
 /**
+ * En Productos → Lista la barra filtra la tabla en el sitio (escribe ?q=)
+ * en vez de abrir el desplegable que navega. Solo la Lista: el perfil y el
+ * alta rápida también resuelven a "list" pero no tienen tabla que filtrar.
+ */
+export function searchFiltersListInPlace(pathname: string, active: ActiveNav): boolean {
+  return pathname === "/app/master/catalog-inventory" && active?.groupKey === "products" && active.subsectionKey === "list";
+}
+
+/**
  * prompt-inventario-unificado.md Commit 1 — arma el link de CUALQUIER
  * botón/pestaña de la barra conservando SIEMPRE el alcance de sucursal
  * (`branch`), que antes se perdía al navegar por grupo (bug #1 del doc:

@@ -13,6 +13,7 @@ import {
   buildInventoryHref,
   groupTone,
   buildNavSearchResults,
+  searchFiltersListInPlace,
   shouldTriggerSearchShortcut,
   type InventoryTone,
   type NavSearchResultGroup,
@@ -84,7 +85,24 @@ export function InventoryTopbar() {
 
   // ── Buscador ───────────────────────────────────────────────────────────
   const [searchOpen, setSearchOpen] = useState(false);
-  const [query, setQuery] = useState("");
+  // En Productos → Lista escribir filtra la tabla (?q=); antes solo abría el
+  // desplegable y la tabla seguía mostrando todo ("Arena" → 1274 filas).
+  const listMode = searchFiltersListInPlace(pathname, active);
+  const urlQuery = listMode ? (searchParams.get("q") ?? "") : "";
+  const [query, setQuery] = useState(urlQuery);
+  // El ?q= cambió desde afuera (quitar búsqueda, Atrás): la barra lo refleja,
+  // sin pisar un espacio final que el usuario está tipeando. Al salir de la
+  // Lista (abrir un perfil) la barra queda vacía en vez de arrastrar el filtro.
+  useEffect(() => {
+    setQuery((prev) => (!listMode ? "" : prev.trim() === urlQuery ? prev : urlQuery));
+  }, [listMode, urlQuery]);
+  const commitListQuery = useCallback((term: string) => {
+    if (term === urlQuery) return;
+    const params = new URLSearchParams(searchParams.toString());
+    if (term) params.set("q", term);
+    else params.delete("q");
+    router.replace(`${pathname}?${params}` as Route);
+  }, [urlQuery, searchParams, router, pathname]);
   const [results, setResults] = useState<NavSearchResultGroup[]>([]);
   const [highlighted, setHighlighted] = useState(0);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -113,6 +131,11 @@ export function InventoryTopbar() {
 
   useEffect(() => {
     const term = query.trim();
+    if (listMode) {
+      setResults([]);
+      const timer = window.setTimeout(() => commitListQuery(term), 250);
+      return () => window.clearTimeout(timer);
+    }
     if (!term) { setResults([]); lastSearchedTerm.current = ""; return; }
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
@@ -125,7 +148,7 @@ export function InventoryTopbar() {
       }
     }, 200);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [query, runSearch]);
+  }, [query, runSearch, listMode, commitListQuery]);
 
   const flatResults = useMemo(() => results.flatMap((g) => g.items), [results]);
 
@@ -149,6 +172,7 @@ export function InventoryTopbar() {
     else if (e.key === "Enter") {
       e.preventDefault();
       const term = query.trim();
+      if (listMode) { commitListQuery(term); return; } // lector USB: filtra ya, sin esperar el debounce
       if (!term) return;
       // Lector USB/Bluetooth: código completo + Enter llega antes de que el
       // debounce busque ESTE término — buscar ya mismo en vez de navegar
