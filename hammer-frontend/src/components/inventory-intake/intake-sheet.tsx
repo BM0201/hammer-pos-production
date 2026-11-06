@@ -20,6 +20,7 @@ import { parseMatrixTsvPaste, type TsvPasteProduct } from "@/lib/multi-branch-ma
 import {
   addOrFocusScannedProduct,
   applyBranchCellInput,
+  applyIntakeLinePatch,
   applySalePriceCellInput,
   buildCreateIntakeRequest,
   buildIntakePayloadLines,
@@ -397,7 +398,7 @@ export function IntakeSheet({
   }
 
   function updateLine(productId: string, patch: Partial<IntakeLine>) {
-    setLines((prev) => prev.map((l) => (l.productId === productId ? { ...l, ...patch } : l)));
+    setLines((prev) => prev.map((l) => (l.productId === productId ? applyIntakeLinePatch(l, patch) : l)));
   }
   function removeLine(productId: string) {
     setLines((prev) => prev.filter((l) => l.productId !== productId));
@@ -1296,6 +1297,7 @@ function IntakeTableRow({ line, kind, branches, branchIds, cells, lineMessages, 
             {showCost ? (
               <>
                 <Input type="number" min="0" step="0.01" className={`w-24 text-right ${costHasError ? "border-[var(--color-danger-400)]" : ""}`} value={line.unitCost || ""} onChange={(e) => onUpdate({ unitCost: e.target.value === "" ? null : Number(e.target.value) })} placeholder={kind === "OPENING_BALANCE" ? "obligatorio" : "sin cambio"} />
+                <Input type="number" min="0" step="0.01" className="mt-1 h-7 w-24 text-right text-xs" value={line.costTotal ?? ""} onChange={(e) => onUpdate({ costTotal: e.target.value === "" ? null : Number(e.target.value) })} placeholder="o total C$" aria-label={`Costo total de ${line.name}`} title="Lo que costó toda la línea; se divide entre la cantidad" />
                 {!line.unitCost ? <CostHint cells={cells} branchIds={branchIds} branches={branches} productId={line.productId} /> : null}
                 {!line.unitCost ? <CostChips cell={singleBranchId ? cells.get(cellKey(line.productId, singleBranchId)) : lineCells[0]} principalCell={principalCell} principalCode={primaryBranch?.code} onPick={(value) => onUpdate({ unitCost: value })} /> : null}
               </>
@@ -1391,6 +1393,7 @@ function IntakeCardRow({ line, kind, branches, branchIds, cells, lineMessages, p
           <label className="text-xs">
             <span className="mb-1 block text-[var(--color-text-muted)]">Costo de esta entrada</span>
             <Input type="number" min="0" step="0.01" className={`h-11 ${costHasError ? "border-[var(--color-danger-400)]" : ""}`} value={line.unitCost || ""} onChange={(e) => onUpdate({ unitCost: e.target.value === "" ? null : Number(e.target.value) })} placeholder={kind === "OPENING_BALANCE" ? "obligatorio" : "sin cambio"} />
+            <Input type="number" min="0" step="0.01" className="mt-1 h-11" value={line.costTotal ?? ""} onChange={(e) => onUpdate({ costTotal: e.target.value === "" ? null : Number(e.target.value) })} placeholder="o total C$ (se divide entre la cantidad)" aria-label={`Costo total de ${line.name}`} />
             {!line.unitCost ? <CostHint cells={cells} branchIds={branchIds} branches={branches} productId={line.productId} /> : null}
             {!line.unitCost ? <CostChips cell={singleBranchId ? cells.get(cellKey(line.productId, singleBranchId)) : lineCells[0]} principalCell={principalCell} principalCode={primaryBranch?.code} onPick={(value) => onUpdate({ unitCost: value })} /> : null}
           </label>

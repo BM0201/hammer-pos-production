@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   addOrFocusScannedProduct,
   applyBranchCellInput,
+  applyIntakeLinePatch,
   applySalePriceCellInput,
   buildCreateIntakeRequest,
   readPossibleDuplicate,
@@ -399,4 +400,18 @@ test("¿costo del paquete? revisado: solo esas filas viajan con confirmHighCost"
   const payload = buildIntakePayloadLines([line({ productId: "p1", quantity: 2, unitCost: 4200 }), line({ productId: "p2", quantity: 1, unitCost: 10 })], ["b1"], ids);
   assert.equal(payload.find((p) => p.productId === "p1")?.confirmHighCost, true);
   assert.equal(payload.find((p) => p.productId === "p2")?.confirmHighCost, undefined);
+});
+
+test("costo total: camión de 12 metros a C$7,000 → C$583.3333 por metro, y se recalcula al cambiar la cantidad", () => {
+  const base = { productId: "m", sku: "M", name: "METRO", saleUnit: "METRO", baseUnit: "LATA", hasConversion: true, conversionFactor: 46, unit: "METRO", quantity: 12, overrides: {}, unitCost: null, salePrice: null, salePriceOverrides: {} };
+  const withTotal = applyIntakeLinePatch(base, { costTotal: 7000 });
+  assert.equal(withTotal.unitCost, 583.3333);
+  assert.equal(applyIntakeLinePatch(withTotal, { quantity: 14 }).unitCost, 500);
+  assert.equal(applyIntakeLinePatch(withTotal, { quantity: null }).unitCost, null, "sin cantidad no hay costo unitario que inventar");
+  const manual = applyIntakeLinePatch(withTotal, { unitCost: 590 });
+  assert.equal(manual.unitCost, 590);
+  assert.equal(manual.costTotal, null, "escribir el unitario a mano suelta el total");
+  assert.equal(applyIntakeLinePatch(manual, { quantity: 10 }).unitCost, 590, "sin total, la cantidad no toca el costo");
+  const cleared = applyIntakeLinePatch(withTotal, { costTotal: null });
+  assert.equal(cleared.unitCost, null);
 });

@@ -33,7 +33,26 @@ export type IntakeLine = {
   salePrice: number | null;
   /** Commit 3 (prompt-entrada-reintento-precio.md) — columna "Precio de venta {sucursal}", mismo patrón que `overrides` de cantidad. */
   salePriceOverrides: Record<string, number | null>;
+  /** Lo que costó toda la línea (camión de 12 metros a C$7,000): con valor, unitCost = total ÷ cantidad. */
+  costTotal?: number | null;
 };
+
+/**
+ * Aplica un cambio de la fila manteniendo el costo total: tocar la cantidad
+ * recalcula el costo unitario; escribir el unitario a mano suelta el total.
+ * shortcut: divide por "cantidad para todas", no por los overrides de cada sucursal — sumar overrides si se cargan camiones repartidos.
+ */
+export function applyIntakeLinePatch(line: IntakeLine, patch: Partial<IntakeLine>): IntakeLine {
+  const next = { ...line, ...patch };
+  if ("unitCost" in patch && !("costTotal" in patch)) next.costTotal = null;
+  if ("costTotal" in patch && (patch.costTotal == null || patch.costTotal <= 0)) {
+    next.costTotal = null;
+    next.unitCost = null;
+  } else if (next.costTotal != null && next.costTotal > 0) {
+    next.unitCost = next.quantity && next.quantity > 0 ? Math.round((next.costTotal / next.quantity) * 10000) / 10000 : null;
+  }
+  return next;
+}
 
 export function quantityForIntakeBranch(line: IntakeLine, branchId: string): number | null {
   return branchId in line.overrides ? line.overrides[branchId] : line.quantity;
