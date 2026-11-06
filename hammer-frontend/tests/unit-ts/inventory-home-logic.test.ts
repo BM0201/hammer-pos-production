@@ -114,3 +114,10 @@ test("buildAttentionItems: tonos del punto — rojo para costo=precio/negativo/e
   assert.equal(toneByType.STALE_TRANSFERS, "warning");
   assert.equal(toneByType.FAILED_INTAKE, "danger");
 });
+
+test("buildAttentionItems: posibles duplicados aparecen con su conteo y llevan a la pestaña Duplicados", () => {
+  const items = buildAttentionItems({ ...BASE_COUNTS, noCost: 3, duplicatePairs: 62 });
+  assert.deepEqual(items.map((i) => [i.type, i.count]), [["DUPLICATES", 62], ["NO_COST", 3]]);
+  assert.equal(items[0].actionHref, "/app/master/catalog-inventory?tab=duplicates");
+  assert.deepEqual(buildAttentionItems({ ...BASE_COUNTS, duplicatePairs: 0 }), []);
+});

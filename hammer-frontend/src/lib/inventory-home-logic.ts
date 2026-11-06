@@ -55,7 +55,7 @@ export function bucketCategoryValues(categories: Array<{ name: string; value: nu
   return [...top.map((c) => ({ ...c, isOther: false })), { name: `Otras (${rest.length})`, value: otherValue, isOther: true }];
 }
 
-export type AttentionType = "NO_COST" | "NO_PRICE" | "COST_EQ_PRICE" | "NEGATIVE_STOCK" | "LOW_STOCK" | "STALE_TRANSFERS" | "FAILED_INTAKE";
+export type AttentionType = "NO_COST" | "NO_PRICE" | "COST_EQ_PRICE" | "NEGATIVE_STOCK" | "LOW_STOCK" | "STALE_TRANSFERS" | "FAILED_INTAKE" | "DUPLICATES";
 export type AttentionDotTone = "danger" | "warning" | "info";
 
 export type AttentionItem = {
@@ -69,7 +69,7 @@ export type AttentionItem = {
 };
 
 /** Mismo orden en que los lista el doc — desempata cuando dos tipos tienen el mismo conteo. */
-const ATTENTION_ORDER: AttentionType[] = ["NO_COST", "NO_PRICE", "COST_EQ_PRICE", "NEGATIVE_STOCK", "LOW_STOCK", "STALE_TRANSFERS", "FAILED_INTAKE"];
+const ATTENTION_ORDER: AttentionType[] = ["NO_COST", "NO_PRICE", "COST_EQ_PRICE", "NEGATIVE_STOCK", "LOW_STOCK", "STALE_TRANSFERS", "FAILED_INTAKE", "DUPLICATES"];
 
 export type InventoryAttentionCountsInput = {
   noCost: number;
@@ -81,6 +81,8 @@ export type InventoryAttentionCountsInput = {
   staleTransferSample: { transferNumber: string; fromBranchCode: string; toBranchCode: string } | null;
   failedIntakeLines: number;
   topMoversNoCost: number | null;
+  /** Pares de posibles duplicados (todo el catálogo, no depende de la sucursal). */
+  duplicatePairs?: number;
 };
 
 /**
@@ -170,6 +172,18 @@ export function buildAttentionItems(counts: InventoryAttentionCountsInput): Atte
       actionLabel: "Reintentar →",
       actionHref: "/app/master/catalog-inventory?tab=intakes",
       dotTone: "danger",
+    });
+  }
+
+  if (counts.duplicatePairs && counts.duplicatePairs > 0) {
+    items.push({
+      type: "DUPLICATES",
+      label: "Posibles duplicados",
+      context: "El mismo producto creado dos veces · revisar y fusionar",
+      count: counts.duplicatePairs,
+      actionLabel: "Revisar →",
+      actionHref: "/app/master/catalog-inventory?tab=duplicates",
+      dotTone: "warning",
     });
   }
 

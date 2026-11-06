@@ -83,6 +83,22 @@ export function InventoryTopbar() {
       .catch(() => {});
   }, [scope.mode, scope.branchId, scope.loading]);
 
+  // Solo con Calidad abierta: recorre todo el catálogo, no vale pedirlo en cada pantalla de Inventario.
+  const qualityOpen = active?.groupKey === "quality";
+  const [duplicatePairs, setDuplicatePairs] = useState(0);
+  useEffect(() => {
+    if (!qualityOpen) return;
+    let cancelled = false;
+    apiFetch("/api/master/catalog/products/duplicates")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((raw) => {
+        const pairs = raw ? unwrapApiData(raw) : null;
+        if (!cancelled && Array.isArray(pairs)) setDuplicatePairs(pairs.length);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [qualityOpen]);
+
   // ── Buscador ───────────────────────────────────────────────────────────
   const [searchOpen, setSearchOpen] = useState(false);
   // En Productos → Lista escribir filtra la tabla (?q=); antes solo abría el
@@ -326,6 +342,9 @@ export function InventoryTopbar() {
                 }`}
               >
                 {sub.label}
+                {sub.key === "duplicates" && duplicatePairs > 0 ? (
+                  <span className={`rounded-full px-1.5 text-[10px] font-bold ${TONE_BADGE_CLASSES.warning}`}>{duplicatePairs.toLocaleString("es-NI")}</span>
+                ) : null}
               </Link>
             );
           })}

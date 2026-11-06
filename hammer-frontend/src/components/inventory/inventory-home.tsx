@@ -91,6 +91,20 @@ export function InventoryHome() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [duplicatePairs, setDuplicatePairs] = useState(0);
+
+  // Aparte del Promise.all: es todo el catálogo (no depende de la sucursal) y si falla Inicio igual carga.
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("/api/master/catalog/products/duplicates")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((raw) => {
+        const pairs = raw ? unwrapApiData(raw) : null;
+        if (!cancelled && Array.isArray(pairs)) setDuplicatePairs(pairs.length);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [reloadKey]);
 
   useEffect(() => {
     if (scope.loading || !referenceBranchId) return;
@@ -132,7 +146,7 @@ export function InventoryHome() {
   if (scope.loading || !referenceBranchId) return <LoadingState message="Cargando sucursal…" />;
   if (loading || !overview || !quality || !attentionCounts) return <LoadingState message="Cargando inventario…" />;
 
-  const attentionItems = buildAttentionItems({ ...attentionCounts, topMoversNoCost: isNetwork ? null : attentionCounts.topMoversNoCost });
+  const attentionItems = buildAttentionItems({ ...attentionCounts, topMoversNoCost: isNetwork ? null : attentionCounts.topMoversNoCost, duplicatePairs });
   const withCost = overview.activeProducts - quality.noCost;
   const pendingQualityTotal = quality.noCost + quality.noPrice + quality.noCode + quality.costEqualsPrice + quality.noCategory;
   const coveragePercent = combinedCoveragePercent(overview.coverage, quality.coverage);
