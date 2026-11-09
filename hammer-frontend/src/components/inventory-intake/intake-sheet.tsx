@@ -194,6 +194,9 @@ export function IntakeSheet({
   const [searchResults, setSearchResults] = useState<ProductRow[]>(fallbackProducts.slice(0, 12));
   const [searchLoading, setSearchLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [resultsTerm, setResultsTerm] = useState<string | null>(null);
+  const [highlight, setHighlight] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [showCamera, setShowCamera] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
@@ -250,8 +253,12 @@ export function IntakeSheet({
         if (!data.branchId) return;
         const branch = branches.find((b) => b.id === data.branchId);
         if (branch) setPrimaryBranch({ id: branch.id, code: branch.code });
+        // Sin sucursal elegida en la barra (Toda la red), la carga va directo a la principal (Managua).
+        if (branch) setBranchIds((prev) => (prev.length > 0 ? prev : [branch.id]));
       } catch {
         /* sin sucursal principal configurada o sin red -- el atajo "igual que" no aparece */
+      } finally {
+        if (!cancelled && branches[0]) setBranchIds((prev) => (prev.length > 0 ? prev : [branches[0].id]));
       }
     })();
     return () => { cancelled = true; };
@@ -313,6 +320,8 @@ export function IntakeSheet({
         if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo buscar productos.");
         const payload = unwrapApiData(raw) as CenterData;
         setSearchResults(payload.products ?? []);
+        setResultsTerm(term);
+        setHighlight(0);
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) setSearchResults(fallbackProducts.slice(0, 12));
       } finally {
@@ -326,15 +335,24 @@ export function IntakeSheet({
     requestAnimationFrame(() => quantityRefs.current[productId]?.focus());
   }
 
+  // Vuelve a la búsqueda limpia para el siguiente producto (Enter en la fila).
+  function focusSearch() {
+    setSearch("");
+    searchInputRef.current?.focus();
+    setShowDropdown(true);
+  }
+
   function addProduct(product: ProductRow) {
     const { lines: next, focusProductId } = addOrFocusScannedProduct(lines, productToScannedRef(product), kind);
     setLines(next);
+    setSearch("");
+    setHighlight(0);
     focusQuantity(focusProductId);
   }
 
   async function resolveAndAddCode(code: string) {
     const exact = findExactProductMatch(code, searchResults);
-    if (exact) { addProduct(exact); setSearch(""); return; }
+    if (exact) { addProduct(exact); return; }
     try {
       const params = new URLSearchParams({ q: code, page: "1", limit: "5" });
       if (branchIds[0]) params.set("branchId", branchIds[0]);
@@ -342,7 +360,7 @@ export function IntakeSheet({
       const raw = await response.json().catch(() => null);
       const payload = unwrapApiData(raw) as CenterData;
       const found = findExactProductMatch(code, payload.products ?? []);
-      if (found) { addProduct(found); setSearch(""); return; }
+      if (found) { addProduct(found); return; }
       toast.error(`No se encontró ningún producto con el código "${code}".`);
     } catch {
       toast.error("Error al buscar el código.");
@@ -350,11 +368,25 @@ export function IntakeSheet({
   }
 
   function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Escape") { if (showDropdown) { e.preventDefault(); e.stopPropagation(); setShowDropdown(false); } return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (searchResults.length === 0) return;
+      e.preventDefault();
+      setShowDropdown(true);
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setHighlight((h) => (h + step + searchResults.length) % searchResults.length);
+      return;
+    }
     if (e.key !== "Enter") return;
     const text = search.trim();
     if (!text) return;
     e.preventDefault();
-    if (looksLikeScannedCode(text) || searchResults.length === 1) void resolveAndAddCode(text);
+    if (looksLikeScannedCode(text)) { void resolveAndAddCode(text); return; }
+    // Los resultados todavía son de lo escrito antes (debounce en curso): no agregar el equivocado.
+    if (resultsTerm !== text) return;
+    const picked = searchResults[highlight] ?? searchResults[0];
+    if (picked) addProduct(picked);
+    else void resolveAndAddCode(text);
   }
 
   async function applyPaste() {
@@ -662,9 +694,14 @@ export function IntakeSheet({
                   <section>
                     <div className="mb-2 flex items-center justify-between">
                       <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">2. ¿A qué sucursales?</h4>
-                      {kind !== "PHYSICAL_COUNT" ? (
-                        <button type="button" onClick={() => setBranchIds(branches.map((b) => b.id))} className="text-xs font-semibold text-[var(--color-master-600)] hover:underline">Todas</button>
-                      ) : null}
+                      <div className="flex gap-3">
+                        {primaryBranch ? (
+                          <button type="button" onClick={() => { setBranchIds([primaryBranch.id]); onSelectBranch(primaryBranch.id); }} className="text-xs font-semibold text-[var(--color-master-600)] hover:underline">Solo {primaryBranch.code}</button>
+                        ) : null}
+                        {kind !== "PHYSICAL_COUNT" ? (
+                          <button type="button" onClick={() => setBranchIds(branches.map((b) => b.id))} className="text-xs font-semibold text-[var(--color-master-600)] hover:underline">Todas</button>
+                        ) : null}
+                      </div>
                     </div>
                     {kind === "PHYSICAL_COUNT" ? <p className="mb-1.5 text-xs text-[var(--color-text-muted)]">Conteo físico admite una sola sucursal — cada estante es distinto.</p> : null}
                     <div className="flex flex-wrap gap-2">
@@ -741,14 +778,19 @@ export function IntakeSheet({
                     ))}
                   </div>
                 ) : null}
-                <div className="relative">
+              </section>
+
+              {/* Fija arriba al bajar por una lista larga: la búsqueda nunca se pierde de vista.
+                  Hija directa del contenedor con scroll — sticky solo se pega dentro de su padre. */}
+              <div className="sticky -top-4 z-30 -mx-5 !mt-0 bg-[var(--color-surface)] px-5 py-2">
                   <div className="flex gap-2">
                     <div className="relative flex-1">
                       <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-muted)]" />
                       <Input
+                        ref={searchInputRef}
                         className="h-11 pl-9"
                         value={search}
-                        onChange={(e) => setSearch(e.target.value)}
+                        onChange={(e) => { setSearch(e.target.value); setShowDropdown(true); }}
                         onKeyDown={handleSearchKeyDown}
                         placeholder="Nombre, SKU o código de barras — el lector USB funciona acá"
                         onFocus={() => setShowDropdown(true)}
@@ -759,10 +801,10 @@ export function IntakeSheet({
                         <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-72 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl">
                           {searchLoading ? (
                             <div className="flex items-center gap-2 px-3 py-3 text-xs text-[var(--color-text-muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando...</div>
-                          ) : searchResults.length > 0 ? searchResults.map((product) => {
+                          ) : searchResults.length > 0 ? searchResults.map((product, index) => {
                             const alreadyAdded = lines.some((l) => l.productId === product.id);
                             return (
-                              <button key={product.id} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => addProduct(product)} className="flex w-full items-center justify-between gap-2 border-b border-[var(--color-border)] px-3 py-2.5 text-left text-xs last:border-0 hover:bg-[var(--color-surface-alt)]">
+                              <button key={product.id} type="button" onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => setHighlight(index)} onClick={() => addProduct(product)} className={`flex w-full items-center justify-between gap-2 border-b border-[var(--color-border)] px-3 py-2.5 text-left text-xs last:border-0 ${index === highlight ? "bg-[var(--color-master-50)]" : "hover:bg-[var(--color-surface-alt)]"}`}>
                                 <div className="min-w-0">
                                   <div className="truncate font-semibold text-[var(--color-text)]">{product.name}</div>
                                   <div className="text-[var(--color-text-muted)]">{product.sku}{product.barcode ? ` · ${product.barcode}` : ""}</div>
@@ -793,7 +835,6 @@ export function IntakeSheet({
                     </div>
                   ) : null}
                 </div>
-              </section>
 
               {/* Tabla (≥1024) */}
               <div className="hidden overflow-x-auto rounded-xl border border-[var(--color-border-strong)] lg:block">
@@ -830,6 +871,7 @@ export function IntakeSheet({
                         priceEditorOpen={priceEditorFor === line.productId}
                         onTogglePriceEditor={() => setPriceEditorFor((v) => (v === line.productId ? null : line.productId))}
                         quantityRef={(el) => { quantityRefs.current[line.productId] = el; }}
+                        onEnterNext={focusSearch}
                         onUpdate={(patch) => updateLine(line.productId, patch)}
                         onSetOverride={(branchId, rawValue) => setBranchCell(line.productId, branchId, rawValue)}
                         onResetOverride={(branchId) => resetOverride(line.productId, branchId)}
@@ -871,6 +913,7 @@ export function IntakeSheet({
                     onSetOverride={(branchId, rawValue) => setBranchCell(line.productId, branchId, rawValue)}
                     onResetOverride={(branchId) => resetOverride(line.productId, branchId)}
                     onRemove={() => removeLine(line.productId)}
+                    onEnterNext={focusSearch}
                     showSalePrice={showSalePrice}
                     priceColumnBranchIds={priceColumnBranchIds}
                     showPriceExpandToggle={showPriceExpandToggle}
@@ -1059,6 +1102,14 @@ function RowMessages({ messages, expanded, onToggleExpanded }: { messages: Previ
   );
 }
 
+function enterGoesToNext(onEnterNext: () => void) {
+  return (e: React.KeyboardEvent) => {
+    if (e.key !== "Enter" || !(e.target instanceof HTMLInputElement)) return;
+    e.preventDefault();
+    onEnterNext();
+  };
+}
+
 type RowProps = {
   line: IntakeLine;
   kind: IntakeKind;
@@ -1078,6 +1129,8 @@ type RowProps = {
   onResetOverride: (branchId: string) => void;
   onRemove: () => void;
   quantityRef?: (el: HTMLInputElement | null) => void;
+  /** Enter en cualquier campo de la fila vuelve a la búsqueda para el siguiente producto. */
+  onEnterNext: () => void;
   /** Commit 3 — false en Conteo (no cambia precios). */
   showSalePrice: boolean;
   /** Columnas de precio a mostrar (vacío = usar el campo único + priceEditorOpen "por sucursal ▾"). */
@@ -1229,7 +1282,7 @@ function hasLineError(lineMessages: PreviewLineMessage[], codes: Set<string>): b
   return lineMessages.some((m) => codes.has(m.code));
 }
 
-function IntakeTableRow({ line, kind, branches, branchIds, cells, lineMessages, previewFailed, expanded, onToggleExpanded, rowLoading, rowStatus, priceEditorOpen, onTogglePriceEditor, onUpdate, onSetOverride, onResetOverride, onRemove, quantityRef, showSalePrice, priceColumnBranchIds, showPriceExpandToggle, primaryBranch, onSetSalePrice, onResetSalePrice }: RowProps) {
+function IntakeTableRow({ line, kind, branches, branchIds, cells, lineMessages, previewFailed, expanded, onToggleExpanded, rowLoading, rowStatus, priceEditorOpen, onTogglePriceEditor, onUpdate, onSetOverride, onResetOverride, onRemove, quantityRef, onEnterNext, showSalePrice, priceColumnBranchIds, showPriceExpandToggle, primaryBranch, onSetSalePrice, onResetSalePrice }: RowProps) {
   const lineCells = rowCells(line, branchIds, cells);
   const showCost = shouldShowCostInput(kind, lineCells);
   const singleBranchId = branchIds.length === 1 ? branchIds[0] : null;
@@ -1243,7 +1296,7 @@ function IntakeTableRow({ line, kind, branches, branchIds, cells, lineMessages, 
 
   return (
     <>
-      <tr className={!previewFailed && rowStatus === "ERROR" && !rowLoading ? "bg-[var(--color-danger-50)]" : !previewFailed && rowStatus === "REVIEW" && !rowLoading ? "bg-[var(--color-warning-50)]" : undefined}>
+      <tr onKeyDown={enterGoesToNext(onEnterNext)} className={!previewFailed && rowStatus === "ERROR" && !rowLoading ? "bg-[var(--color-danger-50)]" : !previewFailed && rowStatus === "REVIEW" && !rowLoading ? "bg-[var(--color-warning-50)]" : undefined}>
         <td>
           <div className="font-medium text-[var(--color-text)]">{line.name}</div>
           <div className="font-mono text-[11px] text-[var(--color-text-muted)]">{line.sku}</div>
@@ -1353,7 +1406,7 @@ function IntakeTableRow({ line, kind, branches, branchIds, cells, lineMessages, 
   );
 }
 
-function IntakeCardRow({ line, kind, branches, branchIds, cells, lineMessages, previewFailed, expanded, onToggleExpanded, rowLoading, rowStatus, onUpdate, onSetOverride, onResetOverride, onRemove, showSalePrice, primaryBranch, onSetSalePrice, onResetSalePrice }: RowProps) {
+function IntakeCardRow({ line, kind, branches, branchIds, cells, lineMessages, previewFailed, expanded, onToggleExpanded, rowLoading, rowStatus, onUpdate, onSetOverride, onResetOverride, onRemove, onEnterNext, showSalePrice, primaryBranch, onSetSalePrice, onResetSalePrice }: RowProps) {
   const lineCells = rowCells(line, branchIds, cells);
   const showCost = shouldShowCostInput(kind, lineCells);
   const singleBranchId = branchIds.length === 1 ? branchIds[0] : null;
@@ -1365,7 +1418,7 @@ function IntakeCardRow({ line, kind, branches, branchIds, cells, lineMessages, p
   const firstOverrideValue = showUseForAllHint ? Object.values(line.overrides).find((v) => v !== null && v !== undefined) ?? null : null;
 
   return (
-    <div className={`rounded-xl border p-3 ${!previewFailed && rowStatus === "ERROR" && !rowLoading ? "border-[var(--color-danger-300)] bg-[var(--color-danger-50)]" : !previewFailed && rowStatus === "REVIEW" && !rowLoading ? "border-[var(--color-warning-300)] bg-[var(--color-warning-50)]" : "border-[var(--color-border-strong)] bg-[var(--color-surface)]"}`}>
+    <div onKeyDown={enterGoesToNext(onEnterNext)} className={`rounded-xl border p-3 ${!previewFailed && rowStatus === "ERROR" && !rowLoading ? "border-[var(--color-danger-300)] bg-[var(--color-danger-50)]" : !previewFailed && rowStatus === "REVIEW" && !rowLoading ? "border-[var(--color-warning-300)] bg-[var(--color-warning-50)]" : "border-[var(--color-border-strong)] bg-[var(--color-surface)]"}`}>
       <div className="mb-2 flex items-start justify-between gap-2">
         <div>
           <p className="text-sm font-semibold text-[var(--color-text)]">{line.name}</p>

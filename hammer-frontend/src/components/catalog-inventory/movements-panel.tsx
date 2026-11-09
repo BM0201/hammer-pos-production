@@ -493,7 +493,7 @@ export function MovementsPanel({
         <IntakeSheet
           branches={branches}
           fallbackProducts={products}
-          activeBranchId={activeBranchId}
+          activeBranchId={selectedBranchId ?? ""}
           onSelectBranch={onSelectBranch}
           onClose={() => setShowOpening(false)}
           onDone={onDone}
