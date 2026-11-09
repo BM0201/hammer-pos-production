@@ -1,22 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import toast from "react-hot-toast";
-import { Copy, AlertTriangle, ArrowLeftRight, Check, X, ChevronRight, ChevronLeft, Loader2 } from "lucide-react";
+import { Copy, AlertTriangle, Check, X, ChevronRight, ChevronLeft, Loader2, RefreshCw, Search, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { qty } from "@/lib/format";
+import { qty, fmtDateTimeShort } from "@/lib/format";
 
 /**
  * prompt-codigos-y-duplicados.md Fase 4 — pantalla de posibles duplicados
  * + asistente de unificación (4 pasos: elegir principal, revisar, confirmar,
  * resultado). Las sugerencias NUNCA se auto-aplican — un Master decide acá
  * fusionar (reusa Fase 3, product-merge-service.ts vía sus rutas) o
- * descartar el par ("no son el mismo producto").
+ * descartar el par ("no son el mismo producto"), y puede deshacer un descarte.
  */
 
 type DuplicateProduct = {
@@ -24,16 +24,31 @@ type DuplicateProduct = {
   sku: string;
   name: string;
   categoryId: string;
+  categoryName?: string;
   unit: string;
   barcode: string | null;
   totalStock: number;
   createdAt: string;
 };
+type DuplicateConfidence = "HIGH" | "MEDIUM" | "LOW";
 type DuplicatePair = {
   productA: DuplicateProduct;
   productB: DuplicateProduct;
   similarity: number;
+  confidence: DuplicateConfidence;
+  reason: string;
   suggestedPrimaryId: string;
+};
+type DismissedPair = {
+  productAId: string;
+  productBId: string;
+  productAName: string;
+  productASku: string;
+  productBName: string;
+  productBSku: string;
+  dismissedAt: string;
+  dismissedByName: string;
+  reason: string | null;
 };
 
 type MergeBlocker = { code: string; message: string };
@@ -52,19 +67,39 @@ type MergePreview = {
   canExecute: boolean;
 };
 
+const CONFIDENCE_META: Record<DuplicateConfidence, { label: string; hint: string; badge: "success" | "warning" | "neutral" }> = {
+  HIGH: { label: "Casi seguro", hint: "Mismas palabras o solo errores de tipeo", badge: "success" },
+  MEDIUM: { label: "Probable", hint: "Uno de los dos dice algo de más", badge: "warning" },
+  LOW: { label: "Dudoso", hint: "Parece una marca o variante distinta", badge: "neutral" },
+};
+type Filter = "ALL" | DuplicateConfidence | "DISMISSED";
+
+type PairIds = { productA: { id: string }; productB: { id: string } };
+const samePair = (a: PairIds, b: PairIds) => a.productA.id === b.productA.id && a.productB.id === b.productB.id;
+
 export function DuplicatesPanel({ onMerged }: { onMerged?: () => void }) {
   const [pairs, setPairs] = useState<DuplicatePair[] | null>(null);
+  const [dismissed, setDismissed] = useState<DismissedPair[] | null>(null);
   const [loading, setLoading] = useState(true);
-  const [dismissingKey, setDismissingKey] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
   const [wizardPair, setWizardPair] = useState<DuplicatePair | null>(null);
+  const [filter, setFilter] = useState<Filter>("ALL");
+  const [query, setQuery] = useState("");
 
-  const load = useCallback(async () => {
+  // fresh: salta la caché de 60 s del GET (después de restaurar o fusionar, o con "Actualizar").
+  const load = useCallback(async (fresh = false) => {
     setLoading(true);
     try {
-      const res = await apiFetch("/api/master/catalog/products/duplicates");
-      const raw = await res.json();
-      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudieron cargar los posibles duplicados.");
+      const init = fresh ? { cache: "no-store" as const } : {};
+      const [pairsRes, dismissedRes] = await Promise.all([
+        apiFetch("/api/master/catalog/products/duplicates", init),
+        apiFetch("/api/master/catalog/products/duplicates/dismiss", init),
+      ]);
+      const raw = await pairsRes.json();
+      if (!pairsRes.ok) throw new Error(raw?.error?.message ?? "No se pudieron cargar los posibles duplicados.");
       setPairs(unwrapApiData(raw) as DuplicatePair[]);
+      const rawDismissed = dismissedRes.ok ? await dismissedRes.json() : null;
+      setDismissed(rawDismissed ? (unwrapApiData(rawDismissed) as DismissedPair[]) : []);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "No se pudieron cargar los posibles duplicados.");
     } finally {
@@ -74,9 +109,25 @@ export function DuplicatesPanel({ onMerged }: { onMerged?: () => void }) {
 
   useEffect(() => { void load(); }, [load]);
 
+  const counts = useMemo(() => {
+    const c: Record<DuplicateConfidence, number> = { HIGH: 0, MEDIUM: 0, LOW: 0 };
+    for (const p of pairs ?? []) c[p.confidence] += 1;
+    return c;
+  }, [pairs]);
+
+  const visiblePairs = useMemo(() => {
+    const words = query.trim().toUpperCase().split(/\s+/).filter(Boolean);
+    return (pairs ?? []).filter((p) => {
+      if (filter !== "ALL" && p.confidence !== filter) return false;
+      if (words.length === 0) return true;
+      const text = `${p.productA.name} ${p.productA.sku} ${p.productB.name} ${p.productB.sku}`.toUpperCase();
+      return words.every((w) => text.includes(w));
+    });
+  }, [pairs, filter, query]);
+
   async function handleDismiss(pair: DuplicatePair) {
     const key = `${pair.productA.id}:${pair.productB.id}`;
-    setDismissingKey(key);
+    setBusyKey(key);
     try {
       const res = await apiFetch("/api/master/catalog/products/duplicates/dismiss", {
         method: "POST",
@@ -84,57 +135,137 @@ export function DuplicatesPanel({ onMerged }: { onMerged?: () => void }) {
       });
       const raw = await res.json().catch(() => null);
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo descartar el par.");
-      toast.success("Descartado — no vuelve a aparecer.");
-      setPairs((prev) => prev?.filter((p) => !(p.productA.id === pair.productA.id && p.productB.id === pair.productB.id)) ?? null);
+      toast.success("Descartado — lo podés restaurar en Descartados.");
+      setPairs((prev) => prev?.filter((p) => !samePair(p, pair)) ?? null);
+      setDismissed((prev) => [{
+        productAId: pair.productA.id, productBId: pair.productB.id,
+        productAName: pair.productA.name, productASku: pair.productA.sku,
+        productBName: pair.productB.name, productBSku: pair.productB.sku,
+        dismissedAt: new Date().toISOString(), dismissedByName: "vos", reason: null,
+      }, ...(prev ?? [])]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "No se pudo descartar el par.");
     } finally {
-      setDismissingKey(null);
+      setBusyKey(null);
     }
   }
+
+  async function handleRestore(row: DismissedPair) {
+    const key = `${row.productAId}:${row.productBId}`;
+    setBusyKey(key);
+    try {
+      const res = await apiFetch("/api/master/catalog/products/duplicates/dismiss", {
+        method: "DELETE",
+        body: JSON.stringify({ productAId: row.productAId, productBId: row.productBId }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo restaurar el par.");
+      toast.success("Restaurado — si todavía se parecen, vuelven a la lista.");
+      await load(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "No se pudo restaurar el par.");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  const filterChips: Array<{ key: Filter; label: string; count: number; title?: string }> = [
+    { key: "ALL", label: "Todos", count: pairs?.length ?? 0 },
+    ...(["HIGH", "MEDIUM", "LOW"] as const).map((k) => ({ key: k, label: CONFIDENCE_META[k].label, count: counts[k], title: CONFIDENCE_META[k].hint })),
+    { key: "DISMISSED", label: "Descartados", count: dismissed?.length ?? 0, title: "Pares marcados como \"no son el mismo\"" },
+  ];
 
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
-        <div className="hm-card-header-amber px-5 py-3 flex items-center gap-2">
-          <Copy className="h-5 w-5" />
-          <h2 className="font-semibold">Posibles duplicados</h2>
+        <div className="hm-card-header-amber px-4 py-3 flex flex-wrap items-center justify-between gap-2 sm:px-5">
+          <div className="flex items-center gap-2">
+            <Copy className="h-5 w-5" />
+            <h2 className="font-semibold">Posibles duplicados</h2>
+          </div>
+          <Button size="sm" variant="ghost" icon={<RefreshCw className="h-4 w-4" />} loading={loading} onClick={() => void load(true)}>Actualizar</Button>
         </div>
 
-        {loading ? (
+        <div className="space-y-2 border-b border-[var(--color-border)] px-4 py-3 sm:px-5">
+          <div className="flex flex-wrap gap-1.5">
+            {filterChips.map((chip) => (
+              <button
+                key={chip.key}
+                type="button"
+                title={chip.title}
+                aria-pressed={filter === chip.key}
+                onClick={() => setFilter(chip.key)}
+                className={`hm-chip min-h-[36px] ${filter === chip.key ? "border-[var(--color-master-600)] bg-[var(--color-master-50)] text-[var(--color-master-700)]" : ""}`}
+              >
+                {chip.label} <span className="font-mono">{chip.count}</span>
+              </button>
+            ))}
+          </div>
+          {filter !== "DISMISSED" ? (
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-muted)]" />
+              <Input className="pl-9" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filtrar por nombre o SKU" aria-label="Filtrar duplicados por nombre o SKU" />
+            </div>
+          ) : null}
+        </div>
+
+        {loading && !pairs ? (
           <p className="p-8 text-center text-sm text-[var(--color-text-muted)] animate-pulse">Buscando posibles duplicados…</p>
-        ) : !pairs || pairs.length === 0 ? (
+        ) : filter === "DISMISSED" ? (
+          !dismissed || dismissed.length === 0 ? (
+            <p className="p-8 text-center text-sm text-[var(--color-text-muted)]">No hay pares descartados.</p>
+          ) : (
+            <div className="divide-y divide-[var(--color-border)]">
+              {dismissed.map((row) => {
+                const key = `${row.productAId}:${row.productBId}`;
+                return (
+                  <div key={key} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
+                    <div className="min-w-0 flex-1 text-sm">
+                      <p className="font-medium text-[var(--color-text)]">{row.productAName} <span className="font-mono text-xs text-[var(--color-text-muted)]">{row.productASku}</span></p>
+                      <p className="font-medium text-[var(--color-text)]">{row.productBName} <span className="font-mono text-xs text-[var(--color-text-muted)]">{row.productBSku}</span></p>
+                      <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">Descartado por {row.dismissedByName} · {fmtDateTimeShort(row.dismissedAt)}{row.reason ? ` · ${row.reason}` : ""}</p>
+                    </div>
+                    <Button size="sm" variant="ghost" icon={<Undo2 className="h-4 w-4" />} loading={busyKey === key} disabled={busyKey === key} onClick={() => void handleRestore(row)}>
+                      Restaurar
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )
+        ) : visiblePairs.length === 0 ? (
           <div className="p-8 text-center">
             <Copy className="h-10 w-10 mx-auto mb-3 text-[var(--color-text-muted)]" />
-            <p className="text-sm font-medium text-[var(--color-text-secondary)]">No se encontraron productos que parezcan duplicados</p>
+            <p className="text-sm font-medium text-[var(--color-text-secondary)]">
+              {(pairs?.length ?? 0) === 0 ? "No se encontraron productos que parezcan duplicados" : "Ningún par coincide con el filtro"}
+            </p>
           </div>
         ) : (
           <div className="divide-y divide-[var(--color-border)]">
-            {pairs.map((pair) => {
+            {visiblePairs.map((pair) => {
               const key = `${pair.productA.id}:${pair.productB.id}`;
+              const meta = CONFIDENCE_META[pair.confidence];
               return (
-                <div key={key} className="px-5 py-3 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex-1 min-w-[280px]">
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="font-medium text-[var(--color-text)]">{pair.productA.name}</span>
-                      <span className="font-mono text-xs text-[var(--color-text-muted)]">{pair.productA.sku}</span>
-                      <ArrowLeftRight className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
-                      <span className="font-medium text-[var(--color-text)]">{pair.productB.name}</span>
-                      <span className="font-mono text-xs text-[var(--color-text-muted)]">{pair.productB.sku}</span>
+                <div key={key} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 sm:px-5">
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={meta.badge} title={meta.hint}>{meta.label}</Badge>
+                      <span className="text-xs text-[var(--color-text-muted)]">{Math.round(pair.similarity * 100)}% parecido</span>
                     </div>
-                    <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-                      {Math.round(pair.similarity * 100)}% parecido · stock {qty(pair.productA.totalStock)} vs {qty(pair.productB.totalStock)}
-                    </p>
+                    {[pair.productA, pair.productB].map((p) => (
+                      <div key={p.id} className="text-sm">
+                        <Link href={`/app/master/catalog-inventory/products/${p.id}` as Route} className="font-medium text-[var(--color-text)] hover:underline">{p.name}</Link>
+                        {p.id === pair.suggestedPrimaryId ? <span className="ml-1.5 text-[11px] font-semibold text-[var(--color-info-600)]">sugerido para quedar</span> : null}
+                        <p className="text-xs text-[var(--color-text-muted)]">
+                          <span className="font-mono">{p.sku}</span>{p.categoryName ? ` · ${p.categoryName}` : ""} · {p.unit} · stock {qty(p.totalStock)}{p.barcode ? "" : " · sin código"}
+                        </p>
+                      </div>
+                    ))}
+                    <p className="text-xs text-[var(--color-text-secondary)]">{pair.reason}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <Button size="sm" variant="primary" onClick={() => setWizardPair(pair)}>Unificar</Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      loading={dismissingKey === key}
-                      disabled={dismissingKey === key}
-                      onClick={() => void handleDismiss(pair)}
-                    >
+                    <Button size="sm" variant="ghost" loading={busyKey === key} disabled={busyKey === key} onClick={() => void handleDismiss(pair)}>
                       No son el mismo
                     </Button>
                   </div>
@@ -151,7 +282,8 @@ export function DuplicatesPanel({ onMerged }: { onMerged?: () => void }) {
           onClose={() => setWizardPair(null)}
           onDone={() => {
             setWizardPair(null);
-            setPairs((prev) => prev?.filter((p) => !(p.productA.id === wizardPair.productA.id && p.productB.id === wizardPair.productB.id)) ?? null);
+            // El fusionado queda inactivo: los otros pares donde aparecía ya no aplican.
+            void load(true);
             onMerged?.();
           }}
         />

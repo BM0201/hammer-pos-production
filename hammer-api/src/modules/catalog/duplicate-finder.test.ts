@@ -15,8 +15,8 @@ test("normalizeForDuplicateMatch — acentos, mayúsculas y espacios repetidos",
   assert.equal(normalizeForDuplicateMatch("  Cemento   Canál  "), "CEMENTO CANAL");
 });
 
-test("normalizeForDuplicateMatch — pulgadas: comilla, PULG, PULGADA(S) terminan igual", () => {
-  const expected = "TUBO PVC 1/2IN";
+test("normalizeForDuplicateMatch — pulgadas: comilla, PULG, PULGADA(S) o nada terminan igual", () => {
+  const expected = "TUBO PVC 1/2";
   assert.equal(normalizeForDuplicateMatch('Tubo PVC 1/2"'), expected);
   assert.equal(normalizeForDuplicateMatch("Tubo PVC 1/2 pulg"), expected);
   assert.equal(normalizeForDuplicateMatch("Tubo PVC 1/2 pulgada"), expected);
@@ -157,4 +157,47 @@ test("findDuplicateCandidates — trae suggestedPrimaryId coherente con suggestP
 
 test("DUPLICATE_SIMILARITY_THRESHOLD — queda documentado (0.8), no un número mágico sin nombre", () => {
   assert.equal(DUPLICATE_SIMILARITY_THRESHOLD, 0.8);
+});
+
+// Detección más profunda (2026-11-09) — casos reales del catálogo que antes se escapaban.
+test("duplicateNameSimilarity — plural, abreviatura, P/, comilla y X pegada: mismo producto", () => {
+  assert.equal(duplicateNameSimilarity("BISAGRAS PAR 3\"X 3\"", "BISAGRA PAR 3 X 3"), 1, "plural + comilla + X");
+  assert.equal(duplicateNameSimilarity("SUR FASTYL NEGRO GALON", "SUR FASTYL NEGRO GL"), 1, "GALON = GL");
+  assert.equal(duplicateNameSimilarity("JALADERA P/INODORO", "JALADERA PARA INODORO"), 1, "P/ = PARA");
+  assert.equal(duplicateNameSimilarity("TORNILLOS PF 3\" 100 PCS", "TORNILLOS PF 3\" 100PCS"), 1, "100 PCS = 100PCS");
+  assert.equal(duplicateNameSimilarity("LLAVE JARDIN 1/2\"", "LLAVE PARA JARDIN 1/2\""), 1, "palabra de relleno");
+});
+
+test("duplicateNameSimilarity — tipeos y palabras pegadas", () => {
+  assert.ok(duplicateNameSimilarity("PEGAMENTO PCV AZUL AM 1/4 GL", "PEGAMENTO PVC AZUL AM 1/4 GL") !== null, "PCV/PVC");
+  assert.ok(duplicateNameSimilarity("MODOLO FAST DRY AZUL BANDERA GL", "MODELO FASTDRY AZUL BANDERA GL") !== null, "MODOLO + FASTDRY");
+  assert.ok(duplicateNameSimilarity("CEMENTO HOLCIN 42.5KG", "CEMENTO HOLCIM 42.5 KG") !== null, "HOLCIN/HOLCIM");
+});
+
+test("duplicateNameSimilarity — medidas distintas siguen sin ser duplicado", () => {
+  assert.equal(duplicateNameSimilarity("CUARTON 2X2X4", "CUARTON 2X4X4"), null, "la medida es una sola palabra");
+  assert.equal(duplicateNameSimilarity("BISAGRAS PAR 3 1/2\" X 3 1/2\"", "BISAGRAS PAR 3 1/2\"X 2\""), null);
+  assert.equal(duplicateNameSimilarity("TEE LISA PVC 1/2\"", "TEE LISA CPVC 1/2\""), null, "PVC ≠ CPVC");
+  assert.equal(duplicateNameSimilarity("CANDADO DOBERMAN 20MM", "CANDADO DOBERMAN 45MM"), null);
+  assert.equal(duplicateNameSimilarity("ANTICORROSIVO LANCO GRIS GL", "ANTICORROSIVO LANCO VERDE GL"), null);
+});
+
+test("findDuplicateCandidates — confianza y motivo: igual = HIGH, palabra de más = MEDIUM, genérico con varias marcas = LOW", () => {
+  const pairs = findDuplicateCandidates([
+    product({ id: "a", name: "PEGAMENTO PCV AZUL AM 1/4 GL" }),
+    product({ id: "b", name: "PEGAMENTO PVC AZUL AM 1/4 GL" }),
+    product({ id: "c", name: "SUR FASTYL VERDE OXIDO 1/4" }),
+    product({ id: "d", name: "SUR FASTYL VERDE OXIDO 1/4 GL" }),
+    product({ id: "g", name: "BISAGRAS PAR 3\"X 3\"" }),
+    product({ id: "h", name: "BISAGRAS TF PAR 3\"X 3\"" }),
+    product({ id: "i", name: "BISAGRAS FANAL PAR 3\"X 3\"" }),
+  ]);
+  const byIds = (x: string, y: string) => pairs.find((p) => [p.productA.id, p.productB.id].sort().join() === [x, y].sort().join());
+  assert.equal(byIds("a", "b")?.confidence, "HIGH");
+  assert.match(byIds("a", "b")?.reason ?? "", /PCV ≈ PVC/);
+  assert.equal(byIds("c", "d")?.confidence, "MEDIUM");
+  assert.match(byIds("c", "d")?.reason ?? "", /Solo uno dice: GL/);
+  assert.equal(byIds("g", "h")?.confidence, "LOW");
+  assert.equal(byIds("g", "i")?.confidence, "LOW");
+  assert.equal(pairs[0].confidence, "HIGH", "los seguros primero");
 });

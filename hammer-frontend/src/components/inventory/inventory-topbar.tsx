@@ -93,7 +93,8 @@ export function InventoryTopbar() {
       .then((res) => (res.ok ? res.json() : null))
       .then((raw) => {
         const pairs = raw ? unwrapApiData(raw) : null;
-        if (!cancelled && Array.isArray(pairs)) setDuplicatePairs(pairs.length);
+        // Los "Dudoso" (marcas/variantes) no piden atención: se ven solo dentro de Duplicados.
+        if (!cancelled && Array.isArray(pairs)) setDuplicatePairs(pairs.filter((p: { confidence?: string }) => p.confidence !== "LOW").length);
       })
       .catch(() => {});
     return () => { cancelled = true; };

@@ -27,6 +27,7 @@ export async function getDuplicateCandidates(db: Db = prisma): Promise<Duplicate
       sku: true,
       name: true,
       categoryId: true,
+      category: { select: { name: true } },
       unit: true,
       barcode: true,
       createdAt: true,
@@ -39,6 +40,7 @@ export async function getDuplicateCandidates(db: Db = prisma): Promise<Duplicate
     sku: p.sku,
     name: p.name,
     categoryId: p.categoryId,
+    categoryName: p.category?.name,
     unit: p.unit,
     barcode: p.barcode,
     createdAt: p.createdAt,
@@ -71,4 +73,35 @@ export async function dismissDuplicatePair(
       reason: input.reason ?? null,
     },
   });
+}
+
+/** Pares que alguien marcó "no son el mismo" — para poder revisarlos y deshacer un descarte por error. */
+export async function listDismissedDuplicatePairs(db: Db = prisma) {
+  const rows = await db.productDuplicateDismissal.findMany({
+    orderBy: { dismissedAt: "desc" },
+    select: {
+      productAId: true,
+      productBId: true,
+      dismissedAt: true,
+      reason: true,
+      dismissedBy: { select: { fullName: true } },
+      productA: { select: { name: true, sku: true } },
+      productB: { select: { name: true, sku: true } },
+    },
+  });
+  return rows.map((r) => ({
+    productAId: r.productAId,
+    productBId: r.productBId,
+    productAName: r.productA.name,
+    productASku: r.productA.sku,
+    productBName: r.productB.name,
+    productBSku: r.productB.sku,
+    dismissedAt: r.dismissedAt,
+    dismissedByName: r.dismissedBy.fullName,
+    reason: r.reason,
+  }));
+}
+
+export async function restoreDismissedDuplicatePair(input: { productAId: string; productBId: string }, db: Db = prisma) {
+  await db.productDuplicateDismissal.deleteMany({ where: { pairKey: dismissedPairKey(input.productAId, input.productBId) } });
 }
