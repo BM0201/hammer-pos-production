@@ -230,7 +230,7 @@ export async function listInventoryMovementsPaginated(params: InventoryMovementP
  * Sin `composition`, se infiere como antes de este cambio (compatibilidad):
  * PACKAGES si el producto resuelto es la presentación cerrada, LOOSE si no.
  */
-export type MovementComposition =
+type MovementComposition =
   | { kind: "PACKAGES" }
   | { kind: "LOOSE" }
   | { kind: "BASE_AUTO" }
@@ -302,7 +302,7 @@ export type SaleStockAvailability = {
   };
 };
 
-export class InventoryStockError extends Error {
+class InventoryStockError extends Error {
   public readonly code: string;
 
   constructor(code: string, message: string) {

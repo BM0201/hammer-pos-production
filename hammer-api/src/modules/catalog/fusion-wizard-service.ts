@@ -32,7 +32,7 @@ export type WizardMember = {
   isPackagePresentation: boolean;
 };
 
-export type WizardBranchPreview = {
+type WizardBranchPreview = {
   branchId: string;
   branchCode: string;
   canonicalQty: number;

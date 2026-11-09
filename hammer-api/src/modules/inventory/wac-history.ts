@@ -78,7 +78,7 @@ export type WacHistoryMovementInput = {
   notes: string | null;
 };
 
-export type WacHistoryRow = {
+type WacHistoryRow = {
   movementId: string;
   createdAt: Date;
   movementType: string;

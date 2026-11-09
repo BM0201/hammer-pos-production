@@ -42,7 +42,7 @@ export type UpdateStockGroupInput = {
   members?: StockGroupMemberInput[];
 };
 
-export type RebuildMode = "CREATE" | "UPDATE" | "NORMALIZE_NAILS" | "BOOTSTRAP_IRON" | "REPAIR";
+type RebuildMode = "CREATE" | "UPDATE" | "NORMALIZE_NAILS" | "BOOTSTRAP_IRON" | "REPAIR";
 
 type RebuildStockGroupBalancesInput = {
   stockGroupId: string;
@@ -437,7 +437,7 @@ export async function rebuildStockGroupBalancesTx(
 
 // ─── Reparación GUIADA (Fase 1.6) — preview obligatorio con hash ──────────────
 
-export type StockGroupRepairPreviewBranch = {
+type StockGroupRepairPreviewBranch = {
   branchId: string;
   branchCode: string;
   before: { quantityOnHand: string; closedPackageQuantity: string; looseUnitQuantity: string; weightedAverageCost: string };
@@ -638,7 +638,7 @@ export function applyStockGroupRepair(input: {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-export function slugifyCode(name: string) {
+function slugifyCode(name: string) {
   const base = name
     .toUpperCase()
     .normalize("NFD")
@@ -1344,7 +1344,7 @@ async function loadGroupForUnmerge(tx: Prisma.TransactionClient, stockGroupId: s
   };
 }
 
-export type UnmergeBranchPreview = {
+type UnmergeBranchPreview = {
   branchId: string;
   branchCode: string;
   targetNewQty: string;

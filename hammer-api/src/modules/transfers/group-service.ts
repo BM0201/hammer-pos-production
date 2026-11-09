@@ -20,7 +20,7 @@ async function nextTransferGroupCodeTx(tx: Prisma.TransactionClient): Promise<{ 
   return { code: `TG-${String(sequence).padStart(6, "0")}`, sequence };
 }
 
-export type CreateTransferGroupLineInput = {
+type CreateTransferGroupLineInput = {
   productId: string;
   quantity: number;
   /** branchId (destino) → cantidad distinta; 0 = ese destino no lleva esta línea. */

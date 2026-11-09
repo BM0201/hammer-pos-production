@@ -8,9 +8,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
   AlertTriangle, BarChart3, Boxes, Check, ChevronDown, ChevronLeft, ChevronRight, MoreHorizontal, Power,
-  CheckCircle2, Copy, DollarSign, Download, FileSpreadsheet, FileUp, History, Info, Loader2, Merge, Package, Pencil,
+  CheckCircle2, Copy, DollarSign, FileUp, History, Info, Loader2, Merge, Package, Pencil,
   Plus, RefreshCcw, Save, ScanLine, Search, Settings2, Shuffle, Sparkles, Tags, Trash2,
-  TrendingUp, Wand2, X, Zap,
+  TrendingUp, X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -167,71 +167,8 @@ export type Transfer = {
     unitCostSnapshot?: string | number | null;
   }>;
 };
-export type ReorderAlert = { id: string; reason: string; alertType: string; currentQuantity: string; suggestedQuantity: string; product: { sku: string; name: string }; branch: Branch };
+type ReorderAlert = { id: string; reason: string; alertType: string; currentQuantity: string; suggestedQuantity: string; product: { sku: string; name: string }; branch: Branch };
 export type AuditRow = { id: string; occurredAt: string; module: string; action: string; entityType: string; actor?: { username: string; fullName: string } | null; branch?: Branch | null };
-type ReplenishmentRecommendation = {
-  productId: string;
-  sku: string;
-  barcode?: string | null;
-  name: string;
-  categoryName?: string | null;
-  branchId: string;
-  stockOnHand: number;
-  availableStock: number;
-  unitsSoldLast30Days: number;
-  unitsSoldLast90Days: number;
-  averageDailyDemand: number;
-  abcClass: "A" | "B" | "C";
-  xyzClass: "X" | "Y" | "Z";
-  combinedClass: string;
-  riskLevel: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-  leadTimeDays: number;
-  safetyDays: number;
-  coverageDays: number;
-  reorderPoint: number;
-  targetStock: number;
-  suggestedOrderQty: number;
-  effectiveCost: number | null;
-  effectivePrice: number | null;
-  grossMarginPercent: number | null;
-  estimatedPurchaseCost: number | null;
-  priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
-  recommendationType: "BUY" | "TRANSFER_IN" | "DO_NOT_BUY" | "ON_DEMAND" | "OVERSTOCK" | "REVIEW_PRICE";
-  message: string;
-  warnings: string[];
-  recommendedActions: string[];
-};
-type ReplenishmentSummary = {
-  urgentCount: number;
-  highCount: number;
-  buyCount: number;
-  transferInCount: number;
-  overstockCount: number;
-  onDemandCount: number;
-  reviewPriceCount: number;
-  estimatedTotalPurchaseCost: number;
-};
-type TransferOpportunity = {
-  productId: string;
-  sku: string;
-  barcode?: string | null;
-  name: string;
-  fromBranchId: string;
-  fromBranchName: string;
-  toBranchId: string;
-  toBranchName: string;
-  availableToTransfer: number;
-  suggestedTransferQty: number;
-  toBranchStockOnHand: number;
-  toBranchReorderPoint: number;
-  fromBranchStockOnHand: number;
-  fromBranchReorderPoint: number;
-  estimatedTransferCost: number | null;
-  estimatedPurchaseCostAvoided: number | null;
-  priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
-  message: string;
-  warnings: string[];
-};
 export type Pagination = {
   page: number;
   limit: number;

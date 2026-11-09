@@ -26,7 +26,7 @@
  */
 import { CashSessionStatus } from "@prisma/client";
 
-export const CASH_REFUND_HANDLING_VALUES = ["REFUNDED_FROM_DRAWER", "NO_CASH_MOVEMENT"] as const;
+const CASH_REFUND_HANDLING_VALUES = ["REFUNDED_FROM_DRAWER", "NO_CASH_MOVEMENT"] as const;
 export type CashRefundHandling = (typeof CASH_REFUND_HANDLING_VALUES)[number];
 
 export type CancellationCashPlan =

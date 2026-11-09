@@ -86,7 +86,7 @@ async function fetchWeekTenders(branchId: string, weekStart: Date, weekEnd: Date
     .map((r) => ({ method: r.method, amount: Number(r.amount), businessDate: r.operationalDay.businessDate }));
 }
 
-export type InTransitEntry = {
+type InTransitEntry = {
   custodyAccountId: string;
   holderUserId: string | null;
   holderName: string;

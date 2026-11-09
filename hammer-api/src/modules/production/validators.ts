@@ -9,7 +9,7 @@ const recipeInputSchema = z.object({
   notes: z.string().max(500).optional().nullable(),
 });
 
-export const recipeTypeSchema = z.enum([
+const recipeTypeSchema = z.enum([
   "MANUFACTURING",
   "CONVERSION",
   "CUTTING",
@@ -18,7 +18,7 @@ export const recipeTypeSchema = z.enum([
   "REPACKAGING",
 ]);
 
-export const recipeFamilySchema = z.enum([
+const recipeFamilySchema = z.enum([
   "WOOD",
   "CEMENT",
   "STONE",
@@ -31,10 +31,10 @@ export const recipeFamilySchema = z.enum([
 // Producción v2 Fase 1: overheadMode decide cómo se calcula el overhead a
 // partir de processingCostPerBatch — NONE (default, C$0), FIXED (el valor tal
 // cual), PCT_MAT (% de los materiales estándar del lote).
-export const overheadModeSchema = z.enum(["NONE", "FIXED", "PCT_MAT"]);
+const overheadModeSchema = z.enum(["NONE", "FIXED", "PCT_MAT"]);
 
 // Producción v2 Fase 3: política de precio al cerrar un lote.
-export const pricePolicySchema = z.enum(["RECALC_TARGET_MARGIN", "KEEP_CURRENT", "APPROVAL_IF_DELTA"]);
+const pricePolicySchema = z.enum(["RECALC_TARGET_MARGIN", "KEEP_CURRENT", "APPROVAL_IF_DELTA"]);
 
 export const createRecipeSchema = z.object({
   name: z.string().min(2, "Nombre muy corto").max(200),

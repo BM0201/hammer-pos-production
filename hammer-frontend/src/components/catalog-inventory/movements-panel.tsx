@@ -1,17 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import {
-  Check, ChevronLeft, ChevronRight, DollarSign, History, Package,
-  Plus, RefreshCcw, Save,
+  Check, ChevronLeft, ChevronRight, History, Package,
+  Plus, RefreshCcw,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, qty, fmtDateTime } from "@/lib/format";
-import { tokenize } from "@/lib/product-search";
 import { numberOrNull } from "@/components/catalog-inventory/catalog-inventory-admin";
 import { IntakeSheet } from "@/components/inventory-intake/intake-sheet";
 import { IntakeHistoryPanel } from "@/components/inventory-intake/intake-history-panel";

@@ -11,7 +11,7 @@ import { prisma } from "@/lib/prisma";
  * (Nicaragua / America/Managua by default). A `null` time disables auto-close
  * for that day. `enabled = false` disables the whole feature.
  */
-export const CASH_AUTO_CLOSE_SETTING_KEY = "cash_auto_close_config";
+const CASH_AUTO_CLOSE_SETTING_KEY = "cash_auto_close_config";
 
 export interface CashAutoCloseConfig {
   enabled: boolean;

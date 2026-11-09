@@ -9,7 +9,7 @@ import { prisma } from "@/lib/prisma";
  * caché TTL + auditoría) — ver auto-day-config.ts / approve-policy-config.ts.
  */
 
-export const CASH_TOLERANCE_SETTING_KEY = "operational_day_cash_tolerance_config";
+const CASH_TOLERANCE_SETTING_KEY = "operational_day_cash_tolerance_config";
 
 export interface CashToleranceConfig {
   /** Tolerancia por defecto (C$) para sucursales sin override. */

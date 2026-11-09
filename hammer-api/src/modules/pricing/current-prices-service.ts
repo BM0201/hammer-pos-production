@@ -25,7 +25,7 @@ import type { Prisma } from "@prisma/client";
 
 export type CurrentPriceSource = "BRANCH" | "STANDARD" | "FUSION_DERIVED" | "MISSING";
 
-export type CurrentPriceRow = {
+type CurrentPriceRow = {
   productId: string;
   sku: string;
   name: string;
@@ -60,7 +60,7 @@ export type CurrentPriceRow = {
   costSuspicionMessage: string | null;
 };
 
-export type CurrentPricesTotals = {
+type CurrentPricesTotals = {
   total: number;
   byPriceSource: Record<CurrentPriceSource, number>;
   belowPolicyCount: number;

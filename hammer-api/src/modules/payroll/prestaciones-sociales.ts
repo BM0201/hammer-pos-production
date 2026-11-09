@@ -63,11 +63,11 @@ export function monthsOfService(startDate: Date | string, at: Date = new Date())
 /* ── Indemnización por antigüedad (Art. 45 CT) ──────────────────────────────── */
 
 /** Tope legal de la indemnización: 5 meses de salario (exacto a los 6 años). */
-export const INDEMNIZACION_MAX_MONTHS = 5;
+const INDEMNIZACION_MAX_MONTHS = 5;
 /** Exención adicional de IR para montos por convenio (Art. 19.3 Ley 822). */
-export const INDEMNIZACION_EXTRA_EXEMPT_CAP = 500_000;
+const INDEMNIZACION_EXTRA_EXEMPT_CAP = 500_000;
 /** Retención definitiva sobre el excedente de la exención (Art. 24.1 Ley 822). */
-export const INDEMNIZACION_EXCESS_RETENTION_RATE = 0.1;
+const INDEMNIZACION_EXCESS_RETENTION_RATE = 0.1;
 
 /**
  * Tasa de provisión mensual vigente según la antigüedad (en meses):
@@ -161,7 +161,7 @@ export function aguinaldoAccrued(monthlySalary: number, startDate: Date | string
 /* ── Vacaciones (Arts. 76–82 CT) ────────────────────────────────────────────── */
 
 /** Días de vacación acumulados por mes trabajado (2.5 = 15 por semestre). */
-export const VACATION_DAYS_PER_MONTH = 2.5;
+const VACATION_DAYS_PER_MONTH = 2.5;
 
 export type VacationPeriod = {
   /** 0 = primer año de servicio, 1 = segundo año, etc. */

@@ -96,9 +96,9 @@ export type OutlierCheck = {
 };
 
 /** Mínimo de registros para poder hablar de "valores normales". */
-export const OUTLIER_MIN_SAMPLE = 3;
+const OUTLIER_MIN_SAMPLE = 3;
 /** Un gasto es atípico si supera 2× el gasto típico Y además el máximo visto. */
-export const OUTLIER_TYPICAL_FACTOR = 2;
+const OUTLIER_TYPICAL_FACTOR = 2;
 
 /**
  * ¿Este monto se sale de los valores normales de la categoría?

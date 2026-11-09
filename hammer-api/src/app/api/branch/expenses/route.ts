@@ -1,3 +1,4 @@
+import { getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
@@ -26,18 +27,6 @@ function getNicaraguaDateParts() {
   // Last day of the current month (day 0 of next month)
   const lastDay = new Date(year, month, 0).getDate();
   return { year, month, day, lastDay };
-}
-
-/**
- * UTC range [start, end) covering the current business day in America/Managua
- * (fixed UTC-6, no DST). Used so the "Gastos del Local" panel only lists the
- * expenses registered today — they clear automatically when the day rolls over.
- */
-function getManaguaDayUtcRange() {
-  const { year, month, day } = getNicaraguaDateParts();
-  const start = new Date(Date.UTC(year, month - 1, day, 6, 0, 0, 0)); // Managua 00:00 → 06:00 UTC
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-  return { start, end };
 }
 
 const createSchema = z.object({
@@ -108,7 +97,7 @@ export async function GET(req: NextRequest) {
 
     // Only the expenses registered during the current business day are listed here,
     // so the "Gastos del Local" panel clears automatically at the end of each day.
-    const { start, end } = getManaguaDayUtcRange();
+    const { start, end } = getOperationalWindowForManaguaDate();
     const expenses = await listExpensesByBranch(branchId, { effectiveFromGte: start, effectiveFromLt: end });
 
     // Payroll expenses are only visible on the 15th and the last day of the month

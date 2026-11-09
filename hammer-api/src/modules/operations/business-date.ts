@@ -2,7 +2,7 @@ export const OPERATIONAL_TIMEZONE = "America/Managua";
 const TIMEZONE = OPERATIONAL_TIMEZONE;
 
 /** Hora (0–23) a la que termina el día de negocio. 0 = medianoche (comportamiento por defecto). */
-export const DEFAULT_BUSINESS_DAY_ENDS_AT_HOURS = 0;
+const DEFAULT_BUSINESS_DAY_ENDS_AT_HOURS = 0;
 
 function localWallClockParts(date: Date, timezone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {

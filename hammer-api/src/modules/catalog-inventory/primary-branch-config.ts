@@ -18,7 +18,7 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
  * — hoy eso ya da Managua Central por orden alfabético real (MGA < MSY <
  * RIV), no porque el código la nombre.
  */
-export const PRIMARY_INVENTORY_BRANCH_SETTING_KEY = "primary_inventory_branch_id";
+const PRIMARY_INVENTORY_BRANCH_SETTING_KEY = "primary_inventory_branch_id";
 
 const CONFIG_CACHE_TTL_MS = 60_000;
 let cache: { value: string | null; expiresAt: number } | null = null;

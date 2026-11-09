@@ -8,7 +8,7 @@
 
 export type Tone = "success" | "warning" | "danger" | "info" | "neutral";
 
-export const BATCH_STATUS: Record<string, { label: string; tone: Tone }> = {
+const BATCH_STATUS: Record<string, { label: string; tone: Tone }> = {
   DRAFT: { label: "Borrador", tone: "neutral" },
   PLANNED: { label: "Planificado", tone: "info" },
   IN_PROGRESS: { label: "En proceso", tone: "warning" },
@@ -17,16 +17,7 @@ export const BATCH_STATUS: Record<string, { label: string; tone: Tone }> = {
   REVERSED: { label: "Revertido", tone: "danger" },
 };
 
-export const RECIPE_TYPES: Array<[code: string, label: string]> = [
-  ["MANUFACTURING", "Manufactura"],
-  ["CONVERSION", "Conversión"],
-  ["CUTTING", "Corte"],
-  ["MIXING", "Mezcla"],
-  ["PACKAGING", "Empaque"],
-  ["REPACKAGING", "Reempaque"],
-];
-
-export const RECIPE_FAMILIES: Array<[code: string, label: string]> = [
+const RECIPE_FAMILIES: Array<[code: string, label: string]> = [
   ["WOOD", "Madera"],
   ["CEMENT", "Cemento"],
   ["STONE", "Piedra"],
@@ -36,7 +27,7 @@ export const RECIPE_FAMILIES: Array<[code: string, label: string]> = [
   ["GENERAL", "General"],
 ];
 
-export const RECOMMENDATION_PRIORITY: Record<string, { label: string; tone: Tone; rank: number }> = {
+const RECOMMENDATION_PRIORITY: Record<string, { label: string; tone: Tone; rank: number }> = {
   URGENT: { label: "Urgente", tone: "danger", rank: 4 },
   HIGH: { label: "Alta", tone: "warning", rank: 3 },
   MEDIUM: { label: "Media", tone: "info", rank: 2 },

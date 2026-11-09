@@ -29,7 +29,7 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
  * `inventory/service.ts` (`convertSaleUnitCostToBaseUnitCost`). No se
  * duplica esa conversión acá.
  */
-export type ResolvedInboundCostSource = "ENTERED" | "BRANCH" | "WAC_ESTIMATE" | "GLOBAL_AVERAGE" | "GLOBAL" | "LAST_PURCHASE" | "NONE";
+type ResolvedInboundCostSource = "ENTERED" | "BRANCH" | "WAC_ESTIMATE" | "GLOBAL_AVERAGE" | "GLOBAL" | "LAST_PURCHASE" | "NONE";
 export type ResolvedInboundCost = { cost: Prisma.Decimal | null; source: ResolvedInboundCostSource };
 
 export type ResolveInboundUnitCostItem = { productId: string; branchId: string; enteredCost: number | Prisma.Decimal | null };

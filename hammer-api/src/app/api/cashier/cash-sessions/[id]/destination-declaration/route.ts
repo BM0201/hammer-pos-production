@@ -1,6 +1,6 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
-import { ok, created, fail } from "@/lib/api/response";
+import { created, fail } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
 import { isMaster } from "@/modules/rbac/guards";

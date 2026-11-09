@@ -9,7 +9,7 @@ import { normalizeForDuplicateMatch, diceCoefficient } from "@/modules/catalog/d
  * el código.
  */
 
-export const SUGGESTION_WEIGHTS = {
+const SUGGESTION_WEIGHTS = {
   /** Señal 1 — mismo prefijo GS1 que un código ya registrado (≥7 dígitos en común). */
   SAME_MANUFACTURER: 40,
   /** Bonus sobre SAME_MANUFACTURER si además el número de artículo está cerca (±100). */
@@ -36,7 +36,7 @@ export const SUGGESTION_WEIGHTS = {
 /** Mínimo de dígitos en común para considerar "mismo fabricante" — un prefijo corto (3-4 dígitos) es común a medio GS1, no dice nada. */
 export const MANUFACTURER_PREFIX_MIN_LENGTH = 7;
 /** "Difiere en menos de ±100 en los dígitos de artículo." */
-export const ARTICLE_NUMBER_CLOSE_THRESHOLD = 100;
+const ARTICLE_NUMBER_CLOSE_THRESHOLD = 100;
 /** Umbral de nombre parecido — mismo que duplicate-finder.ts, reusado para consistencia (no un segundo número inventado). */
 const NAME_SIMILARITY_THRESHOLD = 0.5;
 const SUGGESTION_LIMIT = 5;

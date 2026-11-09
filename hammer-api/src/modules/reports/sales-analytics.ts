@@ -37,7 +37,7 @@ type CategoryRow = {
 };
 type DistinctRow = { count: number };
 
-export type SalesByDayRow = {
+type SalesByDayRow = {
   date: string;
   total_sold: number;
   orders_count: number;

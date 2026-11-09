@@ -164,7 +164,7 @@ async function getInboundPurchaseQuantities(branchId: string, productIds: string
   return byProduct;
 }
 
-export async function getInboundTransferQuantities(branchId: string, productIds: string[]) {
+async function getInboundTransferQuantities(branchId: string, productIds: string[]) {
   const byProduct = new Map<string, { pendingQuantity: number; documents: InboundDocument[] }>();
   if (productIds.length === 0) return byProduct;
 

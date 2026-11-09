@@ -271,37 +271,6 @@ export async function executeDecisionAction(input: ExecuteInput): Promise<Execut
     };
   }
 
-  // Acciones de tipo "revisión": no hay nada que el motor pueda ejecutar
-  // automáticamente — la acción ES que un humano revise. Si un usuario llegó
-  // hasta aquí (aprobó y presionó Ejecutar), está confirmando que la atendió,
-  // así que la decisión se cierra como EXECUTED. Antes quedaba en
-  // MANUAL_REVIEW para siempre y "seguía apareciendo" en la bandeja aunque el
-  // usuario ya había decidido. Si la condición persiste, el dedup por
-  // fingerprint la reabre legítimamente pasados 14 días.
-  if (
-    action === "CREATE_PRICE_CHANGE_PROPOSAL"
-    || action === "CREATE_DISCOUNT_PROPOSAL"
-    || action === "SEND_TO_PHYSICAL_COUNT"
-    || action === "CREATE_AUDIT_CASE"
-    || action === "REVIEW_CASH_SESSION"
-    || action === "REQUIRE_CASH_REVIEW"
-    || action === "REVIEW_ONLY"
-    || action === "REPAIR_DRAFT_ORDER_TOTALS"
-    || action === "BLOCK_ORDER_FOR_REVIEW"
-    || action === "RECALCULATE_KARDEX_BALANCE"
-    || action === "CREATE_INVENTORY_ADJUSTMENT_DRAFT"
-    || action === "INVALIDATE_MANUAL_INVOICE"
-    || action.startsWith("REVIEW_")
-  ) {
-    return {
-      executed: true,
-      action,
-      reviewConfirmed: true,
-      message: "Revisión confirmada por el usuario — decisión cerrada. Si la condición persiste, volverá a detectarse en un próximo escaneo.",
-      proposedActionJson: payload,
-    };
-  }
-
   return {
     executed: false,
     action,

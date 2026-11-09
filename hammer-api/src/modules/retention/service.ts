@@ -27,7 +27,7 @@ import {
 const DEFAULT_BATCH_SIZE = 1000;
 const DEFAULT_MAX_BATCHES_PER_TABLE = 20; // máx 20k filas/tabla/corrida
 
-export type SweepRuleResult = {
+type SweepRuleResult = {
   table: string;
   description: string;
   retentionDays: number;

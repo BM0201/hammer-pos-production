@@ -70,7 +70,7 @@ test("reclassifyExpenseCategory cambia solo category/conceptId, nunca monto/fech
 
   assert.equal(result.category, "SUPPLIES");
   const stored = getExpenses()[0];
-  assert.equal(stored.amount.toString(), "5640");
+  assert.equal(String(stored.amount), "5640");
   assert.equal(stored.cashMovementId, "mv-1");
   assert.deepEqual((stored.effectiveFrom as Date).toISOString(), new Date("2026-10-08").toISOString());
   assert.equal(getAuditLogs()[0].action, "EXPENSE_RECLASSIFIED");

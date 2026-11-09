@@ -63,7 +63,7 @@ function median(sorted: number[]): number | null {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-export function suspectCostFarFromOtherBranches(cost: number | null, otherBranchCosts: number[]): CostSuspicion | null {
+function suspectCostFarFromOtherBranches(cost: number | null, otherBranchCosts: number[]): CostSuspicion | null {
   if (cost === null || otherBranchCosts.length === 0) return null;
   const med = median([...otherBranchCosts].sort((a, b) => a - b));
   if (med === null || med <= 0) return null;
@@ -73,7 +73,7 @@ export function suspectCostFarFromOtherBranches(cost: number | null, otherBranch
 }
 
 /** Reusa el mismo criterio que bloquea movimientos de inventario (wac.ts), en modo "solo avisar" — no lanza, devuelve la sospecha. */
-export function suspectPackageAsUnit(cost: number | null, existingWac: number | null, packageFactor: number | null): CostSuspicion | null {
+function suspectPackageAsUnit(cost: number | null, existingWac: number | null, packageFactor: number | null): CostSuspicion | null {
   if (cost === null || existingWac === null || packageFactor === null) return null;
   try {
     detectPackageCostAsUnitCost({ inbound: true, baseMovementUnitCost: new Prisma.Decimal(cost), existingWac: new Prisma.Decimal(existingWac), packageFactor: new Prisma.Decimal(packageFactor) });

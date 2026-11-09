@@ -10,7 +10,7 @@ import { applyRounding, type RoundingRule } from "@/modules/pricing/calculator";
  * probar con números a mano, sin base de datos.
  */
 
-export type PriceReferenceMethod =
+type PriceReferenceMethod =
   | "KEEP_CURRENT"
   | "SUGGESTED"
   | "REALIZED_MARGIN"

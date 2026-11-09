@@ -11,7 +11,7 @@ import { applyWasteFactor } from "@/modules/production/calculations";
  */
 
 export type Priority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
-export type RecommendationType =
+type RecommendationType =
   | "PRODUCE_FROM_EXCESS"
   | "PRODUCE_FROM_AVAILABLE_STOCK"
   | "BUY_INSTEAD"
@@ -74,7 +74,7 @@ export type EngineProductInput = {
   lastPurchaseCost: number | null;
 };
 
-export type EngineInputLine = {
+type EngineInputLine = {
   productId: string;
   productName: string;
   sku: string;

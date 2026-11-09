@@ -111,7 +111,7 @@ export async function getRecommendations(
 }
 
 /** Full summary — runs all analyzers */
-export async function getFullInsights(
+async function getFullInsights(
   branchId?: string,
   days = 30,
 ): Promise<AiInsightsSummary> {
@@ -137,7 +137,7 @@ export async function getFullInsights(
 }
 
 /** Force refresh all caches */
-export function invalidateInsightsCache(): void {
+function invalidateInsightsCache(): void {
   cache.discounts = null;
   cache.anomalies = null;
   cache.discrepancies = null;

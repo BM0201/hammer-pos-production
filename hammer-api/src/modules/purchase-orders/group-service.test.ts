@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Prisma } from "@prisma/client";
 import {
   createPurchaseOrderGroup,
   getPurchaseOrderGroup,
@@ -16,9 +15,6 @@ import {
  * necesitan — group-service.ts las llama directo a propósito (no
  * reimplementa nada de aprobar/cancelar/crear una orden individual).
  */
-function decimal(value: number) {
-  return new Prisma.Decimal(value);
-}
 
 const BRANCH_1 = { id: "branch-1", code: "MSY", name: "Masaya" };
 const BRANCH_2 = { id: "branch-2", code: "RVS", name: "Rivas" };

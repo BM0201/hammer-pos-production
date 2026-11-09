@@ -1,6 +1,5 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { logAuditEvent } from "@/modules/audit/service";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -22,7 +21,7 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
  * siguen calculando el WAC en cada movimiento sin cambios — este flag
  * NO los toca, solo decide si el resto del sistema LEE ese número.
  */
-export const WAC_DRIVES_COST_CHAIN_SETTING_KEY = "wac_drives_cost_chain";
+const WAC_DRIVES_COST_CHAIN_SETTING_KEY = "wac_drives_cost_chain";
 
 const CONFIG_CACHE_TTL_MS = 60_000;
 let cache: { value: boolean; expiresAt: number } | null = null;
@@ -49,31 +48,4 @@ export async function isWacDrivesCostChainEnabled(db: DbClient = prisma): Promis
   const value = parseFlag(row?.value);
   cache = { value, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS };
   return value;
-}
-
-/**
- * Cambia el flag explícitamente (uso: script de reactivación futura, o un
- * botón de administración si se agrega más adelante). No es parte del
- * flujo normal de este ciclo — el toggle de rutina es
- * PUT /api/system-admin/settings con key=wac_drives_cost_chain, que YA
- * existe (system-admin/service.ts::updateSystemSetting) y no necesita
- * este helper; este solo invalida la cache local además de escribir, para
- * que un cambio programático se vea de inmediato sin esperar el TTL.
- */
-export async function setWacDrivesCostChainEnabled(enabled: boolean, actorUserId?: string): Promise<void> {
-  const value = enabled ? "true" : "false";
-  await prisma.systemSetting.upsert({
-    where: { key: WAC_DRIVES_COST_CHAIN_SETTING_KEY },
-    create: { key: WAC_DRIVES_COST_CHAIN_SETTING_KEY, value, updatedByUserId: actorUserId ?? null },
-    update: { value, updatedByUserId: actorUserId ?? null },
-  });
-  cache = { value: enabled, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS };
-  await logAuditEvent({
-    actorUserId,
-    module: "catalog",
-    action: enabled ? "WAC_COST_CHAIN_ENABLED" : "WAC_COST_CHAIN_DISABLED",
-    entityType: "SystemSetting",
-    entityId: WAC_DRIVES_COST_CHAIN_SETTING_KEY,
-    metadataJson: { enabled },
-  });
 }

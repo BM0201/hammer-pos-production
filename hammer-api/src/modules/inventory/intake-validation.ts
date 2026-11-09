@@ -6,7 +6,7 @@
  * decide, con esos números ya en la mano.
  */
 
-export type IntakeKind = "ADD_STOCK" | "PHYSICAL_COUNT" | "OPENING_BALANCE";
+type IntakeKind = "ADD_STOCK" | "PHYSICAL_COUNT" | "OPENING_BALANCE";
 /**
  * prompt-entrada-multisucursal-fix.md — SKIPPED: "0 en una sucursal" en
  * ADD_STOCK/OPENING_BALANCE ("no lleva") — nunca es un error, no se valida
@@ -15,7 +15,7 @@ export type IntakeKind = "ADD_STOCK" | "PHYSICAL_COUNT" | "OPENING_BALANCE";
  */
 export type IntakeLineStatus = "OK" | "REVIEW" | "ERROR" | "SKIPPED";
 
-export type IntakeMessageKind = "DATA" | "BLOCKED" | "RULE";
+type IntakeMessageKind = "DATA" | "BLOCKED" | "RULE";
 
 export type IntakeValidationMessage = {
   /** Para poder testear/filtrar sin parsear el texto en español. */

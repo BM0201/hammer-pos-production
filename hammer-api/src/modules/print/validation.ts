@@ -3,13 +3,13 @@ import { z } from "zod";
 const printerModeSchema = z.enum(["BROWSER_PRINT", "QZ_TRAY", "NETWORK_ESCPOS", "PDF_ONLY", "BROWSER", "THERMAL_BROWSER", "ESC_POS_FUTURE"]);
 const paperWidthSchema = z.enum(["W58MM", "W80MM", "A4", "THERMAL_58MM", "THERMAL_80MM"]);
 
-export function normalizePrinterMode(value?: z.infer<typeof printerModeSchema>) {
+function normalizePrinterMode(value?: z.infer<typeof printerModeSchema>) {
   if (value === "BROWSER" || value === "THERMAL_BROWSER") return "BROWSER_PRINT" as const;
   if (value === "ESC_POS_FUTURE") return "NETWORK_ESCPOS" as const;
   return value ?? "BROWSER_PRINT";
 }
 
-export function normalizePaperWidth(value?: z.infer<typeof paperWidthSchema>) {
+function normalizePaperWidth(value?: z.infer<typeof paperWidthSchema>) {
   if (value === "THERMAL_58MM") return "W58MM" as const;
   if (value === "THERMAL_80MM") return "W80MM" as const;
   return value ?? "W80MM";

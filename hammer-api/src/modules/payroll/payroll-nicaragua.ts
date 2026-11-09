@@ -22,18 +22,18 @@
 
 export type InssRegime = "INTEGRAL" | "IVM_RP";
 
-export const INSS_INTEGRAL_LABORAL = 0.07;
-export const INSS_INTEGRAL_PATRONAL_LT50 = 0.215;
-export const INSS_INTEGRAL_PATRONAL_GTE50 = 0.225;
-export const INSS_IVM_RP_LABORAL = 0.05;
-export const INSS_IVM_RP_PATRONAL_LT50 = 0.155;
-export const INSS_IVM_RP_PATRONAL_GTE50 = 0.165;
+const INSS_INTEGRAL_LABORAL = 0.07;
+const INSS_INTEGRAL_PATRONAL_LT50 = 0.215;
+const INSS_INTEGRAL_PATRONAL_GTE50 = 0.225;
+const INSS_IVM_RP_LABORAL = 0.05;
+const INSS_IVM_RP_PATRONAL_LT50 = 0.155;
+const INSS_IVM_RP_PATRONAL_GTE50 = 0.165;
 
 /** INATEC: 2% patronal sobre planilla bruta, ambos regímenes (constante legal). */
-export const INATEC_RATE = 0.02;
+const INATEC_RATE = 0.02;
 
 /** Umbral de trabajadores activos que cambia la tasa patronal (≥50 sube). */
-export const INSS_EMPLOYER_SIZE_THRESHOLD = 50;
+const INSS_EMPLOYER_SIZE_THRESHOLD = 50;
 
 /**
  * Tabla progresiva ANUAL del IR salarial (Ley 822, art. 23), en córdobas.
@@ -115,9 +115,9 @@ export function resolveInssRates(
 export type BenefitAccrualMode = "ACCRUE_MONTHLY" | "ON_PAYMENT";
 
 /** Aguinaldo: 1/12 del salario mensual por mes trabajado (Art. 93 CT). */
-export const AGUINALDO_MONTHLY_RATE = 1 / 12;
+const AGUINALDO_MONTHLY_RATE = 1 / 12;
 /** Vacaciones: 2.5 días/mes × (salario/30) = 1/12 del salario (Art. 76 CT). */
-export const VACACIONES_MONTHLY_RATE = 2.5 / 30;
+const VACACIONES_MONTHLY_RATE = 2.5 / 30;
 /** Indemnización Art. 45, años 1–3: 1 mes por año → 1/12 mensual. */
 export const INDEMNIZACION_RATE_Y1_3 = 1 / 12;
 /** Indemnización Art. 45, años 4–6: 20 días por año → (20/30)/12 mensual. */

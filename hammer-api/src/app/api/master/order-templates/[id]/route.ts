@@ -3,6 +3,8 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
+import { isMaster, hasCapabilityInAnyAssignedBranch } from "@/modules/rbac/guards";
+import { CAPABILITIES } from "@/modules/rbac/policies";
 import { ok, fail } from "@/lib/api/response";
 import { updateOrderTemplate, deleteOrderTemplate } from "@/modules/purchase-orders/order-template-service";
 
@@ -25,6 +27,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(request, session);
+    if (!isMaster(session) && !hasCapabilityInAnyAssignedBranch(session, CAPABILITIES.PURCHASES_CREATE)) throw new Error("FORBIDDEN: Sin permiso para editar plantillas de pedido.");
 
     const { id } = await params;
     const parsed = updateSchema.safeParse(await request.json());
@@ -41,6 +44,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(request, session);
+    if (!isMaster(session) && !hasCapabilityInAnyAssignedBranch(session, CAPABILITIES.PURCHASES_CREATE)) throw new Error("FORBIDDEN: Sin permiso para editar plantillas de pedido.");
 
     const { id } = await params;
     await deleteOrderTemplate(id);

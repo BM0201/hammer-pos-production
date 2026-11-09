@@ -27,7 +27,7 @@ export function isCsrfError(error: unknown): error is CsrfError {
   return error instanceof CsrfError;
 }
 
-export function generateCsrfToken(): string {
+function generateCsrfToken(): string {
   return randomBytes(32).toString("hex");
 }
 
@@ -46,7 +46,7 @@ export async function createCsrfToken(sessionUserId: string): Promise<string> {
   return token;
 }
 
-export async function validateCsrfToken(token: string, sessionUserId: string): Promise<boolean> {
+async function validateCsrfToken(token: string, sessionUserId: string): Promise<boolean> {
   if (!token || !sessionUserId) return false;
 
   // Tokens are reusable until TTL — check existence without deleting.

@@ -1,8 +1,8 @@
 import type { ApprovalStatus } from "@prisma/client";
 import { APPROVAL_DECISIONS, APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
 
-export type ApprovalDomainType = (typeof APPROVAL_REQUEST_TYPES)[keyof typeof APPROVAL_REQUEST_TYPES];
-export type ApprovalDecision = (typeof APPROVAL_DECISIONS)[keyof typeof APPROVAL_DECISIONS];
+type ApprovalDomainType = (typeof APPROVAL_REQUEST_TYPES)[keyof typeof APPROVAL_REQUEST_TYPES];
+type ApprovalDecision = (typeof APPROVAL_DECISIONS)[keyof typeof APPROVAL_DECISIONS];
 
 export type CreateApprovalInput = {
   branchId: string;

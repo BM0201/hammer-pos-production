@@ -115,7 +115,7 @@ export function dismissedPairKey(productAId: string, productBId: string): Dismis
 }
 
 /** Contención (una incluye todas las palabras de la otra) pide al menos esto de parecido: "SUR FASTYL" no es duplicado de "SUR FASTYL ROJO OXIDO GL". */
-export const CONTAINMENT_MIN_SIMILARITY = 0.6;
+const CONTAINMENT_MIN_SIMILARITY = 0.6;
 
 function levenshtein(a: string, b: string): number {
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);

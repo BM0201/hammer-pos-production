@@ -40,10 +40,10 @@ export const VARA_LENGTH_MAP: Readonly<Record<number, number>> = {
 export const LENGTHS_THAT_FORCE_CUADRO: ReadonlySet<number> = new Set([8]);
 
 /** Default pricing constants */
-export const DEFAULT_COST_PER_FOOT = 20.0;
-export const DEFAULT_PRICE_PER_INCH_TABLA = 8.9;
-export const DEFAULT_PRICE_PER_INCH_TABLILLA = 6.9;
-export const DEFAULT_PRICE_PER_INCH_CUADRO = 6.9;
+const DEFAULT_COST_PER_FOOT = 20.0;
+const DEFAULT_PRICE_PER_INCH_TABLA = 8.9;
+const DEFAULT_PRICE_PER_INCH_TABLILLA = 6.9;
+const DEFAULT_PRICE_PER_INCH_CUADRO = 6.9;
 
 /* ── Types ── */
 
@@ -92,7 +92,7 @@ export interface TimberTripLineInput {
   priceGroup?: TimberPriceGroup; // override classification
 }
 
-export interface TimberTripLineResult {
+interface TimberTripLineResult {
   dimensions: TimberDimensions;
   priceGroup: TimberPriceGroup;
   pieces: number;
@@ -108,7 +108,7 @@ export interface TimberTripLineResult {
   minPricePerInchForTargetMargin: number;
 }
 
-export interface TimberMarginAlerts {
+interface TimberMarginAlerts {
   targetMarginPercent: number;
   linesUnderTarget: number;
   linesWithNegativeMargin: number;
@@ -118,7 +118,7 @@ export interface TimberMarginAlerts {
   minPricePerInchByGroup: Partial<Record<TimberPriceGroup, number>>;
 }
 
-export interface TimberTripTotals {
+interface TimberTripTotals {
   totalPieces: number;
   totalFeet: number;
   /** Costo de la madera SOLA por pie (sin gastos del viaje) — se conserva para reporte. */
@@ -135,7 +135,7 @@ export interface TimberTripTotals {
   globalMarginPct: number;
 }
 
-export interface TimberTripExpenses {
+interface TimberTripExpenses {
   freightAmount?: number;
   fuelAmount?: number;
   perDiemAmount?: number;
@@ -143,7 +143,7 @@ export interface TimberTripExpenses {
   otherExpensesAmount?: number;
 }
 
-export type ReconciliationStatus = "OK" | "REVIEW" | "NOT_APPLICABLE";
+type ReconciliationStatus = "OK" | "REVIEW" | "NOT_APPLICABLE";
 
 export interface TimberTripReconciliation {
   invoicedFeet: number | null;
@@ -178,7 +178,7 @@ export interface TimberTripResult {
   marginAlerts: TimberMarginAlerts;
 }
 
-export interface TimberDistribution {
+interface TimberDistribution {
   feetOf12: number;
   feetOf10: number;
   pctOf12: number;
@@ -221,8 +221,8 @@ export const DEFAULT_CUBICATION_TABLE: CubicationRow[] = Object.entries(VARA_LEN
   forceCuadro: LENGTHS_THAT_FORCE_CUADRO.has(Number(lengthFeet)),
 }));
 
-export const DEFAULT_TABLA_WIDTHS = [10, 12];
-export const DEFAULT_TABLILLA_WIDTHS = [6, 8];
+const DEFAULT_TABLA_WIDTHS = [10, 12];
+const DEFAULT_TABLILLA_WIDTHS = [6, 8];
 
 export const DEFAULT_CLASSIFICATION_CONFIG: TimberClassificationConfig = {
   tablaWidths: DEFAULT_TABLA_WIDTHS,
@@ -513,7 +513,7 @@ export function calculateTimberTrip(
 /**
  * Calculate distribution percentages (% tabla de 12, de 10, etc.)
  */
-export function calculateDistribution(
+function calculateDistribution(
   lines: TimberTripLineResult[],
   totalFeet: number,
 ): TimberDistribution {
@@ -545,7 +545,7 @@ export function calculateDistribution(
  * Usado por la política TARGET_MARGIN — redondear al más cercano podría
  * bajar el precio y perder el margen objetivo garantizado.
  */
-export function roundUpToMultiple(value: number, multiple: number): number {
+function roundUpToMultiple(value: number, multiple: number): number {
   if (!(multiple > 0)) return roundTo(value, MONEY_DECIMALS);
   return roundTo(Math.ceil(value / multiple) * multiple, MONEY_DECIMALS);
 }

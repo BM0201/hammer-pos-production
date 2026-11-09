@@ -20,7 +20,7 @@ async function nextGroupCodeTx(tx: Prisma.TransactionClient): Promise<{ code: st
   return { code: `GP-${String(sequence).padStart(6, "0")}`, sequence };
 }
 
-export type CreateGroupLineInput = {
+type CreateGroupLineInput = {
   productId: string;
   unitCostBeforeTax: number;
   taxRate?: number;

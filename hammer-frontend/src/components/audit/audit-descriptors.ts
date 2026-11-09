@@ -9,8 +9,8 @@
 
 import { money as formatMoney } from "@/lib/format";
 
-export type AuditActor = { id: string; username: string; fullName: string } | null;
-export type AuditBranch = { id: string; code: string; name: string } | null;
+type AuditActor = { id: string; username: string; fullName: string } | null;
+type AuditBranch = { id: string; code: string; name: string } | null;
 
 export type AuditEvent = {
   id: string;
@@ -26,7 +26,7 @@ export type AuditEvent = {
   userAgent?: string | null;
 };
 
-export type HeadlineSegment = { text: string; emphasis?: boolean };
+type HeadlineSegment = { text: string; emphasis?: boolean };
 export type FilterGroup = "sales" | "inventory" | "cash" | "pricing" | "people";
 export type Role = "danger" | "warning" | "success" | "info" | "master" | "owner" | "neutral";
 
@@ -47,7 +47,7 @@ export type ResolvedEvent = {
 
 // ── Módulo → etiqueta legible (tag "mod" de cada fila; ~30 valores reales) ──
 
-export const MODULE_LABEL: Record<string, string> = {
+const MODULE_LABEL: Record<string, string> = {
   approvals: "Aprobaciones",
   auth: "Autenticación",
   mfa: "Autenticación 2FA",

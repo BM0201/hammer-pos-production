@@ -12,6 +12,8 @@ import { detectPurchasingDecisions } from "@/modules/brain/detectors/purchasing-
 import { detectSecurityDecisions } from "@/modules/brain/detectors/security-detector";
 import { detectSystemDecisions } from "@/modules/brain/detectors/system-detector";
 import { riskScoreFor } from "@/modules/brain/scoring";
+import type { KnownDetectorKey } from "@/modules/brain/detector-registry";
+import { businessDateFromInput, businessDateFromNow, operationalWindow } from "@/modules/operations/business-date";
 import { persistBrainDecisions, autoResolveNotRedetected, acquireScanRunLockTx, shouldAutoCloseAfterScan } from "@/modules/brain/service";
 import type { BrainDecisionDraft, BrainDetectorContext, BrainScanResult, BrainScanDetectorSummary } from "@/modules/brain/types";
 import type { ScanBrainInput } from "@/modules/brain/validators";
@@ -48,22 +50,6 @@ const OPERATIONAL_DAY_SCAN_CATEGORIES = new Set<BrainDecisionCategory>([
   BrainDecisionCategory.PURCHASING,
 ]);
 
-function managuaBusinessDate(now: Date) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Managua",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
-}
-
-function managuaDayRangeUtc(ymd: string) {
-  const [year, month, day] = ymd.split("-").map(Number);
-  const start = new Date(Date.UTC(year, month - 1, day, 6, 0, 0, 0));
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-  return { start, end };
-}
-
 function validateScanInput(input: ScanBrainInput) {
   // SCHEDULED_SCAN (cron cada hora, "Escanear ahora" y el refresh de
   // Precios) es el default ahora — antes era QUICK_SCAN. Los otros 5 modos
@@ -96,12 +82,26 @@ function detectorAllowedForMode(category: BrainDecisionCategory, mode: string) {
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`TIMEOUT: ${label} excedió ${ms}ms`)), ms)
-    ),
-  ]);
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`TIMEOUT: ${label} excedió ${ms}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * El auto-cierre asume que el detector vio TODO su dominio. Un SCHEDULED_SCAN
+ * con productId/saleOrderId/severidad/fechas solo ve un pedazo: sin esto,
+ * POST /scan { saleOrderId } cerraba como "ya no se detecta" todas las demás
+ * decisiones abiertas de sales-detector.
+ */
+export function isNarrowedScan(input: ScanBrainInput): boolean {
+  return Boolean(
+    input.productId || input.saleOrderId || input.cashSessionId || input.operationalDayId
+    || input.businessDate || input.severity || input.dateFrom || input.dateTo,
+  );
 }
 
 function normalizeSeverity(severity: string): BrainDecisionSeverity {
@@ -159,8 +159,8 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
   try {
     const days = mode === "QUICK_SCAN" ? 1 : mode === "SCHEDULED_SCAN" ? 30 : input.days ?? 30;
     const now = input.now && process.env.NODE_ENV !== "production" ? new Date(input.now) : new Date();
-    const businessDate = input.businessDate ?? (mode === "QUICK_SCAN" ? managuaBusinessDate(now) : undefined);
-    const businessRange = businessDate ? managuaDayRangeUtc(businessDate) : null;
+    const businessDate = input.businessDate ?? (mode === "QUICK_SCAN" ? businessDateFromNow(now).toISOString().slice(0, 10) : undefined);
+    const businessRange = businessDate ? operationalWindow(businessDateFromInput(businessDate)) : null;
     const dateFrom = input.dateFrom ? new Date(input.dateFrom) : businessRange?.start ?? new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
     const dateTo = input.dateTo ? new Date(input.dateTo) : businessRange?.end ?? now;
     const limits = {
@@ -205,7 +205,7 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
       },
     };
 
-    const detectors: Array<{ key: string; category: BrainDecisionCategory; run: (detectorCtx: BrainDetectorContext) => Promise<BrainDecisionDraft[]> }> = [
+    const allDetectors: Array<{ key: KnownDetectorKey; category: BrainDecisionCategory; run: (detectorCtx: BrainDetectorContext) => Promise<BrainDecisionDraft[]> }> = [
       { key: "inventory-detector", category: BrainDecisionCategory.INVENTORY, run: (c: BrainDetectorContext) => detectInventoryDecisions(c) },
       { key: "wac-health-detector", category: BrainDecisionCategory.INVENTORY, run: (c: BrainDetectorContext) => detectWacHealthDecisions(c) },
       { key: "reorder-detector", category: BrainDecisionCategory.REORDER, run: (c: BrainDetectorContext) => detectReorderDecisions(c) },
@@ -217,7 +217,8 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
       { key: "security-detector", category: BrainDecisionCategory.SECURITY, run: (c: BrainDetectorContext) => detectSecurityDecisions(c) },
       { key: "system-detector", category: BrainDecisionCategory.SYSTEM, run: (c: BrainDetectorContext) => detectSystemDecisions(c) },
       { key: "ai-insights", category: BrainDecisionCategory.AUDIT, run: (c: BrainDetectorContext) => detectLegacyAiInsightDecisions(c) },
-    ].filter((detector) =>
+    ];
+    const detectors = allDetectors.filter((detector) =>
       (!input.category || detector.category === input.category)
       && (!input.detector || detector.key === input.detector)
       && detectorAllowedForMode(detector.category, mode)
@@ -278,7 +279,7 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
     });
 
     let autoResolved = 0;
-    if (!input.dryRun) {
+    if (!input.dryRun && !isNarrowedScan(input)) {
       for (const summary of detectorSummaries) {
         if (!shouldAutoCloseAfterScan(mode, summary)) continue;
         autoResolved += await autoResolveNotRedetected({

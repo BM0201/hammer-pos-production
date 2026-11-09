@@ -7,7 +7,7 @@ import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 
 export type { AbcClass, XyzClass, CombinedAbcXyzClass };
 export type CommercialRiskLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-export type CommercialStockPolicy = "HIGH_STOCK" | "NORMAL" | "LOW_STOCK" | "ON_DEMAND";
+type CommercialStockPolicy = "HIGH_STOCK" | "NORMAL" | "LOW_STOCK" | "ON_DEMAND";
 
 export type CommercialIntelligenceInput = {
   productId: string;
@@ -56,7 +56,7 @@ export type CommercialPricingRecommendation = {
   marginDelta: number;
 };
 
-export type CommercialAlert = {
+type CommercialAlert = {
   productId: string;
   sku: string;
   name: string;
@@ -124,7 +124,7 @@ export function classifyProductAbcXyz(input: CommercialIntelligenceInput) {
   });
 }
 
-export function buildCommercialWarnings(input: CommercialIntelligenceInput, combinedClass: CombinedAbcXyzClass) {
+function buildCommercialWarnings(input: CommercialIntelligenceInput, combinedClass: CombinedAbcXyzClass) {
   const warnings: string[] = [];
   const policy = normalizePolicy(input.categoryPolicy);
   const stockOnHand = input.stockOnHand ?? 0;
@@ -220,13 +220,6 @@ export function resolveCommercialPricingRecommendation(input: CommercialIntellig
     marginDelta,
   };
 }
-
-/** Las 9 claves de la matriz ABC-XYZ, con su marginDelta default — lo que la pantalla de Políticas (Fase 4.4) edita por sucursal. */
-export const ABC_XYZ_DEFAULT_MARGIN_DELTAS: Record<CombinedAbcXyzClass, number> = {
-  AX: -5, AY: 0, AZ: 5,
-  BX: 0, BY: 5, BZ: 10,
-  CX: 10, CY: 15, CZ: 20,
-};
 
 function grossMarginPercent(price: number, cost: number | null) {
   if (cost === null || price <= 0) return null;

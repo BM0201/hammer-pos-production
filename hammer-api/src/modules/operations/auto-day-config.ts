@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 
-export const OPERATIONAL_DAY_AUTO_SETTING_KEY = "operational_day_auto_config";
+const OPERATIONAL_DAY_AUTO_SETTING_KEY = "operational_day_auto_config";
 
 /**
  * Horario de referencia — Día Operativo 360. Puramente informativo: no abre
@@ -18,7 +18,7 @@ export interface OperationalDayAutoConfig {
   sundayCloseTime: string | null;
 }
 
-export const DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG: OperationalDayAutoConfig = {
+const DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG: OperationalDayAutoConfig = {
   timezone: "America/Managua",
   weekdayOpenTime: "07:00",
   saturdayOpenTime: "07:00",
@@ -34,7 +34,7 @@ function isValidTime(value: unknown): value is string {
   return typeof value === "string" && TIME_RE.test(value);
 }
 
-export function normalizeOperationalDayAutoConfig(
+function normalizeOperationalDayAutoConfig(
   raw: Partial<OperationalDayAutoConfig> | null | undefined,
 ): OperationalDayAutoConfig {
   const d = DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG;

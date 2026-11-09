@@ -22,7 +22,7 @@
 const MANAGUA_UTC_OFFSET_HOURS = 6; // UTC-6, fijo — Nicaragua no usa horario de verano.
 
 export type PaydayHalf = 1 | 2;
-export type PaydayAdjustedReason = "SUNDAY" | "SHORT_MONTH" | null;
+type PaydayAdjustedReason = "SUNDAY" | "SHORT_MONTH" | null;
 
 export type PaydayResult = {
   /** Instante UTC — mediodía de Managua del día EFECTIVO de pago (ya ajustado). */

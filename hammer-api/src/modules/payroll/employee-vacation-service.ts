@@ -10,7 +10,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 
-export const VACATION_ENTRY_KINDS = ["GOZADAS", "PAGADAS"] as const;
+const VACATION_ENTRY_KINDS = ["GOZADAS", "PAGADAS"] as const;
 export type VacationEntryKind = (typeof VACATION_ENTRY_KINDS)[number];
 
 function parseDate(iso: string): Date {

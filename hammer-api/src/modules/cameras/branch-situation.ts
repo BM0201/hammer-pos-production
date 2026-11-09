@@ -15,7 +15,7 @@ export function deriveBranchSituation(input: { agentHeartbeatReceived: boolean; 
   return "CAMERAS_REPORTING";
 }
 
-export type CameraReportSource = "AGENT_REPORT" | "AGENT_UNREACHABLE" | "NVR_UNREACHABLE";
+type CameraReportSource = "AGENT_REPORT" | "AGENT_UNREACHABLE" | "NVR_UNREACHABLE";
 
 export type ResolvedCameraStatus = { cameraId: string; status: CameraHealthState; source: CameraReportSource };
 

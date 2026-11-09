@@ -25,7 +25,6 @@ function decimal(value: number) {
 }
 
 const BRANCH_1 = "branch-1";
-const BRANCH_2 = "branch-2";
 const COUNTER_USER = "user-counter";
 const MASTER_USER = "user-master";
 

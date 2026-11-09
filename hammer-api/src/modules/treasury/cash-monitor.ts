@@ -199,7 +199,7 @@ export function computeCashIndicatorState(input: {
  * agrupa por `OperationalDay.businessDate`, ya anclado a America/Managua
  * (operations/business-date.ts), en vez de reimplementar el corte de día.
  */
-export async function getWeekdayCashHistory(branchId: string, weeks: number, now: Date = new Date()) {
+async function getWeekdayCashHistory(branchId: string, weeks: number, now: Date = new Date()) {
   const cutoff = new Date(now.getTime() - weeks * 7 * MS_PER_DAY);
   const rows = await prisma.paymentTender.findMany({
     where: {

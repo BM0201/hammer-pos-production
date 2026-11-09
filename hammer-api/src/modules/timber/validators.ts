@@ -42,7 +42,7 @@ export const calculateTimberSchema = z.object({
 
 /* ── Timber Trip (Viaje de Madera) ── */
 
-export const timberTripLineSchema = z.object({
+const timberTripLineSchema = z.object({
   thickness: z.number().int().positive("Grosor debe ser mayor a 0"),
   width: z.number().int().positive("Ancho debe ser mayor a 0"),
   length: z.number().int().positive("Largo debe ser mayor a 0"),
@@ -52,7 +52,7 @@ export const timberTripLineSchema = z.object({
 });
 
 // Madera v2 Fase 1.1 — gastos del viaje (aditivo, todos opcionales, default 0).
-export const timberTripExpensesSchema = z.object({
+const timberTripExpensesSchema = z.object({
   freightAmount: z.number().nonnegative("El flete debe ser ≥ 0").max(10000000).optional(),
   fuelAmount: z.number().nonnegative("El combustible debe ser ≥ 0").max(10000000).optional(),
   perDiemAmount: z.number().nonnegative("Los viáticos deben ser ≥ 0").max(10000000).optional(),
@@ -60,7 +60,7 @@ export const timberTripExpensesSchema = z.object({
   otherExpensesAmount: z.number().nonnegative("Otros gastos deben ser ≥ 0").max(10000000).optional(),
 });
 
-export const timberPricePolicySchema = z.enum(["RECALC_FROM_PRICE_PER_INCH", "COST_ONLY", "TARGET_MARGIN"]);
+const timberPricePolicySchema = z.enum(["RECALC_FROM_PRICE_PER_INCH", "COST_ONLY", "TARGET_MARGIN"]);
 
 export const createTimberTripSchema = z.object({
   destinationBranchId: z.string().min(1, "Sucursal destino es requerida"),
@@ -111,7 +111,7 @@ export const updateTimberTripSchema = z.object({
 
 // Madera v2 Fase 4 — configuración como datos: tabla de cubicación, reglas de ancho,
 // margen objetivo/redondeo, tolerancia de conciliación y flags de alerta.
-export const cubicationRowSchema = z.object({
+const cubicationRowSchema = z.object({
   lengthFeet: z.number().positive().max(100),
   varas: z.number().positive().max(50),
   forceCuadro: z.boolean(),

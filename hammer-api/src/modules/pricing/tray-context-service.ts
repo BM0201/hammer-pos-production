@@ -85,7 +85,7 @@ export async function computeRealizedMarginBatch(
   return result;
 }
 
-export async function computeRealizedMargin(db: typeof prisma, input: { branchId: string; productId: string }): Promise<RealizedMarginResult | null> {
+async function computeRealizedMargin(db: typeof prisma, input: { branchId: string; productId: string }): Promise<RealizedMarginResult | null> {
   const batch = await computeRealizedMarginBatch(db, [input]);
   return batch.get(`${input.branchId}:${input.productId}`) ?? null;
 }

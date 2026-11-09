@@ -4,7 +4,7 @@ import { CheckCircle2, AlertTriangle, ClipboardList } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
-export type ChecklistItem = {
+type ChecklistItem = {
   key: string;
   label: string;
   status: "OK" | "ATTENTION";

@@ -20,7 +20,7 @@ import { aguinaldoAccrued, indemnizacionPayout, vacationDaysAccrued, vacationPay
 import { vacationDaysTakenByEmployee } from "./employee-vacation-service";
 
 export const SETTLEMENT_KINDS = ["ROLLOVER", "TERMINATION"] as const;
-export type SettlementKind = (typeof SETTLEMENT_KINDS)[number];
+type SettlementKind = (typeof SETTLEMENT_KINDS)[number];
 
 /** Causales de terminación (Arts. 45/48 CT): deciden si la indemnización se paga. */
 export const TERMINATION_CAUSALES = [
@@ -30,7 +30,7 @@ export const TERMINATION_CAUSALES = [
   "DESPIDO_CON_CAUSA",
   "RENUNCIA_SIN_PREAVISO",
 ] as const;
-export type TerminationCausal = (typeof TERMINATION_CAUSALES)[number];
+type TerminationCausal = (typeof TERMINATION_CAUSALES)[number];
 
 const CAUSAL_PAYS_INDEMNIZACION: Record<TerminationCausal, boolean> = {
   DESPIDO_SIN_CAUSA: true,

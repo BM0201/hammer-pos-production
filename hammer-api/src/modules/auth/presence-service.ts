@@ -14,7 +14,7 @@ type PresenceInput = {
   userAgent?: string | null;
 };
 
-export function resolvePresenceStatus(input: { lastSeenAt?: Date | null; disconnectedAt?: Date | null }, now = new Date()) {
+function resolvePresenceStatus(input: { lastSeenAt?: Date | null; disconnectedAt?: Date | null }, now = new Date()) {
   if (!input.lastSeenAt || input.disconnectedAt) return "OFFLINE";
   const elapsedMs = now.getTime() - input.lastSeenAt.getTime();
   if (elapsedMs > OFFLINE_AFTER_MS) return "OFFLINE";

@@ -691,10 +691,10 @@ function businessDateFromInputSafe(input: string) {
   return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
 }
 
-export type OperationalDayDerivedState = "ACTIVE_TODAY" | "AWAITING_REVIEW" | "CONFIRMED" | "NO_ACTIVITY";
+type OperationalDayDerivedState = "ACTIVE_TODAY" | "AWAITING_REVIEW" | "CONFIRMED" | "NO_ACTIVITY";
 
 /** Estado derivado simplificado — Día Operativo 360 (dos ejes, sin compuertas). */
-export function deriveOperationalDayState(
+function deriveOperationalDayState(
   day: { lifecycle: string; reviewStatus: string } | null,
 ): OperationalDayDerivedState {
   if (!day) return "NO_ACTIVITY";

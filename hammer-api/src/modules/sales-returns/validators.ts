@@ -9,7 +9,7 @@ import { z } from "zod";
 const idSchema = z.string().min(1);
 const positiveNumberSchema = z.coerce.number().positive();
 
-export const saleReturnItemInputSchema = z.object({
+const saleReturnItemInputSchema = z.object({
   saleOrderLineId: idSchema,
   quantity: positiveNumberSchema,
   condition: z.nativeEnum(ReturnedItemCondition),

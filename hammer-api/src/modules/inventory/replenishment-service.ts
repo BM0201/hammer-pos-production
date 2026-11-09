@@ -18,7 +18,7 @@ export type ReplenishmentCriticality =
   | "DO_NOT_RECOMMEND"
   | "MANUAL_REVIEW";
 
-export type SourceOption = {
+type SourceOption = {
   type: "CENTRAL" | "OTHER_BRANCH" | "SUPPLIER" | "PRODUCTION" | "DO_NOT_REPLENISH" | "MANUAL_REVIEW";
   branchId?: string;
   branchName?: string;
@@ -27,7 +27,7 @@ export type SourceOption = {
   reason: string;
 };
 
-export type ReplenishmentRecommendation = {
+type ReplenishmentRecommendation = {
   productId: string;
   sku: string;
   name: string;
@@ -67,7 +67,7 @@ export type ReplenishmentRecommendation = {
   hasProductionRecipe: boolean;
 };
 
-export type TransferOpportunity = {
+type TransferOpportunity = {
   productId: string;
   sku: string;
   name: string;
@@ -294,7 +294,7 @@ function determineCriticality(params: {
   return "NORMAL";
 }
 
-export type TimberLowStockItem = {
+type TimberLowStockItem = {
   productId: string;
   name: string;
   sku: string;
@@ -596,10 +596,10 @@ export async function getReplenishmentRecommendations(params: RecommendationPara
  *   CRITICAL > LOW > COVERED > NO_DEMAND > (sin señal, se omite del listado).
  * ════════════════════════════════════════════════════════════════ */
 
-export type ReplenishmentSeverity = "CRITICAL" | "LOW" | "COVERED" | "NO_DEMAND";
-export type ReplenishmentSourceType = "TRANSFER" | "PRODUCTION" | "PURCHASE";
+type ReplenishmentSeverity = "CRITICAL" | "LOW" | "COVERED" | "NO_DEMAND";
+type ReplenishmentSourceType = "TRANSFER" | "PRODUCTION" | "PURCHASE";
 
-export type ReplenishmentSignalSource = {
+type ReplenishmentSignalSource = {
   type: ReplenishmentSourceType;
   quantity: number;
   branchId?: string;
@@ -854,7 +854,7 @@ export async function getReplenishmentSignals(branchId: string) {
   return { branchId, generatedAt: new Date().toISOString(), signals, summary };
 }
 
-export type TimberReplenishmentItem = {
+type TimberReplenishmentItem = {
   productId: string;
   sku: string;
   name: string;

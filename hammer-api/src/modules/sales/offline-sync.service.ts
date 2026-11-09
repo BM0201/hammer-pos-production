@@ -30,7 +30,7 @@ export function isLateSyncIntoClosedDay(operationalDayLifecycle: OperationalDayL
   return operationalDayLifecycle === "AWAITING_REVIEW";
 }
 
-export type OfflineSyncLine = {
+type OfflineSyncLine = {
   productId: string;
   quantity: number;
   unitPrice: number;

@@ -71,7 +71,7 @@ export type NameSimilarityCandidate = { id: string; name: string; sku: string };
 
 const COMBINING_DIACRITICAL_MARKS = new RegExp("[\\u0300-\\u036f]", "g");
 
-export function normalizeProductName(name: string): string {
+function normalizeProductName(name: string): string {
   return name
     .normalize("NFD")
     .replace(COMBINING_DIACRITICAL_MARKS, "")

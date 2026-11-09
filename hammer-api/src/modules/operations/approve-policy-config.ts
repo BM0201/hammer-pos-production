@@ -3,7 +3,7 @@ import type { SessionPayload } from "@/types/auth";
 import { prisma } from "@/lib/prisma";
 import { assertBranchAccess } from "@/modules/auth/access";
 
-export const OPERATIONAL_DAY_APPROVE_SETTING_KEY = "operational_day_approve_config";
+const OPERATIONAL_DAY_APPROVE_SETTING_KEY = "operational_day_approve_config";
 
 export interface OperationalDayApprovalPolicy {
   branchAdminApprovalEnabled: boolean;
@@ -12,7 +12,7 @@ export interface OperationalDayApprovalPolicy {
   maxSalesTotalForDelegate: number | null; // null = sin tope
 }
 
-export const DEFAULT_APPROVAL_POLICY: OperationalDayApprovalPolicy = {
+const DEFAULT_APPROVAL_POLICY: OperationalDayApprovalPolicy = {
   branchAdminApprovalEnabled: false,
   maxCashDifferenceForDelegate: 100,
   blockDelegateOnForcedClose: true,
@@ -32,7 +32,7 @@ function nullableNum(value: unknown, fallback: number | null): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-export function normalizeApprovalPolicy(
+function normalizeApprovalPolicy(
   raw: Partial<OperationalDayApprovalPolicy> | null | undefined,
 ): OperationalDayApprovalPolicy {
   const d = DEFAULT_APPROVAL_POLICY;
@@ -57,33 +57,6 @@ export async function getApprovalPolicy(): Promise<OperationalDayApprovalPolicy>
   }
 }
 
-export async function updateApprovalPolicy(
-  input: Partial<OperationalDayApprovalPolicy>,
-  userId?: string,
-): Promise<OperationalDayApprovalPolicy> {
-  const current = await getApprovalPolicy();
-  const merged = normalizeApprovalPolicy({ ...current, ...input });
-  const value = JSON.stringify(merged);
-
-  await prisma.systemSetting.upsert({
-    where: { key: OPERATIONAL_DAY_APPROVE_SETTING_KEY },
-    create: { key: OPERATIONAL_DAY_APPROVE_SETTING_KEY, value, updatedByUserId: userId ?? null },
-    update: { value, updatedByUserId: userId ?? null },
-  });
-
-  await prisma.auditLog.create({
-    data: {
-      actorUserId: userId ?? null,
-      module: "operations",
-      action: "OPERATIONAL_DAY_APPROVE_CONFIG_UPDATED",
-      entityType: "SystemSetting",
-      entityId: OPERATIONAL_DAY_APPROVE_SETTING_KEY,
-      metadataJson: merged as unknown as Prisma.InputJsonValue,
-    },
-  });
-
-  return merged;
-}
 
 function n(value: Prisma.Decimal | number | string | null | undefined): number {
   return Number(value ?? 0);

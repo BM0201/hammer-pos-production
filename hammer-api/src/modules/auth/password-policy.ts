@@ -1,4 +1,4 @@
-export const PASSWORD_MIN_LENGTH = 10;
+const PASSWORD_MIN_LENGTH = 10;
 
 export function validatePasswordPolicy(password: string): string | null {
   if (password.length < PASSWORD_MIN_LENGTH) {

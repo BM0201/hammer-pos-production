@@ -10,12 +10,12 @@ export type RoleCode =
   | "WAREHOUSE"
   | "ACCOUNTANT";
 
-export type BranchMembership = {
+type BranchMembership = {
   branchId: string;
   roleCode: RoleCode;
 };
 
-export type ModuleFlags = {
+type ModuleFlags = {
   master?: boolean;
   pos?: boolean;
   cash?: boolean;
@@ -31,7 +31,7 @@ export type ModuleFlags = {
   sessionMonitor?: boolean;
 };
 
-export type SessionBranch = {
+type SessionBranch = {
   id: string;
   name: string;
   code?: string | null;

@@ -11,7 +11,7 @@ const finiteNumberSchema = z.coerce
   .number()
   .refine((value) => Number.isFinite(value), "Debe ser un número finito.");
 
-export const moneySchema = finiteNumberSchema
+const moneySchema = finiteNumberSchema
   .refine((value) => hasMaxTwoDecimals(value), "Debe tener máximo 2 decimales.")
   .refine((value) => Math.abs(value) <= MAX_MONEY, "Monto fuera de rango permitido.");
 

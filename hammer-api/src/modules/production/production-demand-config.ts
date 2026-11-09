@@ -15,10 +15,10 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
  * lectura sea determinística, no condicionada a si otro test ya calentó
  * la cache dentro del mismo archivo.
  */
-export const PRODUCTION_DEMAND_SETTING_KEY = "production_demand_config";
+const PRODUCTION_DEMAND_SETTING_KEY = "production_demand_config";
 
 export type ProductionDemandConfig = { coverageDays: number };
-export const DEFAULT_PRODUCTION_DEMAND_CONFIG: ProductionDemandConfig = { coverageDays: 14 };
+const DEFAULT_PRODUCTION_DEMAND_CONFIG: ProductionDemandConfig = { coverageDays: 14 };
 
 export async function getProductionDemandConfig(db: DbClient = prisma): Promise<ProductionDemandConfig> {
   const row = await db.systemSetting.findUnique({ where: { key: PRODUCTION_DEMAND_SETTING_KEY } });

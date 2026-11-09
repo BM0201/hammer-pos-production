@@ -17,7 +17,7 @@ let queryCount = 0;
 let queryDbMs = 0;
 let listenerAttached = false;
 
-export const queryInstrumentationEnabled = process.env.INSTRUMENT_QUERIES === "1";
+const queryInstrumentationEnabled = process.env.INSTRUMENT_QUERIES === "1";
 
 function ensureListener() {
   if (listenerAttached || !queryInstrumentationEnabled) return;

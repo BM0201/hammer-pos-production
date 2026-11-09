@@ -9,8 +9,8 @@ export type PeriodKind = "DAY" | "WEEK" | "QUINCENA" | "MONTH" | "CUSTOM";
 export type ExpensePeriodBasis = "PAID" | "ACCRUED";
 export type ExpenseLedgerSource = "CAJA" | "EFECTIVO_RETENIDO" | "BANCO" | "COMISION_TARJETA" | "PLANILLA" | "DEVENGADO";
 
-export type PeriodRange = { start: string; end: string; label: string };
-export type ResolvedPeriod = PeriodRange & { kind: PeriodKind; previous: PeriodRange; next: PeriodRange };
+type PeriodRange = { start: string; end: string; label: string };
+type ResolvedPeriod = PeriodRange & { kind: PeriodKind; previous: PeriodRange; next: PeriodRange };
 
 export type ExpenseLedgerRow = {
   id: string;
@@ -36,8 +36,8 @@ export type ExpenseLedgerRow = {
   explanation?: string;
 };
 
-export type CategoryConcept = { conceptId: string | null; conceptName: string | null; total: number };
-export type CategoryBreakdown = {
+type CategoryConcept = { conceptId: string | null; conceptName: string | null; total: number };
+type CategoryBreakdown = {
   category: string;
   total: number;
   previousTotal: number;
@@ -48,7 +48,7 @@ export type CategoryBreakdown = {
   byConcept: CategoryConcept[];
 };
 
-export type ExpensePeriodAlert = {
+type ExpensePeriodAlert = {
   code: string;
   message: string;
   category: string | null;

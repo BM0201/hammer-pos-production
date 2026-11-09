@@ -4,6 +4,8 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
+import { isMaster, hasCapabilityInAnyAssignedBranch } from "@/modules/rbac/guards";
+import { CAPABILITIES } from "@/modules/rbac/policies";
 import { ok, created, fail } from "@/lib/api/response";
 import { listOrderTemplates, createOrderTemplate } from "@/modules/purchase-orders/order-template-service";
 
@@ -44,6 +46,7 @@ export async function POST(request: Request) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(request, session);
+    if (!isMaster(session) && !hasCapabilityInAnyAssignedBranch(session, CAPABILITIES.PURCHASES_CREATE)) throw new Error("FORBIDDEN: Sin permiso para editar plantillas de pedido.");
 
     const parsed = createSchema.safeParse(await request.json());
     if (!parsed.success) return fail("VALIDATION_ERROR", "Parámetros inválidos.", 400, parsed.error.flatten());

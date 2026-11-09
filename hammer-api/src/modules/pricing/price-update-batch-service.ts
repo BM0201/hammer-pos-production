@@ -261,7 +261,7 @@ export async function updateLines(batchId: string, updates: UpdateLineInput[]): 
   return prisma.$transaction((tx) => updateLinesTx(tx, batchId, updates));
 }
 
-export async function addLinesTx(
+async function addLinesTx(
   tx: Prisma.TransactionClient,
   batchId: string,
   items: CreateDraftItem[],
@@ -356,7 +356,7 @@ export async function removeLines(batchId: string, lineIds: string[]): Promise<{
  * regla no pudo calcular precio (sin costo/sin precio vigente) se deja
  * como estaba, y se cuenta en `skipped` para que la pantalla avise.
  */
-export async function applyBulkRuleTx(
+async function applyBulkRuleTx(
   tx: Prisma.TransactionClient,
   batchId: string,
   target: { lineIds: string[] } | "ALL",

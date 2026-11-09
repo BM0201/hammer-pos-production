@@ -47,7 +47,7 @@ export function costModeForKind(kind: NormalizedIntakeKind, hasCost: boolean): "
   return hasCost ? "BLEND" : "QUANTITY_ONLY"; // ADD_STOCK con costo: BLEND (alias público, claro, de SET_WAC — createOpeningBalanceTx trata ambos idéntico)
 }
 
-export type IntakeLineInput = {
+type IntakeLineInput = {
   productId: string;
   quantity: number;
   overrides?: Record<string, number>;
@@ -74,7 +74,7 @@ export type CreateIntakeInput = {
   confirmDuplicate?: boolean;
 };
 
-export type IntakeBranchResult = {
+type IntakeBranchResult = {
   branchId: string;
   status: "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED" | "DISCARDED";
   error: string | null;
@@ -149,7 +149,7 @@ async function nextIntakeCodeTx(tx: Prisma.TransactionClient): Promise<{ code: s
   return { code: `IM-${String(sequence).padStart(6, "0")}`, sequence };
 }
 
-export type ResolvedLine = { productId: string; quantity: number; unitCost?: number; salePrice?: number; unit?: string; confirmHighCost?: boolean };
+type ResolvedLine = { productId: string; quantity: number; unitCost?: number; salePrice?: number; unit?: string; confirmHighCost?: boolean };
 
 /** Un error al aplicar UNA línea, con el producto — para que el mensaje de la sucursal diga cuál fue (antes iba sin producto). */
 class IntakeLineError extends Error {

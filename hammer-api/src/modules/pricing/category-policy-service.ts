@@ -59,7 +59,7 @@ export async function getBranchPolicyDefaults(db: Prisma.TransactionClient | typ
 }
 
 /** Mismo default, para VARIAS sucursales en una sola consulta (hot loops del detector). */
-export async function getBranchPolicyDefaultsBatch(db: typeof prisma, branchIds: string[]): Promise<Map<string, BranchPolicyDefaults>> {
+async function getBranchPolicyDefaultsBatch(db: typeof prisma, branchIds: string[]): Promise<Map<string, BranchPolicyDefaults>> {
   const result = new Map<string, BranchPolicyDefaults>();
   if (branchIds.length === 0) return result;
   const configs = await db.pricingConfig.findMany({

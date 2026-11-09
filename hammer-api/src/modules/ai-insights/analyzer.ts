@@ -106,7 +106,7 @@ export type Severity = "critical" | "high" | "medium" | "low" | "info";
 
 // ─── Shared Types ────────────────────────────────────────────────
 
-export interface InsightBase {
+interface InsightBase {
   id: string;
   category: string;
   title: string;

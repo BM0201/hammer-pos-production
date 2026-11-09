@@ -14,7 +14,6 @@ import { createMultiBranchIntake } from "@/modules/inventory/multi-branch-intake
  * ajuste de stock.
  */
 
-type DbClient = PrismaClient | Prisma.TransactionClient;
 
 export type CreateStockCountInput = {
   branchId: string;
@@ -54,7 +53,7 @@ export async function listStockCountsForViewer(input: { branchId?: string; viewe
 }
 
 /** Campos que el contador NUNCA ve: costo, precio, cantidad del sistema (si blind). Ver test "la ficha y las sugerencias no exponen costo ni precio". */
-export type StockCountViewerLine = {
+type StockCountViewerLine = {
   productId: string;
   productName: string;
   productSku: string;

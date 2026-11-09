@@ -7,7 +7,7 @@
  */
 
 /** Abreviaturas viejas → palabra del catálogo (misma tabla que el backend). */
-export const LEGACY_UNIT_ALIASES: Record<string, string> = {
+const LEGACY_UNIT_ALIASES: Record<string, string> = {
   UN: "UNIDAD", UND: "UNIDAD", U: "UNIDAD",
   KG: "KILO", LB: "LIBRA", L: "LITRO", LT: "LITRO", GAL: "GALON",
   M: "METRO", M2: "METRO CUADRADO", M3: "METRO CUBICO", QQ: "QUINTAL",

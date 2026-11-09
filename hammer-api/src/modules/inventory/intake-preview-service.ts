@@ -4,7 +4,7 @@ import { getProductStockConversionsBatch, calculateSharedStockChange } from "@/m
 import { getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-service";
 import { recalculateWeightedAverage, WacValidationError, isSuspectedPackageCostOnFirstEntry, referenceSalePricePerBaseUnit } from "@/modules/inventory/wac";
-import { normalizeIntakeKind, stockModeForKind, type NormalizedIntakeKind } from "@/modules/inventory/multi-branch-intake-service";
+import { normalizeIntakeKind, stockModeForKind } from "@/modules/inventory/multi-branch-intake-service";
 import { validateIntakeLine, formatGroupedMessageText, type IntakeValidationMessage, type IntakeLineStatus } from "@/modules/inventory/intake-validation";
 
 /**
@@ -15,7 +15,7 @@ import { validateIntakeLine, formatGroupedMessageText, type IntakeValidationMess
  * TODO en consultas por lote (nunca una por línea×sucursal).
  */
 
-export type PreviewRequestLine = {
+type PreviewRequestLine = {
   productId: string;
   /** null = el campo todavía está vacío (no escribir como 0). */
   quantity: number | null;
@@ -33,7 +33,7 @@ export type PreviewRequest = {
   lines: PreviewRequestLine[];
 };
 
-export type PreviewCell = {
+type PreviewCell = {
   productId: string;
   branchId: string;
   currentQty: number;
@@ -53,10 +53,10 @@ export type PreviewCell = {
   messages: IntakeValidationMessage[];
 };
 
-export type PreviewBranchTotals = { units: number; value: number | null; wacChanges: number };
+type PreviewBranchTotals = { units: number; value: number | null; wacChanges: number };
 
 /** prompt-entrada-multisucursal-fix.md — un mensaje por código, con la lista de sucursales donde aplica ("Sin costo en MSY y RIV: ..."), en vez de un mensaje repetido por celda con el id interno. */
-export type PreviewLineMessage = { code: IntakeValidationMessage["code"]; kind: IntakeValidationMessage["kind"]; text: string; branchCodes: string[]; poId?: string };
+type PreviewLineMessage = { code: IntakeValidationMessage["code"]; kind: IntakeValidationMessage["kind"]; text: string; branchCodes: string[]; poId?: string };
 
 export type PreviewResult = {
   cells: PreviewCell[];

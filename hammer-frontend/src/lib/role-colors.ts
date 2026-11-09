@@ -15,7 +15,7 @@
  * | WAREHOUSE     | #16A34A     | 4.51:1           | green    |
  */
 
-export type RoleColorKey = "system-admin" | "owner" | "master" | "branch-admin" | "sales" | "cashier" | "warehouse" | "accountant";
+type RoleColorKey = "system-admin" | "owner" | "master" | "branch-admin" | "sales" | "cashier" | "warehouse" | "accountant";
 
 export interface RoleColorConfig {
   key: RoleColorKey;
@@ -103,5 +103,3 @@ const DEFAULT_ROLE_COLOR: RoleColorConfig = ROLE_COLORS.MASTER;
 export function getRoleColor(roleCode: string): RoleColorConfig {
   return ROLE_COLORS[roleCode] ?? DEFAULT_ROLE_COLOR;
 }
-
-export { ROLE_COLORS };

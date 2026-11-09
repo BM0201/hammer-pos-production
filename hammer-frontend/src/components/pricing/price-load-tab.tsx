@@ -29,7 +29,7 @@ type Branch = { id: string; code: string; name: string };
 type BatchStatus = "DRAFT" | "APPLYING" | "APPLIED" | "PARTIAL" | "CANCELLED";
 type BatchTarget = "BRANCHES" | "GENERAL";
 
-export type LoadSeedProduct = { productId: string; sku: string; name: string };
+type LoadSeedProduct = { productId: string; sku: string; name: string };
 export type LoadSeed = { branchId: string; products: LoadSeedProduct[] };
 
 type BatchListRow = {

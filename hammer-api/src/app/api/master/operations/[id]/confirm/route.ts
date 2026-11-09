@@ -2,7 +2,6 @@ import { fail, ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { getCurrentSession } from "@/modules/auth/service";
-import { isMaster } from "@/modules/rbac/guards";
 import { confirmOperationalDay } from "@/modules/operations/service";
 import { assertCanApproveOperationalDay, getApprovalPolicy } from "@/modules/operations/approve-policy-config";
 import { confirmOperationalDaySchema } from "@/modules/operations/validators";

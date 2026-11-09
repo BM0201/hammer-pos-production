@@ -1,9 +1,9 @@
 import { Prisma } from "@prisma/client";
 
-export type PricingMode = "SIMPLE" | "ADVANCED";
-export type ProrateMethod = "BY_QUANTITY" | "BY_VALUE";
-export type ExpenseAllocationScope = "BRANCH" | "CATEGORY" | "PRODUCT" | "MANUAL";
-export type OperatingExpenseSource =
+type PricingMode = "SIMPLE" | "ADVANCED";
+type ProrateMethod = "BY_QUANTITY" | "BY_VALUE";
+type ExpenseAllocationScope = "BRANCH" | "CATEGORY" | "PRODUCT" | "MANUAL";
+type OperatingExpenseSource =
   | "BRANCH_TOTAL"
   | "CATEGORY_ALLOCATION"
   | "PRODUCT_ALLOCATION"

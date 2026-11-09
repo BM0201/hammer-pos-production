@@ -20,7 +20,7 @@ import { detectBarcodeIssues, type BarcodeIssue } from "@/modules/catalog/barcod
  *   (columna/trabajo en segundo plano), no antes.
  */
 
-export type BarcodeRowProduct = { id: string; name: string; sku: string; isActive: boolean; isMerged: boolean; barcodeCount: number };
+type BarcodeRowProduct = { id: string; name: string; sku: string; isActive: boolean; isMerged: boolean; barcodeCount: number };
 export type BarcodeSearchRow = { id: string; code: string; kind: ProductBarcodeKind; isPrimary: boolean; createdAt: string; product: BarcodeRowProduct; issues: BarcodeIssue[] };
 export type BarcodeSearchResult = { barcodes: BarcodeSearchRow[]; nextCursor: string | null };
 

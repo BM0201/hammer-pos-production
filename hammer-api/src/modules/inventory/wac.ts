@@ -33,7 +33,7 @@ export class WacValidationError extends Error {
 /* ────────────────────────────────────────────────────────────────
  * Validate movement inputs before WAC calculation
  * ──────────────────────────────────────────────────────────────── */
-export function validateMovementInputs(input: {
+function validateMovementInputs(input: {
   movementQty: Prisma.Decimal;
   movementUnitCost: Prisma.Decimal;
   inbound: boolean;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { businessDateToYmdUTC, businessDateYmd, getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
+import { businessDateToYmdUTC, businessDateYmd, getOperationalWindowForManaguaDate, managuaMonthStartUtc } from "@/modules/sales/realtime-sales-summary";
 
 test("realtime sales window uses Managua day at UTC-06", () => {
   const window = getOperationalWindowForManaguaDate("2026-06-10");
@@ -33,4 +33,10 @@ test("BUG documentado: businessDateYmd aplicado a un businessDate devuelve el d�
   // businessDate del OperationalDay corría toda la ventana de ventas un día
   // hacia atrás — por eso NO debe usarse con businessDate.
   assert.equal(businessDateYmd(new Date(Date.UTC(2026, 6, 8))), "2026-07-07");
+});
+
+test("managuaMonthStartUtc: la última noche del mes en Managua sigue siendo ese mes", () => {
+  // 31 oct 20:00 Managua = 1 nov 02:00 UTC — el mes en curso es octubre, no noviembre.
+  assert.equal(managuaMonthStartUtc(new Date("2026-11-01T02:00:00.000Z")).toISOString(), "2026-10-01T06:00:00.000Z");
+  assert.equal(managuaMonthStartUtc(new Date("2026-11-01T06:00:00.000Z")).toISOString(), "2026-11-01T06:00:00.000Z");
 });

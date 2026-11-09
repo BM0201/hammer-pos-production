@@ -10,9 +10,9 @@ import { formatCurrency, formatNumber, formatPercent, formatStatus, safeText, to
 // final de la tarea.
 export const REPORT_ROW_CAP = 20_000;
 
-export type ReportType = "financial" | "operational" | "inventory" | "audit" | "payroll" | "generic";
-export type ReportOrientation = "portrait" | "landscape";
-export type ReportColumnType = "text" | "date" | "currency" | "number" | "status" | "percent";
+type ReportType = "financial" | "operational" | "inventory" | "audit" | "payroll" | "generic";
+type ReportOrientation = "portrait" | "landscape";
+type ReportColumnType = "text" | "date" | "currency" | "number" | "status" | "percent";
 export type ReportRow = Record<string, unknown>;
 
 export type ReportColumnDefinition = {
@@ -33,7 +33,7 @@ export type ReportSummaryCard = {
   note?: string;
 };
 
-export type ReportTotalDefinition = {
+type ReportTotalDefinition = {
   key: string;
   label?: string;
   type?: "currency" | "number";
@@ -87,7 +87,7 @@ const baseBranchColumns: ReportColumnDefinition[] = [
   { key: "sucursal_nombre", label: "Sucursal", width: 14, type: "text", formatter: (_value, row) => branch(row), maxLength: 24 },
 ];
 
-export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
+const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
   // CAMBIO 1 (prompt-reportes-v2): "sales" pasa a ser el detalle por línea —
   // antes mostraba fecha/orden/vendedor/total sin decir QUÉ se vendió. El
   // costo/margen viene de los snapshots de la línea (costSnapshot/

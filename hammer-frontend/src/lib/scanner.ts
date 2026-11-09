@@ -38,7 +38,7 @@ export function shouldIgnoreRepeatedCode(
 // ────────────────────────────────────────────────────────────────────────
 // 1.2 — Formatos. Menos formatos = más rápido y menos falsos positivos.
 // ────────────────────────────────────────────────────────────────────────
-export const SUPPORTED_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "itf", "qr_code"] as const;
+const SUPPORTED_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "itf", "qr_code"] as const;
 export type SupportedFormat = (typeof SUPPORTED_FORMATS)[number];
 
 /** Formatos GTIN de longitud fija validable directo (UPC-E se valida aparte — ver acceptCandidate). */
@@ -275,7 +275,7 @@ function storageKeyForDevice(): string {
   return `${CAMERA_STORAGE_PREFIX}default`;
 }
 
-export function readRememberedCameraId(): string | null {
+function readRememberedCameraId(): string | null {
   if (typeof window === "undefined") return null;
   try {
     return window.localStorage.getItem(storageKeyForDevice());
@@ -284,7 +284,7 @@ export function readRememberedCameraId(): string | null {
   }
 }
 
-export function writeRememberedCameraId(deviceId: string): void {
+function writeRememberedCameraId(deviceId: string): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(storageKeyForDevice(), deviceId);

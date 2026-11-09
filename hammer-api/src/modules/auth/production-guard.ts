@@ -52,7 +52,7 @@ function isProductionMaster(session: SessionPayload): boolean {
  * 1. Check UserPermission table for explicit grant/revoke
  * 2. Fall back to role-based permission from RBAC policies
  */
-export async function hasProductionPermission(
+async function hasProductionPermission(
   session: SessionPayload | null,
   permission: ProductionPermission,
 ): Promise<boolean> {

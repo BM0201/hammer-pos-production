@@ -27,7 +27,7 @@ function toJsonValue(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
 
-export type ForceCleanupActions = {
+type ForceCleanupActions = {
   closeStaleOpenCashSessions?: boolean;
   resolveAutoClosedPendingReview?: boolean;
   refreshOperationalDaySummaries?: boolean;
@@ -41,7 +41,7 @@ export type ForceCleanupInput = {
   actions: ForceCleanupActions;
 };
 
-export type ForceCleanupDiagnosis = {
+type ForceCleanupDiagnosis = {
   staleOpenCashSessions: Array<{
     id: string;
     openedAt: string;

@@ -16,7 +16,7 @@
  * distintas dejaba pasar dos presentaciones "iguales" en una fusi\u00f3n y
  * part\u00eda el cat\u00e1logo en dos vocabularios.
  */
-export const LEGACY_UNIT_ALIASES: Record<string, string> = {
+const LEGACY_UNIT_ALIASES: Record<string, string> = {
   UN: "UNIDAD", UND: "UNIDAD", U: "UNIDAD",
   KG: "KILO", LB: "LIBRA", L: "LITRO", LT: "LITRO", GAL: "GALON",
   M: "METRO", M2: "METRO CUADRADO", M3: "METRO CUBICO", QQ: "QUINTAL",

@@ -66,34 +66,7 @@ export function recommendResolution(input: {
   return { recommendedResolution: "USE_CANONICAL_ONLY", hasConflict: false, warning: null };
 }
 
-/**
- * Calcula la cantidad final en unidad base del producto canónico según la
- * resolución elegida. Versión numérica pura (para tests).
- */
-export function resolveNewCanonicalBaseQtyNumber(
-  resolution: MigrationResolution,
-  input: { canonicalQty: number; derivedAsBaseQty: number; manualBaseQty?: number | null },
-): number {
-  switch (resolution) {
-    case "USE_DERIVED_ONLY":
-      return input.derivedAsBaseQty;
-    case "USE_CANONICAL_ONLY":
-      return input.canonicalQty;
-    case "SUM_BOTH":
-      return input.canonicalQty + input.derivedAsBaseQty;
-    case "MANUAL_BASE_QTY":
-      if (input.manualBaseQty == null || !Number.isFinite(input.manualBaseQty) || input.manualBaseQty < 0) {
-        throw new Error("VALIDATION_ERROR: MANUAL_BASE_QTY requiere una cantidad base válida (>= 0).");
-      }
-      return input.manualBaseQty;
-    case "CANCEL":
-      throw new Error("VALIDATION_ERROR: CANCEL no produce un nuevo stock; no aplique cambios.");
-    default:
-      throw new Error(`VALIDATION_ERROR: Resolución desconocida: ${resolution as string}`);
-  }
-}
-
-/** Versión Decimal (producción) — misma lógica que resolveNewCanonicalBaseQtyNumber. */
+/** Cantidad final en unidad base del canónico según la resolución elegida. */
 export function resolveNewCanonicalBaseQty(
   resolution: MigrationResolution,
   input: { canonicalQty: Prisma.Decimal; derivedAsBaseQty: Prisma.Decimal; manualBaseQty?: Prisma.Decimal | null },
@@ -119,7 +92,7 @@ export function resolveNewCanonicalBaseQty(
 
 // ─── Tipos del preview ────────────────────────────────────────────────────────
 
-export type BranchMigrationPreview = {
+type BranchMigrationPreview = {
   branchId: string;
   branchCode: string;
   canonicalProductId: string;
@@ -319,7 +292,7 @@ export type ApplyEquivalentMigrationBranchResult = {
  *     recomendada y FALLA si alguna sucursal tiene conflicto.
  *   - SUM_BOTH solo se usa si el usuario lo elige explícitamente.
  */
-export async function applyEquivalentStockGroupMigrationTx(
+async function applyEquivalentStockGroupMigrationTx(
   tx: Prisma.TransactionClient,
   input: ApplyEquivalentMigrationInput,
 ): Promise<ApplyEquivalentMigrationBranchResult[]> {

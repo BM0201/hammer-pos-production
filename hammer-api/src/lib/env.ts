@@ -64,7 +64,7 @@ const nodeEnv = resolveNodeEnv();
 const isProduction = nodeEnv === "production";
 const isNextProductionBuild = process.env.NEXT_PHASE === "phase-production-build";
 
-export type EnvIssue = {
+type EnvIssue = {
   key: string;
   message: string;
 };

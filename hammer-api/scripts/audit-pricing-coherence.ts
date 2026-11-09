@@ -51,7 +51,6 @@ async function main() {
       groupByMemberId.set(member.productId, { code: group.code, canonicalId: canonical.productId });
     }
   }
-  const fusionProductIds = new Set(canonicalIdByMemberId.keys());
 
   // Universo: todo producto con AL MENOS una presencia real en alguna
   // sucursal (balance o ajuste de precio/costo propio) — evita generar

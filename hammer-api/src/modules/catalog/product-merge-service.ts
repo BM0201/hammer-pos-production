@@ -25,7 +25,7 @@ import { normalizePresentationUnit } from "@/modules/catalog/presentation-units"
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
-export type MergeRelationPolicyKind =
+type MergeRelationPolicyKind =
   | "MOVE"
   | "CHOOSE"
   | "CLOSE"
@@ -150,9 +150,9 @@ const CHOOSE_CONFLICT_KEY: Record<string, string> = {
   reorderPolicies: "branchId",
 };
 
-export type MergeBlocker = { code: string; message: string };
-export type MergeWarning = { code: string; message: string };
-export type MergePlanLine = { relation: string; label: string; kind: MergeRelationPolicyKind; count: number; conflictCount?: number };
+type MergeBlocker = { code: string; message: string };
+type MergeWarning = { code: string; message: string };
+type MergePlanLine = { relation: string; label: string; kind: MergeRelationPolicyKind; count: number; conflictCount?: number };
 
 export type MergePreview = {
   survivingProductId: string;

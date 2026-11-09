@@ -21,7 +21,7 @@ export function normalizeManualSku(sku: string): string {
     .replace(/^-|-$/g, "");
 }
 
-export function shouldAutoGenerateSku(sku?: string | null): boolean {
+function shouldAutoGenerateSku(sku?: string | null): boolean {
   return !sku || !String(sku).trim();
 }
 
@@ -122,7 +122,7 @@ function fallbackCode(text: string, length = 3): string {
   return base.slice(0, length).padEnd(length, "X");
 }
 
-export function detectCategoryCode(productName: string, categoryName?: string | null): string {
+function detectCategoryCode(productName: string, categoryName?: string | null): string {
   const categoryText = cleanText(categoryName);
   const productText = cleanText(productName);
   const combined = `${categoryText} ${productText}`.trim();
@@ -134,7 +134,7 @@ export function detectCategoryCode(productName: string, categoryName?: string | 
   );
 }
 
-export function detectFamilyCode(productName: string, categoryCode: string): string {
+function detectFamilyCode(productName: string, categoryCode: string): string {
   const productText = cleanText(productName);
   return firstMatchCode(productText, FAMILY_CODES) || fallbackCode(productText) || categoryCode;
 }
@@ -186,7 +186,7 @@ export function parseWoodDimensions(productName: string): {
   };
 }
 
-export function detectVariant(productName: string): string {
+function detectVariant(productName: string): string {
   const text = cleanText(productName);
   const woodDimensions = parseWoodDimensions(productName);
   if (
@@ -231,7 +231,7 @@ export function detectVariant(productName: string): string {
   return firstMatchCode(text, knownWords) || "STD";
 }
 
-export function buildSkuBase(input: SkuInput): string {
+function buildSkuBase(input: SkuInput): string {
   const productName = cleanText(input.productName);
   if (!productName) throw new Error("No se puede generar SKU: el nombre del producto esta vacio.");
   const cat = detectCategoryCode(productName, input.categoryName);
@@ -240,12 +240,12 @@ export function buildSkuBase(input: SkuInput): string {
   return `${cat}-${fam}-${variant}`;
 }
 
-export function buildSkuFromBase(base: string, sequence: number): string {
+function buildSkuFromBase(base: string, sequence: number): string {
   const normalizedBase = normalizeManualSku(base);
   return `${normalizedBase}-${String(sequence).padStart(4, "0")}`;
 }
 
-export function nextSequenceFromSkus(base: string, skus: string[]): number {
+function nextSequenceFromSkus(base: string, skus: string[]): number {
   const normalizedBase = normalizeManualSku(base);
   let max = 0;
   const pattern = new RegExp(`^${normalizedBase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-(\\d{4})$`);

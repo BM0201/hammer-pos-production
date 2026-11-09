@@ -31,7 +31,7 @@ import ExcelJS from "exceljs";
  * hojas. Si no se da, o no se encuentra, cae a la primera hoja del libro
  * (comportamiento previo, sin cambios para los llamadores existentes).
  */
-export async function readExcelBuffer(buffer: Buffer | Uint8Array, sheetName?: string): Promise<string[][]> {
+async function readExcelBuffer(buffer: Buffer | Uint8Array, sheetName?: string): Promise<string[][]> {
   const workbook = new ExcelJS.Workbook();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await workbook.xlsx.load(buffer as any);

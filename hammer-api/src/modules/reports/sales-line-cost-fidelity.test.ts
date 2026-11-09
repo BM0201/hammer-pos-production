@@ -71,7 +71,6 @@ test("costo histórico: el margen de una venta vieja usa el snapshot de la líne
   // El WAC del MISMO producto subió a 480.00 DESPUÉS de la venta (nuevas
   // compras más caras). El reporte de esa venta vieja no debe verse afectado
   // por este valor en absoluto — ni se lee, ni se usa en el cálculo.
-  const currentWacAfterNewPurchases = 480.00;
 
   const row = mapSalesLineRow(lineAtSaleTime);
 

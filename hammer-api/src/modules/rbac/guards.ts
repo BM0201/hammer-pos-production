@@ -26,7 +26,7 @@ export function isSystemAdmin(session: SessionPayload | null): boolean {
 }
 
 /** Contador — rol global de solo-contabilidad. */
-export function isAccountant(session: SessionPayload | null): boolean {
+function isAccountant(session: SessionPayload | null): boolean {
   return Boolean(session && isAccountantRole(session.roleCode as string, session.globalRoles as unknown as string[]));
 }
 

@@ -16,16 +16,16 @@ import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
 /** 5% relativo — dos miembros cuyo costo/precio base implícito difiere más que esto están en conflicto real, no ruido de redondeo. */
-export const FUSION_BASIS_CONFLICT_TOLERANCE = 0.05;
+const FUSION_BASIS_CONFLICT_TOLERANCE = 0.05;
 /** Margen sobre el 90% es un síntoma casi seguro de costo de relleno (el 97.14% del ejemplo de arena del doc), no de un producto genuinamente así de rentable. */
-export const MARGIN_OUTLIER_HIGH_THRESHOLD = 0.9;
+const MARGIN_OUTLIER_HIGH_THRESHOLD = 0.9;
 /** Costos que casi seguro son un valor de relleno tecleado ("algo hay que poner"), no un costo real. */
 const PLACEHOLDER_COST_VALUES = [new Prisma.Decimal(0), new Prisma.Decimal(1)];
 const PLACEHOLDER_EPSILON = new Prisma.Decimal("0.01");
 
 export type FusionPricingIssueKind = "UNSELLABLE" | "COST_BASIS_CONFLICT" | "PRICE_BASIS_CONFLICT" | "PLACEHOLDER_COST" | "MARGIN_OUTLIER";
 
-export type FusionPricingIssue = {
+type FusionPricingIssue = {
   branchId: string;
   /** productId único para conflictos de un solo producto; join de IDs para COST/PRICE_BASIS_CONFLICT (varios miembros implicados). */
   productId: string;

@@ -6,7 +6,7 @@ export type ApiSuccess<T> = {
   data: T;
 };
 
-export type ApiErrorBody = {
+type ApiErrorBody = {
   code: string;
   message: string;
   details?: unknown;

@@ -2,6 +2,7 @@ import { fail, ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { timingSafeEqualStrings } from "@/lib/timing-safe-compare";
 import { runBrainScan } from "@/modules/brain/engine";
+import { evaluateExecutedDecisions } from "@/modules/brain/outcomes";
 
 /**
  * prompt-brain-centro-decisiones.md Fase 1.8 — SCHEDULED_SCAN automático,
@@ -28,7 +29,12 @@ export async function GET(request: Request) {
 
   try {
     const result = await runBrainScan({ mode: "SCHEDULED_SCAN", trigger: "SCHEDULED" });
-    return ok(result);
+    // Única llamada automática a la medición de impacto (antes solo un POST manual que ninguna pantalla usaba).
+    // Un fallo acá no debe tumbar el scan ya persistido.
+    const outcomes = await evaluateExecutedDecisions({ limit: 100 }).catch((error: unknown) => ({
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    return ok({ ...result, outcomes });
   } catch (error) {
     // BRAIN_SCAN_RUNNING acá no es un error real — el cron de la hora
     // anterior sigue corriendo (una corrida grande, un cold start lento).

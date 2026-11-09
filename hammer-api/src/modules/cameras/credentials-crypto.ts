@@ -41,7 +41,3 @@ export function decryptCameraCredentials(stored: string, key: Buffer = loadKey()
   return plaintext.toString("utf8");
 }
 
-/** Genera una clave nueva de 32 bytes en base64 — utilidad para provisionar CAMERA_CREDENTIALS_ENCRYPTION_KEY una sola vez. */
-export function generateCameraCredentialsKey(): string {
-  return randomBytes(32).toString("base64");
-}

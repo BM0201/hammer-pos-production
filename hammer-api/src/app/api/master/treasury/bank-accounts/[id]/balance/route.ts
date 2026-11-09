@@ -1,6 +1,6 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
-import { ok, fail } from "@/lib/api/response";
+import { ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { getTreasuryAccountBalance } from "@/modules/treasury/service";
 

@@ -138,7 +138,7 @@ export async function getPurchaseOrderPayable(purchaseOrderId: string, db: DbCli
   };
 }
 
-export type SupplierPayableOrder = PurchaseOrderPayable & { orderNumber: string };
+type SupplierPayableOrder = PurchaseOrderPayable & { orderNumber: string };
 export type SupplierPayableSummary = {
   supplierId: string;
   supplierName: string;

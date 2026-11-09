@@ -16,13 +16,13 @@ export const EXPENSE_CATEGORIES = [
   "OTHER",
 ] as const;
 
-export const PRORATION_METHODS = ["BY_QUANTITY", "BY_VALUE"] as const;
+const PRORATION_METHODS = ["BY_QUANTITY", "BY_VALUE"] as const;
 
-export const PRICING_MODES = ["SIMPLE", "ADVANCED"] as const;
-export const EXPENSE_ALLOCATION_SCOPES = ["BRANCH", "CATEGORY", "PRODUCT", "MANUAL"] as const;
-export const ROUNDING_RULES = ["NONE", "NEAREST_1", "NEAREST_5", "NEAREST_10", "NEAREST_50", "NEAREST_100", "ENDING_9", "ENDING_90", "ENDING_99"] as const;
-export const STOCK_POLICIES = ["HIGH_STOCK", "NORMAL", "LOW_STOCK", "ON_DEMAND"] as const;
-export const PRICE_MODES = ["CATEGORY", "MANUAL", "ABC_XYZ_READY"] as const;
+const PRICING_MODES = ["SIMPLE", "ADVANCED"] as const;
+const EXPENSE_ALLOCATION_SCOPES = ["BRANCH", "CATEGORY", "PRODUCT", "MANUAL"] as const;
+const ROUNDING_RULES = ["NONE", "NEAREST_1", "NEAREST_5", "NEAREST_10", "NEAREST_50", "NEAREST_100", "ENDING_9", "ENDING_90", "ENDING_99"] as const;
+const STOCK_POLICIES = ["HIGH_STOCK", "NORMAL", "LOW_STOCK", "ON_DEMAND"] as const;
+const PRICE_MODES = ["CATEGORY", "MANUAL", "ABC_XYZ_READY"] as const;
 
 const numericInput = z.union([z.number(), z.string()])
   .transform((value) => (typeof value === "string" && value.trim() === "" ? 0 : Number(value)))
@@ -59,7 +59,7 @@ export const updateExpenseSchema = z.object({
 
 /* ── Pricing Config Validators ───────────────────── */
 
-export const ABC_XYZ_CLASSES = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"] as const;
+const ABC_XYZ_CLASSES = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"] as const;
 
 export const upsertPricingConfigSchema = z.object({
   branchId: z.string().min(1, "Sucursal es requerida"),

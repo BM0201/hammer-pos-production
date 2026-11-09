@@ -31,9 +31,9 @@ export type DecisionArea =
   | "PRICING" | "CASH" | "SALES" | "INVENTORY" | "REORDER" | "PURCHASING"
   | "DISPATCH" | "PRODUCTION" | "SECURITY" | "SYSTEM";
 
-export type DecisionResolution = "IN_MODULE" | "EXECUTABLE" | "ACKNOWLEDGE";
+type DecisionResolution = "IN_MODULE" | "EXECUTABLE" | "ACKNOWLEDGE";
 
-export type DecisionHrefInput = {
+type DecisionHrefInput = {
   branchId?: string | null;
   productId?: string | null;
   evidence: Record<string, unknown>;
@@ -302,7 +302,7 @@ const KNOWN_EVIDENCE_LABELS: Record<string, { label: string; format: EvidenceFor
 };
 
 /** Fase 2.5/3.5 — historial en español: una entrada por `action` de BrainDecisionActionLog. Un código sin mapear se humaniza igual que una clave de evidencia desconocida — nunca el código crudo. */
-export const ACTION_LOG_LABELS: Record<string, string> = {
+const ACTION_LOG_LABELS: Record<string, string> = {
   CREATED: "Detectada",
   UPDATED: "Actualizada",
   // Parte A 1.1 — antes un humano reabriendo a mano y el motor

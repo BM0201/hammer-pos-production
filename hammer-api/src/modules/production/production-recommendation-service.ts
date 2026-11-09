@@ -29,31 +29,6 @@ function round2(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-async function getPolicy(branchId: string, productId: string) {
-  const [reorderPolicy, branchSetting] = await Promise.all([
-    prisma.stockReorderPolicy.findUnique({
-      where: { branchId_productId: { branchId, productId } },
-      select: { minQuantity: true, reorderPoint: true, targetQuantity: true, safetyStock: true, isActive: true },
-    }),
-    prisma.branchProductSetting.findUnique({
-      where: { branchId_productId: { branchId, productId } },
-      select: { minStock: true, maxStock: true, reorderPoint: true },
-    }),
-  ]);
-
-  if (reorderPolicy?.isActive) {
-    return {
-      minStock: number(reorderPolicy.minQuantity),
-      reorderPoint: number(reorderPolicy.reorderPoint),
-      targetStock: number(reorderPolicy.targetQuantity) + number(reorderPolicy.safetyStock),
-    };
-  }
-
-  const reorderPoint = Math.max(number(branchSetting?.reorderPoint), number(branchSetting?.minStock), DEFAULT_REORDER_POINT);
-  const targetStock = Math.max(number(branchSetting?.maxStock), reorderPoint, DEFAULT_TARGET_STOCK);
-  return { minStock: number(branchSetting?.minStock), reorderPoint, targetStock };
-}
-
 /**
  * WAC apagado (docs/WAC-DESACTIVADO.md) — mismo patrón exacto que
  * production/service.ts::getInputWacTx (5dfaa22): con el flag apagado, el

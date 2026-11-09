@@ -32,8 +32,8 @@ import {
  * submit/preview/clientRequestId (cada una tiene su propio endpoint y
  * campos extra); este componente solo edita la matriz.
  */
-export type BranchMatrixKind = "PURCHASE" | "INTAKE" | "TRANSFER";
-export type BranchMatrixBranch = { id: string; code: string; name: string };
+type BranchMatrixKind = "PURCHASE" | "INTAKE" | "TRANSFER";
+type BranchMatrixBranch = { id: string; code: string; name: string };
 type SearchProduct = { id: string; sku: string; name: string; barcode?: string | null; barcodes?: string[]; cost?: number | null };
 
 export type BranchMatrixProps = {

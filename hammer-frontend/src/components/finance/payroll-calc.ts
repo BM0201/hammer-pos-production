@@ -15,12 +15,12 @@
 export type InssRegime = "INTEGRAL" | "IVM_RP";
 export type BenefitAccrualMode = "ACCRUE_MONTHLY" | "ON_PAYMENT";
 
-export const INSS_EMPLOYER_SIZE_THRESHOLD = 50;
+const INSS_EMPLOYER_SIZE_THRESHOLD = 50;
 
 /** Tabla progresiva ANUAL del IR salarial (Ley 822), en córdobas. */
 export type IrBracket = { from: number; base: number; rate: number };
 
-export const IR_TABLE_ANNUAL: IrBracket[] = [
+const IR_TABLE_ANNUAL: IrBracket[] = [
   { from: 0, base: 0, rate: 0.0 },
   { from: 100_000, base: 0, rate: 0.15 },
   { from: 200_000, base: 15_000, rate: 0.2 },
@@ -105,7 +105,7 @@ export function computeAnnualIr(annualTaxable: number, table: IrBracket[] = DEFA
 const MS_PER_DAY = 86_400_000;
 
 /** Meses calendario completos + días restantes /30 (criterio del backend). */
-export function monthsBetween(from: Date | string, to: Date | string): number {
+function monthsBetween(from: Date | string, to: Date | string): number {
   const start = from instanceof Date ? from : new Date(from);
   const end = to instanceof Date ? to : new Date(to);
   if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) return 0;
@@ -125,14 +125,14 @@ export function monthsOfService(startDate: Date | string, at: Date = new Date())
 }
 
 /** Tasa de provisión Art. 45 según antigüedad: 1/12, (20/30)/12 o 0 (tope). */
-export function indemnizacionAccrualRate(months: number): number {
+function indemnizacionAccrualRate(months: number): number {
   if (months < 36) return 1 / 12;
   if (months < 72) return (20 / 30) / 12;
   return 0;
 }
 
 /** Pasivo acumulado Art. 45 (tope 5 meses; el mínimo de 1 mes aplica al pagar). */
-export function indemnizacionAccruedTotal(monthlySalary: number, startDate: Date | string, at: Date = new Date()): number {
+function indemnizacionAccruedTotal(monthlySalary: number, startDate: Date | string, at: Date = new Date()): number {
   const salary = Math.max(0, monthlySalary);
   const months = monthsOfService(startDate, at);
   const tramo1 = Math.min(months, 36);
@@ -161,13 +161,13 @@ export const SEVERANCE_CAUSALES = [
 export type SeveranceCausal = (typeof SEVERANCE_CAUSALES)[number]["value"];
 
 /** Inicio del período legal dic→nov del aguinaldo vigente a la fecha. */
-export function aguinaldoPeriodStart(at: Date = new Date()): Date {
+function aguinaldoPeriodStart(at: Date = new Date()): Date {
   const year = at.getUTCMonth() === 11 ? at.getUTCFullYear() : at.getUTCFullYear() - 1;
   return new Date(Date.UTC(year, 11, 1));
 }
 
 /** Fecha límite legal de pago del aguinaldo: 10-dic al cierre del período. */
-export function aguinaldoPaymentDeadline(at: Date = new Date()): Date {
+function aguinaldoPaymentDeadline(at: Date = new Date()): Date {
   return new Date(Date.UTC(aguinaldoPeriodStart(at).getUTCFullYear() + 1, 11, 10));
 }
 
@@ -182,9 +182,9 @@ export function aguinaldoAccrued(monthlySalary: number, startDate: Date | string
 }
 
 /** Días de vacación por mes trabajado (2.5 = 15 por semestre, Art. 76 CT). */
-export const VACATION_DAYS_PER_MONTH = 2.5;
+const VACATION_DAYS_PER_MONTH = 2.5;
 
-export type VacationPeriod = {
+type VacationPeriod = {
   index: number;
   start: Date;
   end: Date;
@@ -202,7 +202,7 @@ function addMonthsUTC(date: Date, months: number): Date {
  * El total acumulado es el mismo que el histórico sin cortes; solo organiza
  * el número para que sea auditable año por año.
  */
-export function vacationPeriodsToDate(startDate: Date | string, at: Date = new Date()): VacationPeriod[] {
+function vacationPeriodsToDate(startDate: Date | string, at: Date = new Date()): VacationPeriod[] {
   const start = startDate instanceof Date ? startDate : new Date(startDate);
   if (isNaN(start.getTime()) || at <= start) return [];
   const periods: VacationPeriod[] = [];
@@ -220,18 +220,18 @@ export function vacationPeriodsToDate(startDate: Date | string, at: Date = new D
 }
 
 /** El período de aniversario laboral EN CURSO (el último, aún abierto). */
-export function currentVacationPeriod(startDate: Date | string, at: Date = new Date()): VacationPeriod | null {
+function currentVacationPeriod(startDate: Date | string, at: Date = new Date()): VacationPeriod | null {
   const periods = vacationPeriodsToDate(startDate, at);
   return periods.length > 0 ? periods[periods.length - 1] : null;
 }
 
 /** Días acumulados TOTALES a la fecha: suma de todos los períodos de aniversario. */
-export function vacationDaysAccrued(startDate: Date | string, at: Date = new Date()): number {
+function vacationDaysAccrued(startDate: Date | string, at: Date = new Date()): number {
   return round2(vacationPeriodsToDate(startDate, at).reduce((sum, p) => sum + p.accruedDays, 0));
 }
 
 /** Valor de pagar `days` de vacaciones en dinero (GRAVABLE si se paga). */
-export function vacationPayout(days: number, monthlySalary: number): number {
+function vacationPayout(days: number, monthlySalary: number): number {
   return round2(Math.max(0, days) * (Math.max(0, monthlySalary) / 30));
 }
 

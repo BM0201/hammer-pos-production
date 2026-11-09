@@ -311,29 +311,6 @@ function presenceDot(status: ConnectedUser["status"]) {
 
 /* ── v7 primitives ── */
 
-function SectionHeader({
-  icon: Icon,
-  title,
-  aside,
-}: {
-  icon: LucideIcon;
-  title: string;
-  aside?: ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2 mb-3">
-      <Icon className="h-4 w-4 text-[var(--color-text-muted)]" />
-      <span className="text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--color-text)]">
-        {title}
-      </span>
-      <div className="flex-1 h-px bg-[var(--color-border)]" />
-      {aside && (
-        <span className="font-mono text-[10px] text-[var(--color-text-muted)]">{aside}</span>
-      )}
-    </div>
-  );
-}
-
 /**
  * Título de sección quieto: texto normal (no eyebrow uppercase), conteo
  * opcional al lado, sin la línea horizontal de ancho completo. Reemplaza a

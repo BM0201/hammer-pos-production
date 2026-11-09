@@ -3,14 +3,14 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Camera, CameraHealthState, CameraLocation } from "@prisma/client";
 import { logAuditEvent } from "@/modules/audit/service";
 import { persistBrainDecisions } from "@/modules/brain/service";
-import { encryptCameraCredentials, decryptCameraCredentials } from "@/modules/cameras/credentials-crypto";
+import { encryptCameraCredentials } from "@/modules/cameras/credentials-crypto";
 import { deriveBranchSituation, resolveCameraStatuses, groupFailuresForNotification, type ResolvedCameraStatus } from "@/modules/cameras/branch-situation";
 import { cameraDecisionFingerprint, branchInfraDecisionFingerprint, branchAgentUnreachableFingerprint } from "@/modules/cameras/fingerprint";
 import { severityForCameraLocation } from "@/modules/cameras/severity";
 import { dispatchExternalNotification } from "@/modules/cameras/notify-channel";
 import { AGENT_PROTOCOL_VERSION } from "@/modules/cameras/heartbeat-contract";
 
-export const AGENT_STALE_AFTER_MS = 3 * 60 * 1000; // adenda §3: heartbeat cada ~60s, 3 fallos seguidos = inalcanzable
+const AGENT_STALE_AFTER_MS = 3 * 60 * 1000; // adenda §3: heartbeat cada ~60s, 3 fallos seguidos = inalcanzable
 export const NOTIFICATION_STABILIZATION_WINDOW_MS = 3 * 60 * 1000; // prompt §4: sostenido antes de avisar
 
 // ─── Registro de cámaras ─────────────────────────────────────────────────
@@ -44,9 +44,6 @@ export async function registerCamera(input: {
   });
 }
 
-export function decryptCameraCredentialsFor(camera: Pick<Camera, "credentialsCiphertext">): { username: string; password: string } {
-  return JSON.parse(decryptCameraCredentials(camera.credentialsCiphertext));
-}
 
 export async function listCamerasForBranch(branchId: string) {
   const cameras = await prisma.camera.findMany({
@@ -316,7 +313,7 @@ async function handleBranchLevelIssue(input: {
 
 // ─── Sidebar (prompt §4.2) ────────────────────────────────────────────────
 
-export async function recomputeCameraHealthSnapshot(branchId: string) {
+async function recomputeCameraHealthSnapshot(branchId: string) {
   const cameras = await prisma.camera.findMany({ where: { branchId, isActive: true }, select: { id: true } });
   let failingCount = 0;
   let unknownCount = 0;

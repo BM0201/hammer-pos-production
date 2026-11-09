@@ -29,7 +29,7 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-export type ExpensePeriodBasis = "PAID" | "ACCRUED";
+type ExpensePeriodBasis = "PAID" | "ACCRUED";
 
 export type ExpensePeriodReportInput = {
   kind: PeriodKind;
@@ -46,7 +46,7 @@ export type ExpensePeriodReportInput = {
 };
 
 type CategoryConcept = { conceptId: string | null; conceptName: string | null; total: number };
-export type CategoryBreakdown = {
+type CategoryBreakdown = {
   category: string;
   total: number;
   previousTotal: number;

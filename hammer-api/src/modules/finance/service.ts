@@ -621,7 +621,7 @@ export async function getFinanceSummary(input: FinanceSummaryInput = {}): Promis
  *  TRAYECTORIA MES A MES (paquete financiero ejecutivo)
  * ══════════════════════════════════════════════════════ */
 
-export type FinanceTrendPoint = {
+type FinanceTrendPoint = {
   year: number;
   month: number; // 1-12
   grossSales: number;

@@ -55,8 +55,8 @@ export function bucketCategoryValues(categories: Array<{ name: string; value: nu
   return [...top.map((c) => ({ ...c, isOther: false })), { name: `Otras (${rest.length})`, value: otherValue, isOther: true }];
 }
 
-export type AttentionType = "NO_COST" | "NO_PRICE" | "COST_EQ_PRICE" | "NEGATIVE_STOCK" | "LOW_STOCK" | "STALE_TRANSFERS" | "FAILED_INTAKE" | "DUPLICATES";
-export type AttentionDotTone = "danger" | "warning" | "info";
+type AttentionType = "NO_COST" | "NO_PRICE" | "COST_EQ_PRICE" | "NEGATIVE_STOCK" | "LOW_STOCK" | "STALE_TRANSFERS" | "FAILED_INTAKE" | "DUPLICATES";
+type AttentionDotTone = "danger" | "warning" | "info";
 
 export type AttentionItem = {
   type: AttentionType;

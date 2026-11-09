@@ -18,7 +18,7 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
 
 const EPSILON = new Prisma.Decimal("0.01");
 
-export type StockGroupHealthIssue = {
+type StockGroupHealthIssue = {
   /** null para chequeos de DEFINICIÓN del grupo (UNIT_COLLISION, DUPLICATE_FACTOR) — no dependen de sucursal. */
   branchId: string | null;
   kind: "DERIVED_NONZERO" | "INVARIANT" | "UNIT_COLLISION" | "DUPLICATE_FACTOR";

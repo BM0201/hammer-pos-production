@@ -10,7 +10,7 @@
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 
-export const ABSENCE_KINDS = ["UNJUSTIFIED", "JUSTIFIED"] as const;
+const ABSENCE_KINDS = ["UNJUSTIFIED", "JUSTIFIED"] as const;
 export type AbsenceKind = (typeof ABSENCE_KINDS)[number];
 
 /** "YYYY-MM-DD" → fecha pura a medianoche UTC (criterio de fechas puras del repo). */

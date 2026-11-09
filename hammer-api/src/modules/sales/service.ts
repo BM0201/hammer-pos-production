@@ -1,7 +1,7 @@
 import { BrainDecisionCategory, BrainDecisionSeverity, CashMovementType, DispatchStatus, Prisma, PrismaClient, SaleOrderStatus, InventoryMovementType, PaymentMethod, PaymentStatus, CashSessionStatus, SaleCancellationStatus, SaleReturnStatus, ApprovalStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { logAuditEvent, attachAuditToError, writePendingAuditFromError } from "@/modules/audit/service";
+import { attachAuditToError, writePendingAuditFromError } from "@/modules/audit/service";
 import { aggregateOrderTotals, calculateLineSubtotal } from "@/modules/sales/totals";
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
@@ -9,6 +9,7 @@ import { consumeSharedStockForSaleTx, createInventoryMovementTx, getSaleStockAva
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx, resolveOperationalDayForOperationTx } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import { getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 import { computeDiscountAgainstCatalogPrice, getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
@@ -1080,7 +1081,7 @@ const CANCELLABLE_SALE_ORDER_STATUSES: SaleOrderStatus[] = [
 ];
 
 /** Indica si una orden, según su estado, puede anularse. */
-export function isSaleOrderCancellable(status: SaleOrderStatus): boolean {
+function isSaleOrderCancellable(status: SaleOrderStatus): boolean {
   return CANCELLABLE_SALE_ORDER_STATUSES.includes(status);
 }
 
@@ -1114,31 +1115,6 @@ export function canViewSalesHistoryForBranch(isMasterSession: boolean, hasBranch
   return isMasterSession || hasBranchCapability;
 }
 
-/** Zona horaria de Nicaragua (UTC-6, sin horario de verano). */
-const NICARAGUA_UTC_OFFSET_HOURS = 6;
-
-/**
- * Devuelve los límites [inicio, fin) en UTC del día indicado (o de hoy) en la
- * zona horaria de Managua. Permite filtrar las facturas "del día" correctamente
- * aunque se almacenen en UTC.
- */
-function managuaDayRangeUtc(ymd?: string): { start: Date; end: Date } {
-  let y: number, m: number, d: number;
-  if (ymd && /^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
-    const [yy, mm, dd] = ymd.split("-").map((n) => parseInt(n, 10));
-    y = yy; m = mm - 1; d = dd;
-  } else {
-    const nowManagua = new Date(Date.now() - NICARAGUA_UTC_OFFSET_HOURS * 3600 * 1000);
-    y = nowManagua.getUTCFullYear();
-    m = nowManagua.getUTCMonth();
-    d = nowManagua.getUTCDate();
-  }
-  // 00:00 Managua === 06:00 UTC del mismo día.
-  const start = new Date(Date.UTC(y, m, d, NICARAGUA_UTC_OFFSET_HOURS, 0, 0, 0));
-  const end = new Date(Date.UTC(y, m, d + 1, NICARAGUA_UTC_OFFSET_HOURS, 0, 0, 0));
-  return { start, end };
-}
-
 /**
  * Lista las órdenes/facturas para la gestión desde el Centro de Comando.
  * Por defecto devuelve las del día (Managua). Permite filtrar por sucursal y
@@ -1154,7 +1130,8 @@ export async function listSaleOrdersForManagement(params: {
   search?: string | null;
   page?: number;
 }) {
-  const { start, end } = managuaDayRangeUtc(params.date ?? undefined);
+  // Fecha inválida = hoy (como antes); la ventana es la misma de Día Operativo.
+  const { start, end } = getOperationalWindowForManaguaDate(/^\d{4}-\d{2}-\d{2}$/.test(params.date ?? "") ? params.date : null);
   const where: Prisma.SaleOrderWhereInput = {
     status: params.status
       ? (params.status as SaleOrderStatus)

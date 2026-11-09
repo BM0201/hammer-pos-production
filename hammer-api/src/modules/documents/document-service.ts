@@ -13,7 +13,7 @@ import type { DocumentOrderData, PrintSettingsData, DocumentGenerationOptions } 
 
 // ─── Sequence generation for delivery order numbers ──────────────────────────
 
-export async function generateDeliveryOrderNumber(branchCode: string): Promise<string> {
+async function generateDeliveryOrderNumber(branchCode: string): Promise<string> {
   const prefix = `OE-${branchCode}`;
   const today = new Date();
   const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;

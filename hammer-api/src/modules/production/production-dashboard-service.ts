@@ -15,9 +15,9 @@ import {
   type ShortInput,
 } from "@/modules/production/dashboard-aggregation";
 
-export type ProducedByProductWithPrice = ProducedByProduct & { currentPrice: number | null; marginAtCurrentPrice: number | null };
+type ProducedByProductWithPrice = ProducedByProduct & { currentPrice: number | null; marginAtCurrentPrice: number | null };
 
-export type OpenBatchAttention = {
+type OpenBatchAttention = {
   id: string;
   batchNumber: string;
   status: string;
@@ -30,7 +30,7 @@ export type OpenBatchAttention = {
   shortInputs: ShortInput[];
 };
 
-export type PriceApproval = {
+type PriceApproval = {
   id: string;
   batchNumber: string;
   completedAt: Date | null;

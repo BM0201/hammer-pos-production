@@ -13,7 +13,7 @@ import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 import { suspectCostEqualsPrice } from "@/modules/pricing/cost-correction-service";
 
-export const INVENTORY_IMPORT_BATCH_STATUS = {
+const INVENTORY_IMPORT_BATCH_STATUS = {
   UPLOADED: "UPLOADED",
   PREVIEWED: "PREVIEWED",
   EXECUTING: "EXECUTING",
@@ -23,7 +23,7 @@ export const INVENTORY_IMPORT_BATCH_STATUS = {
   ROLLED_BACK: "ROLLED_BACK",
 } as const;
 
-export const INVENTORY_IMPORT_LINE_STATUS = {
+const INVENTORY_IMPORT_LINE_STATUS = {
   READY: "READY",
   ERROR: "ERROR",
   EXECUTED: "EXECUTED",
@@ -32,7 +32,7 @@ export const INVENTORY_IMPORT_LINE_STATUS = {
   ROLLED_BACK: "ROLLED_BACK",
 } as const;
 
-export type UnifiedImportType =
+type UnifiedImportType =
   | "CATALOG_ONLY"
   | "CATALOG_WITH_INITIAL_STOCK"
   | "CATALOG_WITH_INITIAL_INVENTORY"
@@ -188,7 +188,7 @@ function toCsvValue(value: unknown) {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-export function buildImportPreviewCsv(items: UnifiedImportItem[]) {
+function buildImportPreviewCsv(items: UnifiedImportItem[]) {
   const rows: Array<Array<string | number>> = [["fila", "sku", "producto", "accion", "sucursal", "cantidad", "costo", "precio", "estado", "mensajes"]];
   for (const item of items) {
     rows.push([
@@ -275,7 +275,7 @@ export async function analyzeUnifiedImport(input: Pick<PreviewInput, "fileConten
  * Examples: "CEMENTO" → "CEM", "ALAMBRE" → "ALM", "TORNILLOS" → "TOR", "FERRETERIA" → "FER"
  * If the 3-letter code already exists, tries 4 letters, then adds a number suffix.
  */
-export function generateSmartCategoryCode(name: string, existingCodes: Set<string>): string {
+function generateSmartCategoryCode(name: string, existingCodes: Set<string>): string {
   const clean = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (!clean) return name.toUpperCase().slice(0, 6);
 

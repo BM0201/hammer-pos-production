@@ -65,6 +65,12 @@ export function getOperationalWindowForManaguaDate(date?: Date | string | null) 
   return { start, end, timezone: TIMEZONE, businessDate };
 }
 
+/** Día 1 del mes en curso, 00:00 Managua, en UTC. */
+export function managuaMonthStartUtc(now: Date = new Date()): Date {
+  const { year, month } = fixedDateParts(now);
+  return new Date(Date.UTC(year, month - 1, 1, MANAGUA_UTC_OFFSET_HOURS, 0, 0, 0));
+}
+
 export type RealtimeSalesSummary = {
   branchId: string;
   branchCode: string;
@@ -265,7 +271,7 @@ export async function getAllBranchesSalesRealtimeSummary(date?: Date | string | 
  *
  * TTL: data reflects the current operational window; no caching applied here.
  */
-export async function getAllBranchesSalesRealtimeSummaryBatch(
+async function getAllBranchesSalesRealtimeSummaryBatch(
   branches: Array<{ id: string; code: string; name: string }>,
   date?: Date | string | null,
 ): Promise<RealtimeSalesSummary[]> {

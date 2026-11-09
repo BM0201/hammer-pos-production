@@ -474,6 +474,8 @@ export default function TreasuryPage() {
           account={accounts.find((a) => a.id === detailAccountId) ?? null}
           onClose={() => setDetailAccountId(null)}
           onChanged={() => void load()}
+          onToggleActive={(a) => void toggleAccountActive(a)}
+          onToggleCustomerPayments={(a) => void toggleAcceptsCustomerPayments(a)}
         />
       )}
 
@@ -1104,7 +1106,14 @@ const ENTRY_TYPE_LABEL: Record<string, string> = {
 const LEDGER_PAGE_SIZE = 50;
 
 /** 6.3 · Detalle de cuenta — fecha · concepto · movimiento · saldo. */
-function AccountDetailDrawer({ accountId, account, onClose, onChanged }: { accountId: string; account: BankAccount | null; onClose: () => void; onChanged: () => void }) {
+function AccountDetailDrawer({ accountId, account, onClose, onChanged, onToggleActive, onToggleCustomerPayments }: {
+  accountId: string;
+  account: BankAccount | null;
+  onClose: () => void;
+  onChanged: () => void;
+  onToggleActive: (account: BankAccount) => void;
+  onToggleCustomerPayments: (account: BankAccount) => void;
+}) {
   const [rows, setRows] = useState<LedgerRow[] | null>(null);
   const [rangeStartBalance, setRangeStartBalance] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
@@ -1186,6 +1195,15 @@ function AccountDetailDrawer({ accountId, account, onClose, onChanged }: { accou
             <Button variant="ghost" size="sm" onClick={onClose} icon={<X className="h-4 w-4" />}>Cerrar</Button>
           </div>
         </div>
+
+        {account && (
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <Button variant="secondary" size="sm" onClick={() => onToggleActive(account)}>{account.isActive ? "Desactivar cuenta" : "Reactivar cuenta"}</Button>
+            <Button variant="secondary" size="sm" onClick={() => onToggleCustomerPayments(account)}>
+              {account.acceptsCustomerPayments ? "Dejar de recibir pagos de clientes" : "Recibir pagos de clientes"}
+            </Button>
+          </div>
+        )}
 
         {account?.balance.pendingOpening && (
           <div className="mb-4 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3">

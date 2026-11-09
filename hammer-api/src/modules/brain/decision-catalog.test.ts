@@ -100,7 +100,7 @@ const DYNAMIC_PRODUCTION_TYPES = [
 // engine.ts:135 — detectLegacyAiInsightDecisions siempre usa este literal fijo.
 const LEGACY_INSIGHT_TYPE = "REVIEW_LEGACY_AI_INSIGHT";
 
-// execute-decision.ts — tipos de "revisión confirmada" (no ejecutan nada real,
+// Tipos de "revisión confirmada" (no ejecutan nada real; se cierran con Resolver),
 // pero SÍ pueden llegar a un decision.proposedActionType real).
 const REVIEW_CONFIRMED_TYPES = [
   "CREATE_PRICE_CHANGE_PROPOSAL",

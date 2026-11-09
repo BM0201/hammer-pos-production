@@ -7,7 +7,7 @@
  * probar con test:unit:logic.
  */
 
-export type HealthLevel = "ok" | "partial" | "stale" | "never";
+type HealthLevel = "ok" | "partial" | "stale" | "never";
 export type HealthLineStatus = { level: HealthLevel; message: string };
 
 const STALE_HOURS = 2;
@@ -19,7 +19,7 @@ function managuaHour(date: Date): number {
 }
 
 /** "en horario de operación" — mismo rango que el cron (6:35–21:35 Managua), redondeado a la hora para esta comparación. */
-export function isWithinOperatingHours(now: Date): boolean {
+function isWithinOperatingHours(now: Date): boolean {
   const hour = managuaHour(now);
   return hour >= OPERATING_HOUR_START && hour < OPERATING_HOUR_END;
 }

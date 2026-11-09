@@ -25,7 +25,7 @@ export type ApplyPreviewRow = {
   belowMinMargin: boolean;
 };
 
-export type Expense = {
+type Expense = {
   id: string;
   branchId: string;
   category: string;
@@ -41,16 +41,6 @@ export type ExpenseSummary = {
   byCategory: Record<string, { total: number; count: number; items: Expense[] }>;
   grandTotal: number;
   totalExpenses: number;
-};
-
-export type PricingConfig = {
-  id?: string;
-  branchId: string;
-  desiredMarginPercent: string | number;
-  prorationMethod: string;
-  estimatedMonthlyUnits: string | number;
-  exists?: boolean;
-  branch?: Branch;
 };
 
 export type ProductOption = {
@@ -78,7 +68,7 @@ export type PricingProductContext = {
   commercialIntelligence?: CommercialIntelligence;
 };
 
-export type CommercialIntelligence = {
+type CommercialIntelligence = {
   abcClass: "A" | "B" | "C";
   xyzClass: "X" | "Y" | "Z";
   combinedClass: string;

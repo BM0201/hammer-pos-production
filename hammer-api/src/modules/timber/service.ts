@@ -96,7 +96,7 @@ const WOOD_PRODUCT_SELECT = { id: true, sku: true, name: true, isActive: true, i
  * → producto del catálogo con esa medida en el nombre (los de categoría Madera
  * vienen de la importación con isTimber=false y SON los que vende el POS).
  */
-export async function findWoodIdentity(
+async function findWoodIdentity(
   client: Pick<Prisma.TransactionClient, "timberProduct" | "product">,
   line: Pick<TimberTripLine, "timberProductId" | "thicknessIn" | "widthIn" | "lengthIn" | "varaLength">,
 ): Promise<WoodIdentity> {
@@ -224,12 +224,12 @@ export function resolveSellingPriceForPolicy(input: {
 }
 
 /** Precio vigente EN la sucursal destino: el propio, si no el general, si no el último de madera. */
-export function currentBranchSellingPrice(current: Pick<TimberCostInjectionSnapshot, "branchPrice" | "standardSalePrice" | "sellingPrice">): number | null {
+function currentBranchSellingPrice(current: Pick<TimberCostInjectionSnapshot, "branchPrice" | "standardSalePrice" | "sellingPrice">): number | null {
   return current.branchPrice ?? current.standardSalePrice ?? current.sellingPrice;
 }
 
 /** El precio que deja un viaje — misma regla para la vista previa y para applyTimberCostsTx. COST_ONLY = el vigente en ESTA sucursal. */
-export function resolveTripSellingPrice(input: {
+function resolveTripSellingPrice(input: {
   pricePolicy: string;
   recalculatedSellingPrice: number;
   current: Pick<TimberCostInjectionSnapshot, "branchPrice" | "standardSalePrice" | "sellingPrice">;
@@ -1292,7 +1292,7 @@ export function nextTripCodeFrom(prefix: string, confirmedCodes: string[]): stri
 }
 
 /** Número que saldría si se ingresa un viaje ahora: el siguiente a los YA ingresados. Cancelados y borradores no cuentan. */
-export async function getNextTripCode(client: Pick<Prisma.TransactionClient, "timberTrip"> = prisma): Promise<string> {
+async function getNextTripCode(client: Pick<Prisma.TransactionClient, "timberTrip"> = prisma): Promise<string> {
   const prefix = tripCodePrefix();
   const confirmed = await client.timberTrip.findMany({
     where: { tripCode: { startsWith: prefix }, status: { in: ["CONFIRMED", "TRANSFERRED"] } },
@@ -1697,7 +1697,7 @@ function normalizeCubicationHeader(value: string): string {
  */
 const MEDIDA_PATTERN = /^\s*(\d+)\s*[xX]\s*(\d+)\s*[xX]\s*(\d+)\s*$/;
 
-export type TimberCubicationImportRecognizedLine = {
+type TimberCubicationImportRecognizedLine = {
   thickness: number;
   width: number;
   length: number;
@@ -1709,7 +1709,7 @@ export type TimberCubicationImportRecognizedLine = {
   action: "CREATE" | "UPDATE";
 };
 
-export type TimberCubicationImportUnrecognizedRow = {
+type TimberCubicationImportUnrecognizedRow = {
   rowNumber: number;
   rawMedida: string;
   rawPiezas: string;

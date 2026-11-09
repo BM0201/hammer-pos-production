@@ -1,5 +1,5 @@
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertAuthenticated } from "@/modules/auth/access";
+import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok } from "@/lib/api/response";
@@ -11,6 +11,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(request, session);
+    assertMaster(session); // igual que aprobar/cancelar una orden suelta
 
     const { id } = await params;
     return ok(await approvePurchaseOrderGroup(id, session!.userId));

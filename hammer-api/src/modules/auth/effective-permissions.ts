@@ -52,7 +52,7 @@ async function granularPermissions(userId: string) {
   return { grants, revokes };
 }
 
-export async function getEffectivePermissionsForUser(input: { userId: string; branchId?: string | null }) {
+async function getEffectivePermissionsForUser(input: { userId: string; branchId?: string | null }) {
   const user = await prisma.user.findUnique({
     where: { id: input.userId },
     select: { id: true, username: true, globalRole: true, isActive: true, sessionVersion: true },

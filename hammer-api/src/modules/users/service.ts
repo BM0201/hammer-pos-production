@@ -173,7 +173,7 @@ function buildActivityCountSelect(): Prisma.UserCountOutputTypeSelect {
  * el usuario nunca hizo ni movió nada en el sistema y puede eliminarse por
  * completo.
  */
-export async function getUserActivityCount(userId: string): Promise<number> {
+async function getUserActivityCount(userId: string): Promise<number> {
   const result = await prisma.user.findUnique({
     where: { id: userId },
     select: { _count: { select: buildActivityCountSelect() } },

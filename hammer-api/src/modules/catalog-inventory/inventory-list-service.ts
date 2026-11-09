@@ -24,7 +24,7 @@ import { tokenize } from "@/modules/catalog/product-search";
  * esta función igual pide branchId siempre.
  */
 
-export type InventoryProductView =
+type InventoryProductView =
   | "ALL"
   | "NEGATIVE"
   | "LOW"
@@ -36,9 +36,9 @@ export type InventoryProductView =
   | "COST_EQ_PRICE"
   | "INACTIVE";
 
-export type InventoryProductSort = "name" | "stock" | "margin" | "value" | "sales90d" | "lastMovement";
+type InventoryProductSort = "name" | "stock" | "margin" | "value" | "sales90d" | "lastMovement";
 
-export type InventoryProductRow = {
+type InventoryProductRow = {
   id: string;
   sku: string;
   name: string;
@@ -62,7 +62,7 @@ export type InventoryProductRow = {
   costEqualsPrice: boolean;
 };
 
-export type InventoryProductCounts = Record<InventoryProductView, number>;
+type InventoryProductCounts = Record<InventoryProductView, number>;
 
 export type ListInventoryProductsInput = {
   branchId: string;
@@ -595,7 +595,7 @@ export async function getInventoryNavCounts(branchId: string | null): Promise<In
   return { activeProducts: overview.activeProducts, negativeStock: overview.negativeStock, lowStock: overview.lowStock, staleTransfers, pendingQuality };
 }
 
-export type StateCoverage = { expected: number; present: number };
+type StateCoverage = { expected: number; present: number };
 
 export type InventoryQualityCounts = {
   noCost: number;

@@ -52,10 +52,6 @@ type Mismatch = {
   diff: string;
 };
 
-function d(v: Prisma.Decimal | number | null | undefined) {
-  return new Prisma.Decimal(v ?? 0);
-}
-
 async function main() {
   const groups = await prisma.productStockGroup.findMany({
     where: { isActive: true },

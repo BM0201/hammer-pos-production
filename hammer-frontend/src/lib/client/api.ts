@@ -62,13 +62,13 @@ export type ApiSuccess<T> = {
   data: T;
 };
 
-export type ApiErrorBody = {
+type ApiErrorBody = {
   code: string;
   message: string;
   details?: unknown;
 };
 
-export type ApiError = {
+type ApiError = {
   ok: false;
   error: ApiErrorBody;
 };

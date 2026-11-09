@@ -13,7 +13,7 @@ import { buildProductSearchWhere } from "@/modules/catalog/product-search";
 import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 import { resolveCostChain } from "@/modules/catalog/effective-pricing";
 import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
-import { calculateBatchCosts, calculateTargetMarginPrice, computeBatchCostSummary, applyWasteFactor } from "./calculations";
+import { calculateTargetMarginPrice, computeBatchCostSummary, applyWasteFactor } from "./calculations";
 import { reserveBatchInputsTx, releaseBatchInputsTx, getProductionReservedBaseQtyTx, type ReservationResult } from "./reservations";
 import type {
   CreateRecipeInput,
@@ -49,7 +49,7 @@ const DEFAULT_PRODUCTION_PRICING_CONFIG: ProductionPricingConfig = {
  * necesitan poder llamarla con un `tx` fake para ser testeables sin una DB
  * real (mismo patrón que isWacDrivesCostChainEnabled).
  */
-export async function getProductionPricingConfig(db: DbClient = prisma): Promise<ProductionPricingConfig> {
+async function getProductionPricingConfig(db: DbClient = prisma): Promise<ProductionPricingConfig> {
   const cfg = await db.productionPricingConfig.findFirst({ orderBy: { updatedAt: "desc" } });
   if (!cfg) return DEFAULT_PRODUCTION_PRICING_CONFIG;
   return {
@@ -606,7 +606,7 @@ export async function createBatch(input: CreateBatchInput & { actorUserId: strin
  * reservar dos veces o pisarse el status. Ahora todo vive en un solo
  * $transaction con el lock primero.
  */
-export async function updateBatchTx(
+async function updateBatchTx(
   tx: Prisma.TransactionClient,
   id: string,
   input: UpdateBatchInput & { actorUserId: string },

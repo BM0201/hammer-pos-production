@@ -83,24 +83,3 @@ export async function listCashPurchasesByBranch(branchId: string, range?: { gte:
     orderBy: { createdAt: "desc" },
   });
 }
-
-/** Vincula una compra ya pagada a la Entrada real cuando el material llega — no mueve inventario, solo deja el rastro. */
-export async function linkCashPurchaseToIntake(cashPurchaseId: string, intakeId: string, actorUserId: string) {
-  const purchase = await prisma.cashPurchase.findUnique({ where: { id: cashPurchaseId } });
-  if (!purchase) throw new Error("NOT_FOUND: compra no encontrada.");
-  if (purchase.linkedIntakeId) throw new Error("CONFLICT: esta compra ya está vinculada a una Entrada.");
-
-  const updated = await prisma.cashPurchase.update({ where: { id: cashPurchaseId }, data: { linkedIntakeId: intakeId } });
-
-  await logAuditEvent({
-    actorUserId,
-    branchId: purchase.branchId,
-    module: "finance",
-    action: "CASH_PURCHASE_LINKED_TO_INTAKE",
-    entityType: "CashPurchase",
-    entityId: cashPurchaseId,
-    metadataJson: { intakeId },
-  });
-
-  return updated;
-}

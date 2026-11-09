@@ -3,14 +3,6 @@ import { prisma } from "@/lib/prisma";
 import { getBranchSalesRealtimeSummary, getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 
-function dayBounds(date = new Date()) {
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-  return { start, end };
-}
-
 function toNumber(value: { toNumber: () => number } | null | undefined): number {
   return value ? value.toNumber() : 0;
 }
@@ -138,7 +130,7 @@ export async function getCashierDashboardSummary(branchId: string) {
 }
 
 export async function getWarehouseDashboardSummary(branchId: string) {
-  const { start } = dayBounds();
+  const { start } = getOperationalWindowForManaguaDate(); // día Managua, no medianoche UTC del servidor
 
   const [pendingDispatches, recentDispatches, overrideRequests] = await Promise.all([
     prisma.saleOrder.count({ where: { branchId, status: SaleOrderStatus.DISPATCH_PENDING } }),

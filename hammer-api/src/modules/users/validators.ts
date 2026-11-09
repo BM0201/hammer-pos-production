@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const membershipSchema = z.object({
+const membershipSchema = z.object({
   branchId: z.string().min(1),
   roleCode: z.enum(["BRANCH_ADMIN", "SALES", "CASHIER", "WAREHOUSE"]),
 });

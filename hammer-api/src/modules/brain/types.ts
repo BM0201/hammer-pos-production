@@ -1,13 +1,10 @@
 import type {
   BrainDecisionCategory,
   BrainDecisionSeverity,
-  BrainDecisionStatus,
   Prisma,
 } from "@prisma/client";
 
-export type BrainScanMode = "SCHEDULED_SCAN" | "QUICK_SCAN" | "OPERATIONAL_DAY_SCAN" | "ENTITY_SCAN" | "DEEP_SCAN" | "REPAIR_SCAN";
-
-export type BrainScanTrigger = "SCHEDULED" | "MANUAL" | "PRICING_REFRESH";
+type BrainScanMode = "SCHEDULED_SCAN" | "QUICK_SCAN" | "OPERATIONAL_DAY_SCAN" | "ENTITY_SCAN" | "DEEP_SCAN" | "REPAIR_SCAN";
 
 export type BrainScanScope = {
   branchId?: string;
@@ -108,32 +105,4 @@ export type BrainScanResult = {
   byCategory: Partial<Record<BrainDecisionCategory, number>>;
   scope?: BrainScanScope;
   limits?: BrainDetectorLimits;
-};
-
-export type BrainDecisionFilters = {
-  branchId?: string;
-  productId?: string;
-  category?: BrainDecisionCategory;
-  severity?: BrainDecisionSeverity;
-  status?: BrainDecisionStatus;
-  days?: number;
-  targetUserId?: string;
-  dateFrom?: Date;
-  dateTo?: Date;
-  search?: string;
-  onlyCritical?: boolean;
-  onlyActionable?: boolean;
-  onlyWithImpact?: boolean;
-  onlyPendingApproval?: boolean;
-  onlyPricing?: boolean;
-  onlyInventory?: boolean;
-  onlyCash?: boolean;
-  onlyPurchasing?: boolean;
-  onlyTransfers?: boolean;
-  onlyConfiguration?: boolean;
-  onlyPricingMisconfiguration?: boolean;
-  actionType?: string;
-  cursor?: string;
-  limit?: number;
-  sort?: "priority" | "severity" | "impact" | "newest" | "oldest" | "branch" | "category" | "date";
 };

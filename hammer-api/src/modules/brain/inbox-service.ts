@@ -44,7 +44,7 @@ export function categoryFromUnknownGroupKey(key: string): string {
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
-export type InboxStatusView = "PENDING" | "SNOOZED" | "RESOLVED" | "DISMISSED";
+type InboxStatusView = "PENDING" | "SNOOZED" | "RESOLVED" | "DISMISSED";
 
 const STATUS_VIEWS: Record<InboxStatusView, BrainDecisionStatus[]> = {
   PENDING: ["OPEN", "APPROVED", "MANUAL_REVIEW", "FAILED"],
@@ -240,7 +240,7 @@ export async function getBrainInbox(filters: InboxFilters, db: Db = prisma): Pro
   };
 }
 
-export type InboxItem = {
+type InboxItem = {
   id: string;
   entityLabel: string;
   branchLabel: string | null;

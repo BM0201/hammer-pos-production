@@ -1,7 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
-import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 
@@ -287,10 +286,7 @@ export async function getProductBranchPricingStatus(productId: string): Promise<
   const rows = await Promise.all(
     branches.map(async (branch) => {
       const setting = settingByBranch.get(branch.id) ?? null;
-      const [effective, policy] = await Promise.all([
-        getEffectiveProductPricing(prisma, { branchId: branch.id, productId }),
-        resolvePolicyForProduct({ branchId: branch.id, productId }).catch(() => null),
-      ]);
+      const effective = await getEffectiveProductPricing(prisma, { branchId: branch.id, productId });
       const cost = effective.effectiveCost === null ? null : Number(effective.effectiveCost);
       const price = effective.effectivePrice === null ? null : Number(effective.effectivePrice);
       const marginPercent = cost !== null && price !== null && price > 0 ? ((price - cost) / price) * 100 : null;

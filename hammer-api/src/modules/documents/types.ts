@@ -3,7 +3,7 @@
  * FASE 3 — H.A.M.M.E.R. POS/ERP
  */
 
-export type DocumentLineItem = {
+type DocumentLineItem = {
   sku: string;
   name: string;
   quantity: number;
@@ -36,7 +36,7 @@ export type DocumentOrderData = {
   notes?: string;
 };
 
-export type ManualInvoiceData = {
+type ManualInvoiceData = {
   series: string;
   number: string;
   date: string;
