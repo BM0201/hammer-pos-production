@@ -297,7 +297,8 @@ export function DuplicatesPanel({ onMerged }: { onMerged?: () => void }) {
 /* ═══════════════════════════════════════════════════════════════════════════ */
 type WizardStep = "CHOOSE_PRIMARY" | "REVIEW" | "CONFIRM" | "RESULT";
 
-export function MergeWizard({ pair, onClose, onDone }: { pair: DuplicatePair; onClose: () => void; onDone: () => void }) {
+// Solo los dos productos y el sugerido: la pestaña de códigos de barra lo abre sin un par del detector.
+export function MergeWizard({ pair, onClose, onDone }: { pair: Pick<DuplicatePair, "productA" | "productB" | "suggestedPrimaryId">; onClose: () => void; onDone: () => void }) {
   const [step, setStep] = useState<WizardStep>("CHOOSE_PRIMARY");
   const [survivingId, setSurvivingId] = useState(pair.suggestedPrimaryId);
   const [confirmUnitMismatch, setConfirmUnitMismatch] = useState(false);

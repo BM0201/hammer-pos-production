@@ -512,7 +512,6 @@ export function ProductBarcodesTab({
             // el detector de duplicados en lista) — placeholders inertes acá.
             productA: { id: productId, sku: productSku, name: productName, categoryId: "", unit: productUnit, barcode: null, totalStock: productTotalStock, createdAt: new Date().toISOString() },
             productB: { id: conflict.id, sku: conflict.sku, name: conflict.name, categoryId: "", unit: productUnit, barcode: conflict.barcode, totalStock: 0, createdAt: new Date().toISOString() },
-            similarity: 1,
             suggestedPrimaryId: productId,
           }}
           onClose={() => setShowMergeWizard(false)}
