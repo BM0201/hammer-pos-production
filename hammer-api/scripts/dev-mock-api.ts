@@ -48,6 +48,7 @@ import {
 import { checkOutlier, computeCategoryStats } from "../src/modules/finance/expense-intelligence";
 import { calculateReconciliation, calculateTimber, calculateTimberTrip, DEFAULT_CLASSIFICATION_CONFIG, DEFAULT_PRICING } from "../src/modules/timber/calculator";
 import { buildCatalogExportWorkbookFromRows } from "../src/modules/catalog-inventory/export-service";
+import { calculatePricingSuggestion } from "../src/modules/pricing/calculator";
 
 const PORT = Number(process.env.PORT) || 4000;
 const SESSION_COOKIE = "__Host-hammer_session=dev-preview; Path=/; Secure; HttpOnly; SameSite=Lax";
@@ -630,6 +631,12 @@ const server = http.createServer(async (req, res) => {
     const key = `${assignMatch[1]}:${String(body.branchId)}`;
     if (body.isAvailable) mockAssignments.add(key); else mockAssignments.delete(key);
     return ok(res, { productId: assignMatch[1], branchId: body.branchId, isAvailable: Boolean(body.isAvailable) });
+  }
+  if (path === "/api/pricing/suggested" && method === "POST") {
+    // Calculadora real (pura) para probar redondeo y avisos sin DB.
+    const body = await readJson(req) as Parameters<typeof calculatePricingSuggestion>[0];
+    try { return ok(res, { ...calculatePricingSuggestion(body), configExists: true }); }
+    catch (e) { return send(res, 400, { ok: false, error: { code: "VALIDATION_ERROR", message: (e as Error).message } }); }
   }
   if (path === "/api/pricing/product-context" && method === "GET") {
     const p = mockProducts.find((x) => x.id === url.searchParams.get("productId"));

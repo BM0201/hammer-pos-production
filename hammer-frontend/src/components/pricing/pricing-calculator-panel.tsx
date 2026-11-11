@@ -744,7 +744,8 @@ export function PricingCalculatorPanel({
                     className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-2 text-sm"
                   >
                     <option value="NONE">Sin redondeo</option>
-                    <option value="NEAREST_1">Entero mas cercano</option>
+                    <option value="NEAREST_0_50">Múltiplo de C$0.50</option>
+                    <option value="NEAREST_1">Al córdoba entero</option>
                     <option value="NEAREST_5">Multiplo de 5</option>
                     <option value="NEAREST_10">Multiplo de 10</option>
                     <option value="NEAREST_50">Multiplo de 50</option>

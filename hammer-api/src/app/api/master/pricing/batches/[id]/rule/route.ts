@@ -8,7 +8,7 @@ import { ok, fail } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { applyBulkRule } from "@/modules/pricing/price-update-batch-service";
 
-const roundingSchema = z.enum(["NONE", "NEAREST_1", "NEAREST_5", "NEAREST_10", "NEAREST_50", "NEAREST_100", "ENDING_9", "ENDING_90", "ENDING_99"]);
+const roundingSchema = z.enum(["NONE", "NEAREST_0_50", "NEAREST_1", "NEAREST_5", "NEAREST_10", "NEAREST_50", "NEAREST_100", "ENDING_9", "ENDING_90", "ENDING_99"]);
 
 const ruleSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("PERCENT_ON_PRICE"), percent: z.number(), rounding: roundingSchema.optional() }),

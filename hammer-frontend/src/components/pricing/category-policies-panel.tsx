@@ -248,6 +248,7 @@ export function CategoryPoliciesPanel({ branchId, onSaved }: { branchId: string;
                     <td>
                       <select className="rounded border px-2 py-1" value={draft.roundingRule} onChange={(e) => updateDraft({ roundingRule: e.target.value })}>
                         <option value="NONE">NONE</option>
+                        <option value="NEAREST_0_50">NEAREST_0_50</option>
                         <option value="NEAREST_1">NEAREST_1</option>
                         <option value="NEAREST_5">NEAREST_5</option>
                         <option value="NEAREST_10">NEAREST_10</option>

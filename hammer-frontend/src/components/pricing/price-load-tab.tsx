@@ -523,6 +523,7 @@ function PriceLoadNewForm({
 
 const ROUNDING_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "NONE", label: "Sin redondeo" },
+  { value: "NEAREST_0_50", label: "Múltiplo de C$0.50" },
   { value: "NEAREST_1", label: "Al entero" },
   { value: "NEAREST_5", label: "Múltiplo de 5" },
   { value: "NEAREST_10", label: "Múltiplo de 10" },

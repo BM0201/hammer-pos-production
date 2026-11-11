@@ -552,6 +552,7 @@ export async function calculatePricingSuggestionForBranch(params: PricingSuggest
     expenseAllocationScope,
     marginPercent,
     prorateMethod,
+    abcClass: commercialIntelligenceSnapshot?.abcClass ?? null,
   });
   result.warnings.push(...serviceWarnings);
   result.scopeWarnings.push(...serviceWarnings);

@@ -11,6 +11,7 @@ type OperatingExpenseSource =
   | "LEGACY_ESTIMATED_UNITS";
 export type RoundingRule =
   | "NONE"
+  | "NEAREST_0_50"
   | "NEAREST_1"
   | "NEAREST_5"
   | "NEAREST_10"
@@ -45,7 +46,35 @@ export type PricingSuggestionInput = {
   marketMinPrice?: number | string | Prisma.Decimal;
   marketMaxPrice?: number | string | Prisma.Decimal;
   roundingRule?: RoundingRule;
+  /** Clase ABC por ventas del producto (inteligencia comercial); define el rango de margen típico para avisar. */
+  abcClass?: "A" | "B" | "C" | null;
 };
+
+/**
+ * Rangos de margen bruto típicos de ferretería: lo que más se vende el cliente lo
+ * compara y aguanta menos margen; lo de poca venta lleva más (Hardware Retailing,
+ * Pulse GTM: básicos ~30–34%, especialidades ~44–48%, promedio 35–42%).
+ */
+const MARGIN_BANDS: Record<"A" | "B" | "C" | "NONE", { min: number; max: number; label: string }> = {
+  A: { min: 15, max: 35, label: "un producto de alta venta (clase A)" },
+  B: { min: 25, max: 45, label: "un producto de venta media (clase B)" },
+  C: { min: 35, max: 55, label: "un producto de poca venta (clase C)" },
+  NONE: { min: 20, max: 50, label: "una ferretería" },
+};
+
+export function marginBandWarning(grossMarginPercent: number, abcClass: "A" | "B" | "C" | null): string | null {
+  const band = MARGIN_BANDS[abcClass ?? "NONE"];
+  const shown = grossMarginPercent.toFixed(1);
+  if (grossMarginPercent < band.min) {
+    return `Margen ${shown}% bajo para ${band.label} (típico ${band.min}–${band.max}%): puede no cubrir merma, fiado y gastos.`;
+  }
+  if (grossMarginPercent > band.max) {
+    return abcClass === "A"
+      ? `Margen ${shown}% alto para ${band.label} (típico ${band.min}–${band.max}%): el cliente conoce este precio; conviene no pasar 10% sobre la competencia.`
+      : `Margen ${shown}% alto para ${band.label} (típico ${band.min}–${band.max}%): revisa que el precio siga siendo competitivo.`;
+  }
+  return null;
+}
 
 export type PricingSuggestionResult = {
   mode: PricingMode;
@@ -130,9 +159,10 @@ function money(value: Prisma.Decimal) {
   return toNumber(new Prisma.Decimal(value.toFixed(2)));
 }
 
-function roundNearest(value: Prisma.Decimal, increment: number) {
-  if (increment <= 1) return new Prisma.Decimal(Math.round(toNumber(value)));
-  return new Prisma.Decimal(Math.round(toNumber(value) / increment) * increment);
+function roundNearest(value: Prisma.Decimal, increment: number, direction: RoundingDirection) {
+  // toDecimalPlaces(2) primero: que un residuo de división (145.0000001) no suba un escalón entero.
+  const steps = value.toDecimalPlaces(2).div(increment);
+  return (direction === "up" ? steps.ceil() : steps.toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP)).mul(increment);
 }
 
 function roundEnding(value: Prisma.Decimal, ending: 9 | 90 | 99) {
@@ -166,18 +196,23 @@ function unitsForScope(input: PricingSuggestionInput, scope: ExpenseAllocationSc
   return ONE;
 }
 
-export function applyRounding(value: Prisma.Decimal, rule: RoundingRule): Prisma.Decimal {
+/** "up" = nunca por debajo del valor (la Calculadora: redondear hacia abajo come margen). */
+type RoundingDirection = "nearest" | "up";
+
+export function applyRounding(value: Prisma.Decimal, rule: RoundingRule, direction: RoundingDirection = "nearest"): Prisma.Decimal {
   switch (rule) {
+    case "NEAREST_0_50":
+      return roundNearest(value, 0.5, direction);
     case "NEAREST_1":
-      return roundNearest(value, 1);
+      return roundNearest(value, 1, direction);
     case "NEAREST_5":
-      return roundNearest(value, 5);
+      return roundNearest(value, 5, direction);
     case "NEAREST_10":
-      return roundNearest(value, 10);
+      return roundNearest(value, 10, direction);
     case "NEAREST_50":
-      return roundNearest(value, 50);
+      return roundNearest(value, 50, direction);
     case "NEAREST_100":
-      return roundNearest(value, 100);
+      return roundNearest(value, 100, direction);
     case "ENDING_9":
       return roundEnding(value, 9);
     case "ENDING_90":
@@ -324,7 +359,7 @@ export function calculatePricingSuggestion(input: PricingSuggestionInput): Prici
   if (priceFloorReason === "MARKET_MIN") warnings.push("El precio minimo de mercado elevo el precio sugerido.");
 
   const rawSuggestedPrice = minPrice;
-  const rounded = applyRounding(rawSuggestedPrice, roundingRule);
+  const rounded = applyRounding(rawSuggestedPrice, roundingRule, "up");
   const suggestedPrice = rounded.lt(minPrice) ? minPrice : rounded;
   const maxPrice = marketMaxPrice;
   let marketConflict: PricingSuggestionResult["marketConflict"] = {
@@ -360,6 +395,10 @@ export function calculatePricingSuggestion(input: PricingSuggestionInput): Prici
   const grossProfit = suggestedPrice.sub(totalInternalCost);
   const grossMarginPercent = suggestedPrice.gt(ZERO) ? grossProfit.div(suggestedPrice).mul(HUNDRED) : ZERO;
   const markupPercent = totalInternalCost.gt(ZERO) ? grossProfit.div(totalInternalCost).mul(HUNDRED) : ZERO;
+  if (totalInternalCost.gt(ZERO) && !marketConflict.hasConflict) {
+    const bandWarning = marginBandWarning(toNumber(grossMarginPercent), input.abcClass ?? null);
+    if (bandWarning) warnings.push(bandWarning);
+  }
 
   return {
     mode,
