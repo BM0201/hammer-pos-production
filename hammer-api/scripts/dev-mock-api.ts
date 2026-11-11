@@ -482,6 +482,25 @@ const mockProducts: MockProduct[] = [
   { id: "p-plywood", sku: "WOO-PLY-STD-0004", name: 'PLYWOOD DE 3/16"', unit: "UNIDAD", categoryId: "cat-hierro" },
   ...Array.from({ length: 11 }, (_, i) => ({ id: `p-regla-${i}`, sku: `MAD-REG-${i}`, name: `REGLA 1X${2 + Math.floor(i / 4)}X${3 + (i % 4)}`, unit: "UNIDAD", categoryId: "cat-hierro" })),
 ];
+const mockLoadLines: Array<{ id: string; productId: string; newPrice: number | null }> = [
+  { id: "pl-1", productId: "p-pintura", newPrice: null },
+  { id: "pl-2", productId: "p-plywood", newPrice: null },
+];
+function mockLoadPreview() {
+  const lines = mockLoadLines.map((l) => {
+    const p = mockProducts.find((x) => x.id === l.productId)!;
+    const changePercent = l.newPrice === null ? null : ((l.newPrice - 100) / 100) * 100;
+    return {
+      id: l.id, productId: p.id, productSku: p.sku, productName: p.name, branchId: null, branchCode: null,
+      costSnapshot: 60, currentPriceSnapshot: 100, priceSourceSnapshot: "STANDARD", newPrice: l.newPrice,
+      status: l.newPrice === null ? "SKIPPED" : "PENDING", dbMessage: null, marginCurrent: 40,
+      marginNew: l.newPrice ? ((l.newPrice - 60) / l.newPrice) * 100 : null, changePercent,
+      classification: l.newPrice === null ? { status: "SKIPPED", reason: "Sin precio nuevo" } : { status: "PENDING", warnings: [], marginNew: null, changePercent },
+    };
+  });
+  return { batch: { id: "pb-1", code: "CP-0001", status: "DRAFT", target: "GENERAL", branchIds: [], reason: "Prueba" }, lines,
+    totals: { total: lines.length, toApply: lines.filter((l) => l.newPrice !== null).length, blocked: 0, withWarning: 0, withoutNewPrice: lines.filter((l) => l.newPrice === null).length } };
+}
 // Asignación manual por sucursal (BranchProductSetting.isAvailable), clave "productId:branchId".
 const mockAssignments = new Set<string>();
 // Precio general por producto y precio propio por sucursal (clave "productId:branchId").
@@ -564,6 +583,18 @@ const server = http.createServer(async (req, res) => {
     const found = mockProducts.filter((p) => mockMatches(p, url.searchParams.get("q") ?? ""));
     const limit = Number(url.searchParams.get("limit") ?? 50);
     return ok(res, { rows: found.slice(0, limit).map((p) => ({ id: p.id, sku: p.sku, name: p.name, barcode: null })), nextCursor: null, counts: { ALL: found.length } });
+  }
+  // ── Carga de precios (un borrador en memoria; PATCH tarda 400 ms como la red real) ──
+  if (path === "/api/master/pricing/batches" && method === "GET") {
+    return ok(res, { rows: [{ id: "pb-1", code: "CP-0001", status: "DRAFT", target: "GENERAL", branchIds: [], reason: "Prueba", source: "MANUAL", createdByName: "preview.master", appliedByName: null, createdAt: new Date().toISOString(), appliedAt: null, linesTotal: mockLoadLines.length, linesApplied: 0 }], total: 1 });
+  }
+  if (path === "/api/master/pricing/batches/pb-1" && method === "GET") return ok(res, mockLoadPreview());
+  if (path === "/api/master/pricing/batches/pb-1/lines" && method === "PATCH") {
+    const body = await readJson(req) as { update?: Array<{ lineId: string; newPrice: number | null }>; add?: Array<{ productId: string }> };
+    await new Promise((r) => setTimeout(r, 400));
+    for (const u of body.update ?? []) { const l = mockLoadLines.find((x) => x.id === u.lineId); if (l) l.newPrice = u.newPrice; }
+    for (const a of body.add ?? []) { const p = mockProducts.find((x) => x.id === a.productId); if (p) mockLoadLines.push({ id: `pl-${p.id}`, productId: p.id, newPrice: null }); }
+    return ok(res, mockLoadPreview());
   }
   if (path === "/api/master/catalog-inventory/export" && method === "GET") {
     const buffer = await buildCatalogExportWorkbookFromRows(mockProducts.map((p) => ({

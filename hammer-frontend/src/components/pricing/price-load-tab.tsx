@@ -536,7 +536,6 @@ const ROUNDING_OPTIONS: Array<{ value: string; label: string }> = [
 type RuleKind = "PERCENT_ON_PRICE" | "MARKUP_ON_COST" | "TARGET_MARGIN" | "FIXED";
 
 function PriceLoadEditor({ batchId, branches, onBack }: { batchId: string; branches: Branch[]; onBack: () => void }) {
-  const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState<BatchPreview | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [acknowledgeWarnings, setAcknowledgeWarnings] = useState(false);
@@ -553,17 +552,20 @@ function PriceLoadEditor({ batchId, branches, onBack }: { batchId: string; branc
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rowRefs = useRef<Map<number, HTMLInputElement>>(new Map());
 
+  // Recarga en silencio: antes ponía loading=true y la pantalla entera pasaba a
+  // "Cargando…" en cada precio tecleado (cada 600 ms) y al agregar un producto —
+  // el editor se desmontaba, perdía foco y scroll.
   const load = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await apiFetch(`/api/master/pricing/batches/${batchId}`);
-      const raw = await res.json();
+      const raw = await res.json().catch(() => null);
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo cargar la carga.");
-      setPreview(unwrapApiData(raw) as BatchPreview);
+      const fresh = unwrapApiData(raw) as BatchPreview;
+      // Lo tecleado mientras viajaba el guardado sigue pendiente en dirtyRef: no se pisa.
+      const pending = dirtyRef.current;
+      setPreview({ ...fresh, lines: fresh.lines.map((l) => (pending.has(l.id) ? { ...l, newPrice: pending.get(l.id) ?? null } : l)) });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo cargar la carga.");
-    } finally {
-      setLoading(false);
     }
   }, [batchId]);
 
@@ -759,7 +761,7 @@ function PriceLoadEditor({ batchId, branches, onBack }: { batchId: string; branc
     });
   }
 
-  if (loading || !preview) {
+  if (!preview) {
     return <p className="py-12 text-center text-sm text-[var(--color-text-muted)] animate-pulse">Cargando…</p>;
   }
 
