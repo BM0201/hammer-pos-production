@@ -93,11 +93,11 @@ function downloadTemplate(importType: string) {
 }
 
 const IMPORT_TYPE_LABELS: Record<string, { label: string; desc: string; color: string }> = {
-  CATALOG_ONLY: { label: "Solo Catálogo", desc: "Crear o actualizar productos. Solo necesitas nombre y categoría.", color: "text-blue-600" },
-  CATALOG_WITH_INITIAL_INVENTORY: { label: "Catálogo + Inventario", desc: "Crear productos con stock inicial. Necesitas nombre, categoría, cantidad y costo.", color: "text-emerald-600" },
-  INVENTORY_ONLY: { label: "Solo Inventario", desc: "Agregar stock a productos existentes (requiere SKU).", color: "text-amber-600" },
-  PRICES_COSTS_ONLY: { label: "Solo Precios/Costos", desc: "Actualizar precios y costos (requiere SKU).", color: "text-purple-600" },
-  PHYSICAL_COUNT: { label: "Conteo Físico", desc: "Ajustar stock por conteo real (requiere SKU).", color: "text-red-600" },
+  CATALOG_ONLY: { label: "Solo Catálogo", desc: "Crear o actualizar productos. Solo necesitas nombre y categoría.", color: "text-[var(--color-master-700)]" },
+  CATALOG_WITH_INITIAL_INVENTORY: { label: "Catálogo + Inventario", desc: "Crear productos con stock inicial. Necesitas nombre, categoría, cantidad y costo.", color: "text-[var(--color-success-700)]" },
+  INVENTORY_ONLY: { label: "Solo Inventario", desc: "Agregar stock a productos existentes (requiere SKU).", color: "text-[var(--color-warning-700)]" },
+  PRICES_COSTS_ONLY: { label: "Solo Precios/Costos", desc: "Actualizar precios y costos (requiere SKU).", color: "text-[var(--color-owner-700)]" },
+  PHYSICAL_COUNT: { label: "Conteo Físico", desc: "Ajustar stock por conteo real (requiere SKU).", color: "text-[var(--color-danger-700)]" },
 };
 
 type AnalysisResult = {
@@ -302,6 +302,29 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
     URL.revokeObjectURL(url);
   }
 
+  const [exporting, setExporting] = useState(false);
+  async function exportCatalog() {
+    setExporting(true);
+    try {
+      const res = await apiFetch("/api/master/catalog-inventory/export");
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? raw?.message ?? "No se pudo exportar el catálogo.");
+      const result = unwrapApiData(raw) as { filename: string; base64: string; rowCount: number };
+      const bytes = Uint8Array.from(atob(result.base64), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = result.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Catálogo descargado — ${result.rowCount} productos.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo exportar el catálogo.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const readyRows = Number(summary?.readyRows ?? summary?.ready ?? 0);
   const errorRows = Number(summary?.errorRows ?? summary?.errors ?? 0);
   const canExecute = Boolean(batchId && summary?.status === "PREVIEWED" && readyRows > 0);
@@ -309,6 +332,30 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
 
   return (
     <div className="space-y-4">
+      {/* ── Exportar: el catálogo entero en .xlsx, re-importable ── */}
+      <Card>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <FileSpreadsheet className="h-6 w-6 flex-shrink-0 text-[var(--color-success-700)]" aria-hidden="true" />
+            <div>
+              <h2 className="text-sm font-bold text-[var(--color-text)]">Exportar catálogo completo</h2>
+              <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
+                Todos los productos en Excel: SKU, código de barras, nombre, categoría, unidad, precio, costo y existencias por sucursal.
+                Puedes editarlo y volver a subirlo como <strong className="text-[var(--color-text-secondary)]">Solo Catálogo</strong> o <strong className="text-[var(--color-text-secondary)]">Solo Precios/Costos</strong>.
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="success"
+            onClick={exportCatalog}
+            disabled={exporting}
+            icon={exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          >
+            {exporting ? "Generando..." : "Descargar Excel"}
+          </Button>
+        </div>
+      </Card>
+
       {/* ── Step 1: Info Banner ── */}
       <Card noPadding>
         <div className="hm-card-header-blue px-5 py-4">
@@ -318,22 +365,22 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
         <div className="p-4 space-y-4">
 
           {/* ── Quick guide ── */}
-          <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
-            <Info className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
-            <div className="text-xs text-blue-900 space-y-1">
+          <div className="flex items-start gap-3 rounded-lg border border-[var(--color-master-200)] bg-[var(--color-master-50)] p-3">
+            <Info className="h-5 w-5 text-[var(--color-master-700)] mt-0.5 flex-shrink-0" />
+            <div className="text-xs text-[var(--color-master-700)] space-y-1">
               <p className="font-semibold">¿Cómo funciona?</p>
               <ol className="list-decimal list-inside space-y-0.5">
                 <li>Descarga la <strong>plantilla</strong> según el tipo de importación</li>
                 <li>Llena los datos en Excel o CSV (mínimo: <strong>nombre</strong> y <strong>categoría</strong>)</li>
                 <li>Sube el archivo → <strong>Preview</strong> para verificar → <strong>Ejecutar</strong></li>
               </ol>
-              <p className="text-blue-700 mt-1">💡 <strong>SKU automático:</strong> Si no incluyes columna SKU, el sistema genera códigos inteligentes basados en el nombre del producto (ej: <code className="bg-blue-100 px-1 rounded">CEM-CEM-425KG-0001</code>).</p>
+              <p className="text-[var(--color-master-700)] mt-1"><Sparkles className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" /><strong>SKU automático:</strong> Si no incluyes columna SKU, el sistema genera códigos inteligentes basados en el nombre del producto (ej: <code className="bg-[var(--color-master-100)] px-1 rounded">CEM-CEM-425KG-0001</code>).</p>
             </div>
           </div>
 
           {/* ── Import type selector ── */}
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1.5">Tipo de importación</label>
+            <label className="block text-xs font-semibold text-[var(--color-text-secondary)] mb-1.5">Tipo de importación</label>
             <div className="grid gap-2 md:grid-cols-3 lg:grid-cols-5">
               {Object.entries(IMPORT_TYPE_LABELS).map(([key, info]) => (
                 <button
@@ -342,12 +389,12 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
                   onClick={() => { setImportType(key); resetState(); }}
                   className={`text-left rounded-lg border-2 p-3 transition-all text-xs ${
                     importType === key
-                      ? "border-blue-500 bg-blue-50 shadow-sm"
-                      : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
+                      ? "border-[var(--color-master-400)] bg-[var(--color-master-50)] shadow-sm"
+                      : "border-[var(--color-border)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-alt)]"
                   }`}
                 >
-                  <span className={`font-semibold block ${importType === key ? "text-blue-700" : "text-gray-800"}`}>{info.label}</span>
-                  <span className="text-gray-500 block mt-0.5 leading-tight">{info.desc}</span>
+                  <span className={`font-semibold block ${importType === key ? "text-[var(--color-master-700)]" : "text-[var(--color-text)]"}`}>{info.label}</span>
+                  <span className="text-[var(--color-text-muted)] block mt-0.5 leading-tight">{info.desc}</span>
                 </button>
               ))}
             </div>
@@ -356,25 +403,21 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
           {/* ── Template + File Upload side by side ── */}
           <div className="grid gap-4 md:grid-cols-2">
             {/* Template download */}
-            <div className="rounded-lg border border-dashed border-emerald-300 bg-emerald-50 p-4 text-center">
-              <FileSpreadsheet className="h-8 w-8 text-emerald-600 mx-auto mb-2" />
-              <p className="text-xs font-semibold text-emerald-800">Plantilla {typeInfo.label}</p>
-              <p className="text-xs text-emerald-600 mt-1">
+            <div className="rounded-lg border border-dashed border-[var(--color-success-200)] bg-[var(--color-success-50)] p-4 text-center">
+              <FileSpreadsheet className="h-8 w-8 text-[var(--color-success-700)] mx-auto mb-2" />
+              <p className="text-xs font-semibold text-[var(--color-success-700)]">Plantilla {typeInfo.label}</p>
+              <p className="text-xs text-[var(--color-success-700)] mt-1">
                 Columnas: <strong>{(IMPORT_TEMPLATES[importType] ?? IMPORT_TEMPLATES.CATALOG_ONLY).headers.join(", ")}</strong>
               </p>
-              <button
-                type="button"
-                onClick={() => downloadTemplate(importType)}
-                className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors"
-              >
-                <Download className="h-3.5 w-3.5" /> Descargar Plantilla CSV
-              </button>
+              <Button variant="secondary" size="sm" className="mt-3" onClick={() => downloadTemplate(importType)} icon={<Download className="h-3.5 w-3.5" />}>
+                Descargar plantilla vacía (CSV)
+              </Button>
             </div>
 
             {/* File upload */}
             <div
               className={`rounded-lg border-2 border-dashed p-4 text-center transition-colors cursor-pointer ${
-                hasFile ? "border-blue-400 bg-blue-50" : "border-gray-300 hover:border-blue-400 hover:bg-blue-50/50"
+                hasFile ? "border-[var(--color-master-400)] bg-[var(--color-master-50)]" : "border-[var(--color-border-strong)] hover:border-[var(--color-master-400)] hover:bg-blue-50/50"
               }`}
               onClick={() => fileInputRef.current?.click()}
             >
@@ -385,16 +428,16 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
                 className="hidden"
                 onChange={(e) => onFile(e.target.files?.[0] ?? null)}
               />
-              <FileUp className={`h-8 w-8 mx-auto mb-2 ${hasFile ? "text-blue-600" : "text-gray-400"}`} />
+              <FileUp className={`h-8 w-8 mx-auto mb-2 ${hasFile ? "text-[var(--color-master-700)]" : "text-[var(--color-text-soft)]"}`} />
               {hasFile ? (
                 <>
-                  <p className="text-xs font-semibold text-blue-800">{fileName}</p>
-                  <p className="text-xs text-blue-600 mt-1">Archivo cargado ✓ — Clic para cambiar</p>
+                  <p className="text-xs font-semibold text-[var(--color-master-700)]">{fileName}</p>
+                  <p className="text-xs text-[var(--color-master-700)] mt-1">Archivo cargado ✓ — Clic para cambiar</p>
                 </>
               ) : (
                 <>
-                  <p className="text-xs font-semibold text-gray-600">Subir archivo Excel o CSV</p>
-                  <p className="text-xs text-gray-500 mt-1">Clic aquí o arrastra tu archivo (.xlsx, .csv)</p>
+                  <p className="text-xs font-semibold text-[var(--color-text-secondary)]">Subir archivo Excel o CSV</p>
+                  <p className="text-xs text-[var(--color-text-muted)] mt-1">Clic aquí o arrastra tu archivo (.xlsx, .csv)</p>
                 </>
               )}
             </div>
@@ -404,7 +447,7 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
           <div className="grid gap-3 md:grid-cols-3">
             {needsBranchSelection ? (
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Sucursal destino</label>
+                <label className="block text-xs font-semibold text-[var(--color-text-secondary)] mb-1">Sucursal destino</label>
                 <select className="hm-input w-full" value={destinationMode} onChange={(e) => { setDestinationMode(e.target.value); resetState(); }}>
                   <option value="SINGLE">Una sucursal</option><option value="ALL">Todas las sucursales</option><option value="FILE">Desde el archivo (columna sucursal)</option>
                 </select>
@@ -412,7 +455,7 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
             ) : null}
             {needsBranchSelection && destinationMode === "SINGLE" ? (
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Sucursal</label>
+                <label className="block text-xs font-semibold text-[var(--color-text-secondary)] mb-1">Sucursal</label>
                 <select className="hm-input w-full" value={defaultBranchId} onChange={(e) => { setDefaultBranchId(e.target.value); resetState(); }}>
                   {branches.map((b) => <option key={b.id} value={b.id}>{b.code} · {b.name}</option>)}
                 </select>
@@ -420,11 +463,11 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
             ) : null}
             {isCatalogType ? (
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Categoría por defecto</label>
+                <label className="block text-xs font-semibold text-[var(--color-text-secondary)] mb-1">Categoría por defecto</label>
                 <select className="hm-input w-full" value={defaultCategoryId} onChange={(e) => setDefaultCategoryId(e.target.value)}>
                   {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
-                <p className="text-[10px] text-gray-500 mt-0.5">Se usa si el archivo no trae columna categoría</p>
+                <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">Se usa si el archivo no trae columna categoría</p>
               </div>
             ) : null}
           </div>
@@ -435,7 +478,7 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
               archivo también trae columna de precio junto a la carga de
               existencias (CATALOG_WITH_INITIAL_INVENTORY). ── */}
           {importType === "CATALOG_WITH_INITIAL_INVENTORY" ? (
-            <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs cursor-pointer">
+            <label className="flex items-start gap-2 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3 text-xs cursor-pointer">
               <input
                 type="checkbox"
                 checked={updateSalePrices}
@@ -443,8 +486,8 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
                 className="mt-0.5"
               />
               <span>
-                <span className="font-semibold text-amber-800">Actualizar también los precios de venta</span>
-                <span className="block text-amber-700 mt-0.5">
+                <span className="font-semibold text-[var(--color-warning-700)]">Actualizar también los precios de venta</span>
+                <span className="block text-[var(--color-warning-700)] mt-0.5">
                   Si tu archivo trae columna &quot;precio&quot; y NO marcas esto, solo se cargan existencias — los precios de venta existentes quedan intactos.
                 </span>
               </span>
@@ -452,17 +495,17 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
           ) : null}
 
           {/* ── Advanced toggle ── */}
-          <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700">
+          <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="inline-flex items-center gap-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
             <Settings2 className="h-3.5 w-3.5" /> Opciones avanzadas {showAdvanced ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
           </button>
           {showAdvanced ? (
-            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs space-y-2">
-              <p className="text-gray-600">El sistema auto-genera SKU, crea productos nuevos y usa unidad &quot;UN&quot; por defecto. Columnas opcionales en tu archivo:</p>
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs space-y-2">
+              <p className="text-[var(--color-text-secondary)]">El sistema auto-genera SKU, crea productos nuevos y usa unidad &quot;UN&quot; por defecto. Columnas opcionales en tu archivo:</p>
               <div className="grid gap-1 md:grid-cols-2">
-                <span className="text-gray-500">• <strong>sku</strong> — código manual (si prefieres no auto-generar)</span>
-                <span className="text-gray-500">• <strong>unidad</strong> — unidad de medida (UN, KG, M, etc.)</span>
-                <span className="text-gray-500">• <strong>precio</strong> — precio de venta sugerido</span>
-                <span className="text-gray-500">• <strong>sucursal</strong> — código de sucursal (modo &quot;Desde archivo&quot;)</span>
+                <span className="text-[var(--color-text-muted)]">• <strong>sku</strong> — código manual (si prefieres no auto-generar)</span>
+                <span className="text-[var(--color-text-muted)]">• <strong>unidad</strong> — unidad de medida (UN, KG, M, etc.)</span>
+                <span className="text-[var(--color-text-muted)]">• <strong>precio</strong> — precio de venta sugerido</span>
+                <span className="text-[var(--color-text-muted)]">• <strong>sucursal</strong> — código de sucursal (modo &quot;Desde archivo&quot;)</span>
               </div>
             </div>
           ) : null}
@@ -471,11 +514,11 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
               productos van a cambiar de precio' con la lista y el
               antes/después de cada uno" ── */}
           {priceChanges.length > 0 ? (
-            <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
-              <p className="text-xs font-bold text-amber-800 mb-1.5">
+            <div className="rounded-lg border-2 border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3">
+              <p className="text-xs font-bold text-[var(--color-warning-700)] mb-1.5">
                 {priceChanges.length} producto{priceChanges.length !== 1 ? "s" : ""} van a cambiar de precio de venta:
               </p>
-              <ul className="text-xs text-amber-700 space-y-0.5 max-h-32 overflow-y-auto font-mono">
+              <ul className="text-xs text-[var(--color-warning-700)] space-y-0.5 max-h-32 overflow-y-auto font-mono">
                 {priceChanges.map((p) => (
                   <li key={p.sku}>{p.sku} — {p.name}: {money(p.previousPrice)} → {money(p.newPrice)}</li>
                 ))}
@@ -486,15 +529,15 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
           {/* ── D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "si la
               fila trae costo = precio... mostrar un aviso... No bloquea." ── */}
           {(summary?.costEqualsPriceCount ?? 0) > 0 ? (
-            <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
-              <p className="text-xs font-bold text-amber-800">
+            <div className="rounded-lg border-2 border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3">
+              <p className="text-xs font-bold text-[var(--color-warning-700)]">
                 Costo igual al precio en {summary!.costEqualsPriceCount} fila{summary!.costEqualsPriceCount !== 1 ? "s" : ""}: ¿lo cargaste en la columna correcta?
               </p>
             </div>
           ) : null}
 
           {/* ── Action buttons ── */}
-          <div className="flex items-center gap-3 pt-2 border-t border-gray-200">
+          <div className="flex items-center gap-3 pt-2 border-t border-[var(--color-border)]">
             <Button
               variant="secondary"
               onClick={() => analyzeFile().catch((e) => toast.error(e.message))}
@@ -530,17 +573,17 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
           <div className="p-5 space-y-4">
             {/* Missing categories */}
             {analysis.missingCategories.length > 0 ? (
-              <div className="rounded-lg border-2 border-orange-300 bg-orange-50 p-4 space-y-2">
-                <div className="flex items-center gap-2 text-orange-800">
+              <div className="rounded-lg border-2 border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-4 space-y-2">
+                <div className="flex items-center gap-2 text-[var(--color-warning-700)]">
                   <Tags className="h-5 w-5" />
                   <h3 className="text-sm font-bold">Hay categorías que no están creadas para el SKU. ¿Crearlas?</h3>
                 </div>
-                <p className="text-xs text-orange-700">
+                <p className="text-xs text-[var(--color-warning-700)]">
                   Se detectaron <strong>{analysis.missingCategories.length}</strong> categoría(s) que no existen en el sistema. Si confirmas, se crearán automáticamente:
                 </p>
                 <div className="flex flex-wrap gap-1.5 mt-1">
                   {analysis.missingCategories.map((code) => (
-                    <span key={code} className="inline-flex items-center rounded-full bg-orange-200 px-2.5 py-1 text-xs font-semibold text-orange-900">
+                    <span key={code} className="inline-flex items-center rounded-full bg-[var(--color-warning-100)] px-2.5 py-1 text-xs font-semibold text-[var(--color-warning-700)]">
                       {code}
                     </span>
                   ))}
@@ -550,44 +593,44 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
 
             {/* New products with auto-SKU */}
             {analysis.autoSkuCount > 0 ? (
-              <div className="rounded-lg border-2 border-blue-300 bg-blue-50 p-4 space-y-2">
-                <div className="flex items-center gap-2 text-blue-800">
+              <div className="rounded-lg border-2 border-[var(--color-master-200)] bg-[var(--color-master-50)] p-4 space-y-2">
+                <div className="flex items-center gap-2 text-[var(--color-master-700)]">
                   <Wand2 className="h-5 w-5" />
                   <h3 className="text-sm font-bold">Hay productos que serán creados y tendrán su SKU basado en su categoría</h3>
                 </div>
-                <p className="text-xs text-blue-700">
+                <p className="text-xs text-[var(--color-master-700)]">
                   Se detectaron <strong>{analysis.autoSkuCount} producto{analysis.autoSkuCount !== 1 ? "s" : ""}</strong> sin SKU que se crearán con un código generado automáticamente basado en su categoría y nombre.
                 </p>
-                <p className="text-xs text-blue-600 flex items-center gap-1">
+                <p className="text-xs text-[var(--color-master-700)] flex items-center gap-1">
                   <Sparkles className="h-3.5 w-3.5" />
-                  Ejemplo: <code className="bg-blue-100 px-1.5 py-0.5 rounded font-mono text-[11px]">ALM-CEM-425KG-0001</code>
+                  Ejemplo: <code className="bg-[var(--color-master-100)] px-1.5 py-0.5 rounded font-mono text-[11px]">ALM-CEM-425KG-0001</code>
                 </p>
               </div>
             ) : null}
 
             {/* New products total (with manual SKU) */}
             {analysis.newProductCount > analysis.autoSkuCount ? (
-              <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-4">
-                <div className="flex items-center gap-2 text-emerald-800">
+              <div className="rounded-lg border border-[var(--color-success-200)] bg-[var(--color-success-50)] p-4">
+                <div className="flex items-center gap-2 text-[var(--color-success-700)]">
                   <Package className="h-5 w-5" />
                   <h3 className="text-sm font-bold">{analysis.newProductCount - analysis.autoSkuCount} producto{analysis.newProductCount - analysis.autoSkuCount !== 1 ? "s" : ""} nuevos con SKU manual</h3>
                 </div>
-                <p className="text-xs text-emerald-700 mt-1">
+                <p className="text-xs text-[var(--color-success-700)] mt-1">
                   Estos productos tienen SKU en el archivo y se crearán con ese código.
                 </p>
               </div>
             ) : null}
 
             {/* Summary */}
-            <div className="flex items-center gap-3 rounded-lg bg-gray-50 border border-gray-200 p-3">
-              <Info className="h-4 w-4 text-gray-500 flex-shrink-0" />
-              <p className="text-xs text-gray-600">
+            <div className="flex items-center gap-3 rounded-lg bg-[var(--color-surface-alt)] border border-[var(--color-border)] p-3">
+              <Info className="h-4 w-4 text-[var(--color-text-muted)] flex-shrink-0" />
+              <p className="text-xs text-[var(--color-text-secondary)]">
                 Total de filas: <strong>{analysis.totalRows}</strong> · Productos nuevos: <strong>{analysis.newProductCount}</strong> · Categorías por crear: <strong>{analysis.missingCategories.length}</strong>
               </p>
             </div>
 
             {/* Action buttons */}
-            <div className="flex items-center gap-3 pt-3 border-t border-gray-200">
+            <div className="flex items-center gap-3 pt-3 border-t border-[var(--color-border)]">
               <Button
                 variant="success"
                 onClick={() => createCategoriesAndPreview().catch((e) => toast.error(e.message))}
@@ -615,34 +658,34 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
           <div className="p-4 space-y-3">
             {/* Summary cards */}
             <div className="grid gap-2 md:grid-cols-5">
-              <div className="rounded-lg border border-gray-200 bg-gray-50 p-2.5 text-center">
-                <span className="text-lg font-bold text-gray-800">{summary.parsedRows ?? items.length}</span>
-                <p className="text-[10px] text-gray-500">Filas leídas</p>
+              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2.5 text-center">
+                <span className="text-lg font-bold text-[var(--color-text)]">{summary.parsedRows ?? items.length}</span>
+                <p className="text-[10px] text-[var(--color-text-muted)]">Filas leídas</p>
               </div>
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-center">
-                <span className="text-lg font-bold text-emerald-700">{readyRows}</span>
-                <p className="text-[10px] text-emerald-600">Listas (READY)</p>
+              <div className="rounded-lg border border-[var(--color-success-200)] bg-[var(--color-success-50)] p-2.5 text-center">
+                <span className="text-lg font-bold text-[var(--color-success-700)]">{readyRows}</span>
+                <p className="text-[10px] text-[var(--color-success-700)]">Listas (READY)</p>
               </div>
-              <div className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-center">
-                <span className="text-lg font-bold text-red-700">{errorRows}</span>
-                <p className="text-[10px] text-red-600">Con errores</p>
+              <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-2.5 text-center">
+                <span className="text-lg font-bold text-[var(--color-danger-700)]">{errorRows}</span>
+                <p className="text-[10px] text-[var(--color-danger-700)]">Con errores</p>
               </div>
-              <div className="rounded-lg border border-blue-200 bg-blue-50 p-2.5 text-center">
-                <span className="text-lg font-bold text-blue-700">{summary.newProducts ?? 0}</span>
-                <p className="text-[10px] text-blue-600">Productos nuevos</p>
+              <div className="rounded-lg border border-[var(--color-master-200)] bg-[var(--color-master-50)] p-2.5 text-center">
+                <span className="text-lg font-bold text-[var(--color-master-700)]">{summary.newProducts ?? 0}</span>
+                <p className="text-[10px] text-[var(--color-master-700)]">Productos nuevos</p>
               </div>
-              <div className="rounded-lg border border-purple-200 bg-purple-50 p-2.5 text-center">
-                <span className="text-lg font-bold text-purple-700">{summary.existingProducts ?? 0}</span>
-                <p className="text-[10px] text-purple-600">Ya existentes</p>
+              <div className="rounded-lg border border-[var(--color-owner-200)] bg-[var(--color-owner-50)] p-2.5 text-center">
+                <span className="text-lg font-bold text-[var(--color-owner-700)]">{summary.existingProducts ?? 0}</span>
+                <p className="text-[10px] text-[var(--color-owner-700)]">Ya existentes</p>
               </div>
             </div>
 
             {step === "done" ? (
               <div className="grid gap-2 md:grid-cols-4 text-xs">
-                <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2"><strong className="text-emerald-700">{summary.executedLines ?? 0}</strong> ejecutadas</div>
-                <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2"><strong className="text-blue-700">{summary.createdProducts ?? 0}</strong> productos creados</div>
-                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2"><strong className="text-amber-700">{summary.inventoryMovements ?? 0}</strong> movimientos</div>
-                <div className="rounded border border-gray-200 bg-gray-50 px-3 py-2"><strong className="text-gray-700">{summary.skippedLines ?? 0}</strong> omitidas</div>
+                <div className="rounded border border-[var(--color-success-200)] bg-[var(--color-success-50)] px-3 py-2"><strong className="text-[var(--color-success-700)]">{summary.executedLines ?? 0}</strong> ejecutadas</div>
+                <div className="rounded border border-[var(--color-master-200)] bg-[var(--color-master-50)] px-3 py-2"><strong className="text-[var(--color-master-700)]">{summary.createdProducts ?? 0}</strong> productos creados</div>
+                <div className="rounded border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2"><strong className="text-[var(--color-warning-700)]">{summary.inventoryMovements ?? 0}</strong> movimientos</div>
+                <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2"><strong className="text-[var(--color-text)]">{summary.skippedLines ?? 0}</strong> omitidas</div>
               </div>
             ) : null}
 
@@ -675,10 +718,10 @@ function ImportPreviewTable({ items }: { items: ImportPreviewItem[] }) {
     <div>
       <div className="overflow-x-auto">
         <table className="hm-table min-w-[980px] w-full text-xs">
-          <thead className="sticky top-0 bg-white z-10">
+          <thead className="sticky top-0 bg-[var(--color-surface)] z-10">
             <tr>
               <th className="w-12">Fila</th>
-              <th>SKU <span title="Auto-generado"><Wand2 className="h-3 w-3 inline text-blue-500 ml-1" /></span></th>
+              <th>SKU <span title="Auto-generado"><Wand2 className="h-3 w-3 inline text-[var(--color-master-700)] ml-1" /></span></th>
               <th>Producto</th>
               <th>Acción</th>
               <th>Sucursal</th>
@@ -691,7 +734,7 @@ function ImportPreviewTable({ items }: { items: ImportPreviewItem[] }) {
           </thead>
           <tbody>
             {pagedItems.map((item, index) => (
-              <tr key={`${item.rowNumber}-${index}`} className={item.status === "ERROR" || item.status === "FAILED" ? "bg-red-50" : ""}>
+              <tr key={`${item.rowNumber}-${index}`} className={item.status === "ERROR" || item.status === "FAILED" ? "bg-[var(--color-danger-50)]" : ""}>
                 <td className="text-center">{item.rowNumber}</td>
                 <td className="font-mono text-[10px]">{item.sku}</td>
                 <td>{item.name}</td>
@@ -705,7 +748,7 @@ function ImportPreviewTable({ items }: { items: ImportPreviewItem[] }) {
                     {item.status}
                   </Badge>
                 </td>
-                <td className="text-[10px] text-gray-600">{item.messages?.join(" | ") || "OK"}</td>
+                <td className="text-[10px] text-[var(--color-text-secondary)]">{item.messages?.join(" | ") || "OK"}</td>
               </tr>
             ))}
           </tbody>
@@ -713,15 +756,15 @@ function ImportPreviewTable({ items }: { items: ImportPreviewItem[] }) {
       </div>
       {/* Pagination */}
       {totalPreviewPages > 1 ? (
-        <div className="flex items-center justify-between border-t border-gray-200 px-4 py-3">
-          <p className="text-xs text-gray-500">
+        <div className="flex items-center justify-between border-t border-[var(--color-border)] px-4 py-3">
+          <p className="text-xs text-[var(--color-text-muted)]">
             Mostrando {(previewPage - 1) * PREVIEW_PAGE_SIZE + 1}–{Math.min(previewPage * PREVIEW_PAGE_SIZE, items.length)} de {items.length} filas
           </p>
           <div className="flex items-center gap-1">
             <button
               onClick={() => setPreviewPage(Math.max(1, previewPage - 1))}
               disabled={previewPage === 1}
-              className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="rounded-lg border border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </button>
@@ -734,15 +777,15 @@ function ImportPreviewTable({ items }: { items: ImportPreviewItem[] }) {
               }, [])
               .map((p, idx) =>
                 p === "..." ? (
-                  <span key={`ellipsis-${idx}`} className="px-1 text-xs text-gray-400">…</span>
+                  <span key={`ellipsis-${idx}`} className="px-1 text-xs text-[var(--color-text-soft)]">…</span>
                 ) : (
                   <button
                     key={p}
                     onClick={() => setPreviewPage(p)}
                     className={`min-w-[32px] rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
                       previewPage === p
-                        ? "border-blue-500 bg-blue-50 text-blue-700"
-                        : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                        ? "border-[var(--color-master-400)] bg-[var(--color-master-50)] text-[var(--color-master-700)]"
+                        : "border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]"
                     }`}
                   >
                     {p}
@@ -752,7 +795,7 @@ function ImportPreviewTable({ items }: { items: ImportPreviewItem[] }) {
             <button
               onClick={() => setPreviewPage(Math.min(totalPreviewPages, previewPage + 1))}
               disabled={previewPage === totalPreviewPages}
-              className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="rounded-lg border border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               <ChevronRight className="h-3.5 w-3.5" />
             </button>

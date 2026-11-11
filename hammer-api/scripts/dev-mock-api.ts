@@ -47,6 +47,7 @@ import {
 } from "../src/modules/payroll/prestaciones-sociales";
 import { checkOutlier, computeCategoryStats } from "../src/modules/finance/expense-intelligence";
 import { calculateReconciliation, calculateTimber, calculateTimberTrip, DEFAULT_CLASSIFICATION_CONFIG, DEFAULT_PRICING } from "../src/modules/timber/calculator";
+import { buildCatalogExportWorkbookFromRows } from "../src/modules/catalog-inventory/export-service";
 
 const PORT = Number(process.env.PORT) || 4000;
 const SESSION_COOKIE = "__Host-hammer_session=dev-preview; Path=/; Secure; HttpOnly; SameSite=Lax";
@@ -563,6 +564,14 @@ const server = http.createServer(async (req, res) => {
     const found = mockProducts.filter((p) => mockMatches(p, url.searchParams.get("q") ?? ""));
     const limit = Number(url.searchParams.get("limit") ?? 50);
     return ok(res, { rows: found.slice(0, limit).map((p) => ({ id: p.id, sku: p.sku, name: p.name, barcode: null })), nextCursor: null, counts: { ALL: found.length } });
+  }
+  if (path === "/api/master/catalog-inventory/export" && method === "GET") {
+    const buffer = await buildCatalogExportWorkbookFromRows(mockProducts.map((p) => ({
+      sku: p.sku, barcode: null, name: p.name, unit: p.unit, isActive: true,
+      categoryName: mockCategories.find((c) => c.id === p.categoryId)?.name ?? "",
+      standardSalePrice: mockStandardPrices.get(p.id) ?? 100, globalCost: null, stockByBranchId: {},
+    })), branches);
+    return ok(res, { filename: "catalogo-completo-mock.xlsx", base64: Buffer.from(buffer).toString("base64"), rowCount: mockProducts.length });
   }
   if (path === "/api/catalog/categories" && method === "GET") return ok(res, mockCategories);
   const detailMatch = path.match(/^\/api\/master\/catalog-inventory\/products\/([^/]+)$/);
