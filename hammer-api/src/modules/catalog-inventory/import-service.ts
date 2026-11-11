@@ -12,6 +12,8 @@ import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/m
 import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 import { suspectCostEqualsPrice } from "@/modules/pricing/cost-correction-service";
+import { resolveInboundUnitCost, resolveInboundUnitCostBatch } from "@/modules/inventory/resolve-inbound-unit-cost";
+import { mapIntakeErrorToSpanish } from "@/modules/inventory/intake-error-messages";
 
 const INVENTORY_IMPORT_BATCH_STATUS = {
   UPLOADED: "UPLOADED",
@@ -74,7 +76,7 @@ export type UnifiedImportItem = {
   name: string;
   categoryCode?: string;
   unit?: string;
-  action: "Crear producto" | "Actualizar producto" | "Crear inventario inicial" | "Sumar stock" | "Fijar stock" | "Ajustar stock" | "Actualizar costo" | "Actualizar precio" | "Ignorar" | "Error";
+  action: "Crear producto" | "Actualizar producto" | "Crear inventario inicial" | "Sumar stock" | "Fijar stock" | "Ajustar stock" | "Actualizar costo" | "Actualizar precio" | "Ignorar" | "Sin cambios" | "Error";
   targetBranchId: string;
   targetBranchCode: string;
   targetBranchName: string;
@@ -184,6 +186,21 @@ function fileHash(input: Pick<PreviewInput, "fileContent" | "fileBase64">) {
 
 function needsBranch(importType: NormalizedImportType) {
   return importType !== "CATALOG_ONLY" && importType !== "GLOBAL_PRICES_COSTS";
+}
+
+/** Tipos que SUMAN la cantidad del archivo (entrada); los de conteo la fijan con un delta. */
+function addsInventory(importType: NormalizedImportType) {
+  return importType === "CATALOG_WITH_INITIAL_STOCK" || importType === "INVENTORY_ADD_STOCK";
+}
+
+/**
+ * ¿La fila genera una ENTRADA (necesita costo positivo)? Sumar con cantidad > 0, o un
+ * conteo que deja el stock por encima del actual. Cantidad 0 al sumar no mueve nada.
+ */
+export function importRowIsInbound(importType: NormalizedImportType, quantity: number | undefined, currentOnHand: number) {
+  if (quantity === undefined) return false;
+  if (addsInventory(importType)) return quantity > 0;
+  return changesInventory(importType) && quantity > currentOnHand;
 }
 
 function changesInventory(importType: NormalizedImportType) {
@@ -408,6 +425,28 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
   };
 
   const missingQuantityColumn = changesInventory(importType) ? missingQuantityColumnMessage(headers) : null;
+  // Antes la ejecución mandaba costo 0 a toda entrada sin columna costo y el
+  // inventario la rechazaba (ZERO_COST_INBOUND) abortando el lote entero; la
+  // vista previa la dejaba pasar como READY. Se valida acá con la misma cadena
+  // que usa el guardado (resolveInboundUnitCostBatch).
+  const productIdBySku = new Map(products.map((p) => [p.sku.toUpperCase(), p.id]));
+  const balances = changesInventory(importType) && products.length > 0
+    ? await prisma.inventoryBalance.findMany({ where: { productId: { in: products.map((p) => p.id) } }, select: { productId: true, branchId: true, quantityOnHand: true } })
+    : [];
+  const onHand = new Map(balances.map((b) => [`${b.branchId}:${b.productId}`, Number(b.quantityOnHand)]));
+  const isInboundFor = (qty: number | undefined, current: number) => importRowIsInbound(importType, qty, current);
+  const costPairs: Array<{ productId: string; branchId: string; enteredCost: null }> = [];
+  for (const row of rows) {
+    if (row.cost !== undefined && row.cost > 0) continue;
+    const productId = productIdBySku.get((skuByRowNumber.get(row.rowNumber) ?? row.sku).toUpperCase());
+    if (!productId) continue;
+    for (const branch of resolveBranches(row)) {
+      if (branch && isInboundFor(row.quantity, onHand.get(`${branch.id}:${productId}`) ?? 0)) costPairs.push({ productId, branchId: branch.id, enteredCost: null });
+    }
+  }
+  const resolvedCost = costPairs.length > 0 ? await resolveInboundUnitCostBatch(prisma, costPairs) : new Map();
+  let addsOnTopOfStock = 0;
+
   const items: UnifiedImportItem[] = [];
   for (const row of rows) {
     const rowSku = skuByRowNumber.get(row.rowNumber) ?? row.sku;
@@ -449,10 +488,19 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
       if ((importType === "CATALOG_WITH_INITIAL_STOCK" || importType === "INVENTORY_ADD_STOCK") && row.cost !== undefined && row.cost <= 0 && (row.quantity ?? 0) > 0) {
         messages.push("Entradas de inventario requieren costo positivo.");
       }
+      const productId = productIdBySku.get(rowSku.toUpperCase());
+      const current = productId && branch ? onHand.get(`${branch.id}:${productId}`) ?? 0 : 0;
+      if (!messages.length && branch && isInboundFor(row.quantity, current) && !(row.cost !== undefined && row.cost > 0)) {
+        if (!(productId && resolvedCost.get(`${branch.id}:${productId}`)?.cost)) {
+          messages.push(`Sin costo: agrega la columna "costo" (${exists ? "el producto no tiene costo" : "producto nuevo"} en ${branch.code}).`);
+        }
+      }
+      if (!messages.length && addsInventory(importType) && exists && (row.quantity ?? 0) > 0 && current > 0) addsOnTopOfStock += 1;
 
       const action = (() => {
         if (messages.length) return "Error";
         if (importType === "CATALOG_ONLY") return exists ? "Actualizar producto" : "Crear producto";
+        if (addsInventory(importType) && row.quantity === 0) return exists ? "Sin cambios" : "Crear producto";
         if (importType === "CATALOG_WITH_INITIAL_STOCK") return exists ? "Crear inventario inicial" : "Crear producto";
         if (importType === "INVENTORY_ADD_STOCK") return "Sumar stock";
         if (importType === "INVENTORY_SET_STOCK") return "Fijar stock";
@@ -516,6 +564,8 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
     // D · Fase 3 — "Costo igual al precio en N filas: ¿lo cargaste en la
     // columna correcta?", no bloqueante.
     missingQuantityColumn,
+    // "Catálogo + Inventario" SUMA: productos que ya tienen existencias en la sucursal y recibirán más.
+    addsOnTopOfStock,
     costEqualsPriceCount: countCostEqualsPriceRows(items.map((item) => ({ unitCost: item.unitCost, standardSalePrice: item.standardSalePrice }))),
   };
   const previewCsv = buildImportPreviewCsv(items);
@@ -965,6 +1015,8 @@ async function executeBulkCatalogOnly(
 
 export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) {
   const now = new Date();
+  // Objeto (no let): se escribe dentro del callback de $transaction y TS no estrecharía un let.
+  const progress: { line: { rowNumber: number; targetBranchCode: string | null } | null; committedLines: number } = { line: null, committedLines: 0 };
   const result: ImportResult = {
     executedLines: 0,
     skippedLines: 0,
@@ -1031,6 +1083,7 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
     for (const chunk of chunks) {
       await prisma.$transaction(async (tx) => {
         for (const line of chunk) {
+          progress.line = line;
           const quantity = line.quantity === null ? null : Number(line.quantity);
           const unitCost = line.unitCost === null ? null : Number(line.unitCost);
           const standardSalePrice = line.standardSalePrice === null ? null : Number(line.standardSalePrice);
@@ -1283,7 +1336,8 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
             if (standardSalePrice !== null) result.priceUpdates += 1;
           }
 
-          if (changesInventory(importType)) {
+          // Cantidad 0 en un tipo que suma = nada que mover (el producto igual se crea/actualiza).
+          if (changesInventory(importType) && !(addsInventory(importType) && quantity === 0)) {
             if (!line.targetBranchId) throw new ImportLineExecutionError("Sucursal requerida para movimiento de inventario.", line.id, line.rowNumber);
             if (quantity === null) throw new ImportLineExecutionError("Cantidad requerida para inventario.", line.id, line.rowNumber);
 
@@ -1313,7 +1367,13 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
               productId: product.id,
               movementType,
               quantity: movementQuantity,
-              unitCost: unitCost ?? 0,
+              unitCost: movementType === InventoryMovementType.ADJUSTMENT_IN && !(unitCost !== null && unitCost > 0)
+                ? await (async () => {
+                  const resolved = await resolveInboundUnitCost(tx, { productId: product.id, branchId: line.targetBranchId!, enteredCost: null });
+                  if (!resolved.cost) throw new ImportLineExecutionError('Sin costo: agrega la columna "costo".', line.id, line.rowNumber);
+                  return Number(resolved.cost);
+                })()
+                : unitCost ?? 0,
               referenceType: "IMPORT_BATCH",
               referenceId: batch.id,
               notes: `Importacion Catalogo e Inventario batch ${batch.id} fila ${line.rowNumber}`,
@@ -1348,6 +1408,8 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
           result.executedLines += 1;
         }
       }, { timeout: IMPORT_TX_TIMEOUT, maxWait: IMPORT_TX_MAX_WAIT });
+      progress.committedLines = result.executedLines + result.skippedLines;
+      progress.line = null; // un error al cerrar el lote no es culpa de ninguna fila
     }
 
     // Phase 3: Finalize batch
@@ -1412,6 +1474,14 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
         },
       });
     });
-    throw error;
+    // Mensaje que el usuario pueda usar: fila, motivo en español y si quedó algo aplicado
+    // (cada tanda de IMPORT_CHUNK_SIZE filas se confirma por separado).
+    const rowNumber = failedLine?.rowNumber ?? progress.line?.rowNumber;
+    if (rowNumber === undefined) throw error;
+    const reason = failedLine ? failedLine.message : mapIntakeErrorToSpanish(error, progress.line?.targetBranchCode ?? "la sucursal").text;
+    const applied = progress.committedLines > 0
+      ? ` Ya se aplicaron ${progress.committedLines} filas antes del error: revisa Historial antes de volver a importar el mismo archivo.`
+      : " No se aplicó ningún cambio.";
+    throw new Error(`VALIDATION_ERROR: Fila ${rowNumber}: ${reason}${applied}`);
   }
 }

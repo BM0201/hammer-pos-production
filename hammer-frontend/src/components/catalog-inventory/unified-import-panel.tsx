@@ -57,6 +57,8 @@ type ImportSummary = {
   costEqualsPriceCount?: number;
   /** Archivo sin columna "cantidad" en un tipo que carga existencias — todas las filas fallan por esto. */
   missingQuantityColumn?: string | null;
+  /** "Catálogo + Inventario" suma: productos que ya tienen existencias en la sucursal y recibirán más. */
+  addsOnTopOfStock?: number;
 };
 
 const IMPORT_TEMPLATES: Record<string, { headers: string[]; example: string[] }> = {
@@ -102,6 +104,23 @@ const IMPORT_TYPE_LABELS: Record<string, { label: string; desc: string; color: s
   PHYSICAL_COUNT: { label: "Conteo Físico", desc: "Ajustar stock por conteo real (requiere SKU).", color: "text-[var(--color-danger-700)]" },
 };
 
+/**
+ * POST al importador. El error del API viene en { error: { message } } (antes se leía
+ * raw.message, que nunca existe → mensaje genérico), y un cuerpo vacío ya no revienta
+ * con "Unexpected end of JSON input".
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function postImport(body: Record<string, unknown>, fallback: string): Promise<any> {
+  const response = await apiFetch("/api/master/catalog-inventory/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const raw = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(raw?.error?.message ?? raw?.message ?? `${fallback} (error ${response.status})`);
+  return unwrapApiData(raw);
+}
+
 type AnalysisResult = {
   totalRows: number;
   missingCategories: string[];
@@ -132,6 +151,7 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
   // defecto; solo aplica a CATALOG_WITH_INITIAL_INVENTORY (normaliza a
   // CATALOG_WITH_INITIAL_STOCK en el backend).
   const [updateSalePrices, setUpdateSalePrices] = useState(false);
+  const [executeError, setExecuteError] = useState("");
   const [priceChanges, setPriceChanges] = useState<Array<{ sku: string; name: string; previousPrice: number; newPrice: number }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -148,6 +168,7 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
     setAnalysis(null);
     setShowAnalysisDialog(false);
     setPriceChanges([]);
+    setExecuteError("");
     setStep("config");
   }
 
@@ -169,20 +190,13 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
   async function analyzeFile() {
     setLoading(true);
     try {
-      const response = await apiFetch("/api/master/catalog-inventory/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: "analyze",
-          importType,
-          destinationMode,
-          defaultCategoryId: defaultCategoryId || undefined,
-          ...filePayload,
-        }),
-      });
-      const raw = await response.json();
-      if (!response.ok) throw new Error(raw.message ?? "No se pudo analizar el archivo.");
-      const result = unwrapApiData(raw) as AnalysisResult;
+      const result: AnalysisResult = await postImport({
+        mode: "analyze",
+        importType,
+        destinationMode,
+        defaultCategoryId: defaultCategoryId || undefined,
+        ...filePayload,
+      }, "No se pudo analizar el archivo.");
       // If there are missing categories or new products → show dialog
       if (result.missingCategories.length > 0 || result.autoSkuCount > 0) {
         setAnalysis(result);
@@ -202,14 +216,7 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
     try {
       // Create missing categories if any
       if (analysis && analysis.missingCategories.length > 0) {
-        const response = await apiFetch("/api/master/catalog-inventory/import", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: "create-categories", categoryCodes: analysis.missingCategories }),
-        });
-        const raw = await response.json();
-        if (!response.ok) throw new Error(raw.message ?? "No se pudo crear las categorías.");
-        const result = unwrapApiData(raw);
+        const result = await postImport({ mode: "create-categories", categoryCodes: analysis.missingCategories }, "No se pudo crear las categorías.");
         toast.success(`${result.created?.length ?? 0} categoría(s) creada(s) automáticamente`);
       }
       // Then run preview
@@ -222,25 +229,19 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
   async function runPreview() {
     setLoading(true);
     try {
-      const response = await apiFetch("/api/master/catalog-inventory/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: "preview",
-          importType,
-          destinationMode,
-          defaultBranchId,
-          createMissingProducts: true,
-          defaultCategoryId: defaultCategoryId || undefined,
-          defaultUnit: "UN",
-          defaultStandardSalePrice: 1,
-          updateSalePrices,
-          ...filePayload,
-        }),
-      });
-      const raw = await response.json();
-      if (!response.ok) throw new Error(raw.message ?? "No se pudo generar preview.");
-      const result = unwrapApiData(raw);
+      const result = await postImport({
+        mode: "preview",
+        importType,
+        destinationMode,
+        defaultBranchId,
+        createMissingProducts: true,
+        defaultCategoryId: defaultCategoryId || undefined,
+        defaultUnit: "UN",
+        defaultStandardSalePrice: 1,
+        updateSalePrices,
+        ...filePayload,
+      }, "No se pudo generar preview.");
+      setExecuteError("");
       setBatchId(result.batchId ?? "");
       setItems(result.items ?? []);
       setSummary(result.summary ?? null);
@@ -263,15 +264,18 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
     const confirmed = window.confirm("¿Confirmas la importación? Esta acción modificará catálogo, precios o inventario de forma permanente.");
     if (!confirmed) return;
     setLoading(true);
+    setExecuteError("");
     try {
-      const response = await apiFetch("/api/master/catalog-inventory/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "execute", batchId }),
-      });
-      const raw = await response.json();
-      if (!response.ok) throw new Error(raw.message ?? "No se pudo ejecutar importación.");
-      const result = unwrapApiData(raw);
+      let result;
+      try {
+        result = await postImport({ mode: "execute", batchId }, "No se pudo ejecutar la importación.");
+      } catch (error) {
+        // El backend marca el lote como FAILED: no se puede reintentar el mismo lote,
+        // hay que generar un preview nuevo. El mensaje queda fijo en pantalla, no solo en un toast.
+        setSummary((prev) => (prev ? { ...prev, status: "FAILED" } : prev));
+        setExecuteError(error instanceof Error ? error.message : String(error));
+        throw error;
+      }
       const nextSummary: ImportSummary = {
         status: result.status,
         executedLines: result.executedLines,
@@ -537,6 +541,16 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
             </div>
           ) : null}
 
+          {step === "preview" && (summary?.addsOnTopOfStock ?? 0) > 0 ? (
+            <div role="alert" className="flex items-start gap-2 rounded-lg border-2 border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--color-warning-700)]" aria-hidden="true" />
+              <p className="text-xs text-[var(--color-warning-700)]">
+                <strong>{summary!.addsOnTopOfStock} producto{summary!.addsOnTopOfStock !== 1 ? "s" : ""} ya tienen existencias en la sucursal y este tipo las SUMA.</strong>{" "}
+                Si tu archivo es un conteo de lo que hay ahora, usa <strong>Conteo Físico</strong>: fija el stock al número del archivo en vez de sumarlo.
+              </p>
+            </div>
+          ) : null}
+
           {(summary?.costEqualsPriceCount ?? 0) > 0 ? (
             <div className="rounded-lg border-2 border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3">
               <p className="text-xs font-bold text-[var(--color-warning-700)]">
@@ -545,8 +559,19 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
             </div>
           ) : null}
 
+          {executeError ? (
+            <div role="alert" className="flex items-start gap-2 rounded-lg border-2 border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--color-danger-700)]" aria-hidden="true" />
+              <div className="text-xs text-[var(--color-danger-700)]">
+                <p className="font-bold">No se pudo ejecutar la importación</p>
+                <p className="mt-0.5">{executeError}</p>
+                <p className="mt-1">Corrige el archivo y vuelve a darle <strong>Preview</strong>: ese lote ya no se puede ejecutar.</p>
+              </div>
+            </div>
+          ) : null}
+
           {/* ── Action buttons ── */}
-          <div className="flex items-center gap-3 pt-2 border-t border-[var(--color-border)]">
+          <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[var(--color-border)]">
             <Button
               variant="secondary"
               onClick={() => analyzeFile().catch((e) => toast.error(e.message))}
@@ -747,7 +772,7 @@ function ImportPreviewTable({ items }: { items: ImportPreviewItem[] }) {
                 <td className="text-center">{item.rowNumber}</td>
                 <td className="font-mono text-[10px]">{item.sku}</td>
                 <td>{item.name}</td>
-                <td><Badge variant={item.action === "Crear producto" ? "info" : item.action === "Error" ? "danger" : "warning"}>{item.action}</Badge></td>
+                <td><Badge variant={item.action === "Crear producto" ? "info" : item.action === "Error" ? "danger" : item.action === "Sin cambios" ? "neutral" : "warning"}>{item.action}</Badge></td>
                 <td>{item.targetBranchCode}</td>
                 <td className="text-right">{item.quantity ?? ""}</td>
                 <td className="text-right">{item.unitCost ?? ""}</td>

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countCostEqualsPriceRows, missingQuantityColumnMessage } from "@/modules/catalog-inventory/import-service";
+import { countCostEqualsPriceRows, importRowIsInbound, missingQuantityColumnMessage } from "@/modules/catalog-inventory/import-service";
 
 /**
  * D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "Costo igual al
@@ -35,4 +35,15 @@ test("sin columna cantidad: nombra la columna parecida en vez de 'Cantidad inval
   assert.match(missingQuantityColumnMessage(["sku", "nombre"]) ?? "", /Agrégala/);
   assert.equal(missingQuantityColumnMessage(["sku", "Cantidad"]), null);
   assert.equal(missingQuantityColumnMessage(["sku", "stock"]), null);
+});
+
+test("entrada que exige costo: cantidad 0 al sumar no mueve nada; el conteo solo cuando sube", () => {
+  // Catalogo_MGA_actualizado.xlsx: 1114 filas en 0 + sin columna costo abortaban el lote al ejecutar.
+  assert.equal(importRowIsInbound("CATALOG_WITH_INITIAL_STOCK", 0, 0), false);
+  assert.equal(importRowIsInbound("CATALOG_WITH_INITIAL_STOCK", 5, 10), true);
+  assert.equal(importRowIsInbound("INVENTORY_ADD_STOCK", 3, 0), true);
+  assert.equal(importRowIsInbound("PHYSICAL_COUNT_ADJUSTMENT", 12, 10), true);
+  assert.equal(importRowIsInbound("PHYSICAL_COUNT_ADJUSTMENT", 8, 10), false);
+  assert.equal(importRowIsInbound("CATALOG_ONLY", 5, 0), false);
+  assert.equal(importRowIsInbound("CATALOG_WITH_INITIAL_STOCK", undefined, 0), false);
 });
