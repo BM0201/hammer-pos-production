@@ -55,6 +55,8 @@ type ImportSummary = {
   costUpdates?: number;
   /** D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "Costo igual al precio en N filas", no bloqueante. */
   costEqualsPriceCount?: number;
+  /** Archivo sin columna "cantidad" en un tipo que carga existencias — todas las filas fallan por esto. */
+  missingQuantityColumn?: string | null;
 };
 
 const IMPORT_TEMPLATES: Record<string, { headers: string[]; example: string[] }> = {
@@ -528,6 +530,13 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
 
           {/* ── D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "si la
               fila trae costo = precio... mostrar un aviso... No bloquea." ── */}
+          {summary?.missingQuantityColumn ? (
+            <div role="alert" className="flex items-start gap-2 rounded-lg border-2 border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--color-danger-700)]" aria-hidden="true" />
+              <p className="text-xs font-bold text-[var(--color-danger-700)]">{summary.missingQuantityColumn}</p>
+            </div>
+          ) : null}
+
           {(summary?.costEqualsPriceCount ?? 0) > 0 ? (
             <div className="rounded-lg border-2 border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3">
               <p className="text-xs font-bold text-[var(--color-warning-700)]">

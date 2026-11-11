@@ -2,7 +2,7 @@ import { InventoryMovementType, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { readCsvContent, readExcelBase64 } from "@/modules/import-excel/excel-reader";
-import { buildHeaderIndex, pickByAlias } from "@/modules/import-excel/header-matcher";
+import { buildHeaderIndex, normalizeHeader, pickByAlias } from "@/modules/import-excel/header-matcher";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
@@ -141,23 +141,41 @@ function toNumber(value: string | undefined) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-async function readRows(input: Pick<PreviewInput, "fileContent" | "fileBase64">): Promise<RawRow[]> {
+const QUANTITY_ALIASES = ["cantidad", "qty", "quantity", "conteo", "cant", "stock", "unidades", "existencia"];
+
+/**
+ * Sin esta guía, un archivo sin columna de cantidad (p. ej. "stock MGA", que
+ * es como la exportación del catálogo nombra el stock a propósito para no
+ * tocar inventario al re-importar) daba "Cantidad invalida." en TODAS las
+ * filas sin decir por qué. null = el archivo sí trae cantidad.
+ */
+export function missingQuantityColumnMessage(headers: string[]): string | null {
+  const normalized = headers.map((h) => normalizeHeader(String(h ?? "")));
+  if (normalized.some((h) => QUANTITY_ALIASES.includes(h))) return null;
+  const lookalike = headers.find((_, i) => /^(stock|cantidad|existencia|conteo|cant|qty|unidades)/.test(normalized[i]));
+  return lookalike
+    ? `El archivo no tiene columna "cantidad". La columna "${lookalike}" no se lee como cantidad: renómbrala a "cantidad".`
+    : 'El archivo no tiene columna "cantidad". Agrégala para cargar existencias.';
+}
+
+async function readRows(input: Pick<PreviewInput, "fileContent" | "fileBase64">): Promise<{ rows: RawRow[]; headers: string[] }> {
   const matrix = input.fileBase64 ? await readExcelBase64(input.fileBase64) : readCsvContent(input.fileContent ?? "");
-  if (matrix.length < 2) return [];
+  if (matrix.length < 2) return { rows: [], headers: matrix[0] ?? [] };
   const index = buildHeaderIndex(matrix[0]);
   const pick = (cells: string[], names: string[]) => pickByAlias(cells, index, names);
 
-  return matrix.slice(1).map((cells, idx) => ({
+  const rows = matrix.slice(1).map((cells, idx) => ({
     rowNumber: idx + 2,
     sku: normalizeManualSku(pick(cells, ["sku", "codigo", "code", "itemcode", "productcode", "referencia", "ref", "clave", "articulo"])),
     name: pick(cells, ["nombre", "producto", "name", "descripcion", "productname", "material", "item", "articulo", "concepto", "nombrematerial", "nombreproducto"]),
     categoryCode: pick(cells, ["categoria", "categorias", "category", "categories", "grupodeproductos", "grupo", "familia", "rubro", "departamento"]) || undefined,
     unit: (pick(cells, ["unidad", "unit", "uom", "um", "unidadmedida", "medida"]).trim().toUpperCase()) || undefined,
     branchCode: pick(cells, ["sucursal", "branch", "branchcode", "bodega", "almacen"]).toUpperCase() || undefined,
-    quantity: toNumber(pick(cells, ["cantidad", "qty", "quantity", "conteo", "cant", "stock", "unidades", "existencia"])),
+    quantity: toNumber(pick(cells, QUANTITY_ALIASES)),
     cost: toNumber(pick(cells, ["costo", "cost", "costounitario", "unitcost", "costprice", "costbeftax", "costocompra", "preciocosto", "costounit"])),
     price: toNumber(pick(cells, ["precio", "price", "standardsaleprice", "precioventa", "pventa", "pvp"])),
   })).filter((row) => row.sku || row.name);
+  return { rows, headers: matrix[0] };
 }
 
 function fileHash(input: Pick<PreviewInput, "fileContent" | "fileBase64">) {
@@ -221,7 +239,7 @@ export function countCostEqualsPriceRows(items: Array<{ unitCost: number | null;
 
 /* ── Analyze: detect missing categories and new products before preview ── */
 export async function analyzeUnifiedImport(input: Pick<PreviewInput, "fileContent" | "fileBase64" | "importType" | "destinationMode" | "defaultCategoryId">) {
-  const [rows, categories] = await Promise.all([
+  const [{ rows }, categories] = await Promise.all([
     readRows(input),
     prisma.category.findMany({ where: { isActive: true }, select: { id: true, code: true, name: true } }),
   ]);
@@ -327,7 +345,7 @@ export async function createMissingCategoriesForImport(categoryCodes: string[], 
 
 export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) {
   const importType = normalizeImportType(input.importType, input.destinationMode);
-  const [rows, branches, categories] = await Promise.all([
+  const [{ rows, headers }, branches, categories] = await Promise.all([
     readRows(input),
     prisma.branch.findMany({ where: { isActive: true }, select: { id: true, code: true, name: true }, orderBy: { code: "asc" } }),
     prisma.category.findMany({ where: { isActive: true }, select: { id: true, code: true, name: true } }),
@@ -389,6 +407,7 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
     return input.defaultBranchId ? [branchById.get(input.defaultBranchId)].filter(Boolean) : [];
   };
 
+  const missingQuantityColumn = changesInventory(importType) ? missingQuantityColumnMessage(headers) : null;
   const items: UnifiedImportItem[] = [];
   for (const row of rows) {
     const rowSku = skuByRowNumber.get(row.rowNumber) ?? row.sku;
@@ -420,7 +439,11 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
       const messages: string[] = [];
       if (!exists && !row.name) messages.push("Producto nuevo requiere nombre.");
       if (!exists && importType === "INVENTORY_ADD_STOCK") messages.push("Inventario requiere SKU existente o usa Catalogo + inventario inicial.");
-      if (changesInventory(importType) && (row.quantity === undefined || row.quantity < 0)) messages.push("Cantidad invalida.");
+      if (changesInventory(importType)) {
+        if (missingQuantityColumn) messages.push(missingQuantityColumn);
+        else if (row.quantity === undefined) messages.push("Falta la cantidad.");
+        else if (row.quantity < 0) messages.push("Cantidad invalida.");
+      }
       if (row.cost !== undefined && row.cost < 0) messages.push("Costo invalido.");
       if (row.price !== undefined && row.price < 0) messages.push("Precio invalido.");
       if ((importType === "CATALOG_WITH_INITIAL_STOCK" || importType === "INVENTORY_ADD_STOCK") && row.cost !== undefined && row.cost <= 0 && (row.quantity ?? 0) > 0) {
@@ -492,6 +515,7 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
     priceChangeCount: priceChanges.length,
     // D · Fase 3 — "Costo igual al precio en N filas: ¿lo cargaste en la
     // columna correcta?", no bloqueante.
+    missingQuantityColumn,
     costEqualsPriceCount: countCostEqualsPriceRows(items.map((item) => ({ unitCost: item.unitCost, standardSalePrice: item.standardSalePrice }))),
   };
   const previewCsv = buildImportPreviewCsv(items);

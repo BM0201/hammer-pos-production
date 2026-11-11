@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countCostEqualsPriceRows } from "@/modules/catalog-inventory/import-service";
+import { countCostEqualsPriceRows, missingQuantityColumnMessage } from "@/modules/catalog-inventory/import-service";
 
 /**
  * D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "Costo igual al
@@ -26,4 +26,13 @@ test("fila sin costo o sin precio no cuenta (nada que comparar)", () => {
 test("sin ninguna fila dudosa, el conteo es 0", () => {
   const count = countCostEqualsPriceRows([{ unitCost: 10, standardSalePrice: 15 }]);
   assert.equal(count, 0);
+});
+
+test("sin columna cantidad: nombra la columna parecida en vez de 'Cantidad invalida.' por fila", () => {
+  // Así llegó Catalogo_MGA_actualizado.xlsx (derivado de la exportación del catálogo).
+  const msg = missingQuantityColumnMessage(["nombre", "categoria", "unidad", "stock MGA"]);
+  assert.match(msg ?? "", /"stock MGA".*renómbrala a "cantidad"/);
+  assert.match(missingQuantityColumnMessage(["sku", "nombre"]) ?? "", /Agrégala/);
+  assert.equal(missingQuantityColumnMessage(["sku", "Cantidad"]), null);
+  assert.equal(missingQuantityColumnMessage(["sku", "stock"]), null);
 });
