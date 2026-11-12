@@ -157,7 +157,7 @@ export function PosTicketPanel({
                         <button
                           type="button"
                           aria-label="Reducir cantidad"
-                          className="flex h-6 w-6 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
+                          className="flex h-6 w-6 pointer-coarse:h-9 pointer-coarse:w-9 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
                           disabled={busy}
                           onClick={() => {
                             if (qty <= 1) removeLine(line.id);
@@ -196,7 +196,7 @@ export function PosTicketPanel({
                         <button
                           type="button"
                           aria-label="Aumentar cantidad"
-                          className="flex h-6 w-6 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
+                          className="flex h-6 w-6 pointer-coarse:h-9 pointer-coarse:w-9 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
                           disabled={busy}
                           onClick={() => commitLineQuantity(line, qty + 1, true)}
                           data-testid={`pos-line-inc-${line.id}`}
@@ -214,7 +214,7 @@ export function PosTicketPanel({
                       <button
                         type="button"
                         aria-label="Eliminar línea"
-                        className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-[var(--color-text-soft)] transition-colors hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)] disabled:opacity-40"
+                        className="flex h-6 w-6 pointer-coarse:h-10 pointer-coarse:w-10 flex-shrink-0 items-center justify-center rounded-md text-[var(--color-text-soft)] transition-colors hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)] disabled:opacity-40"
                         disabled={busy}
                         onClick={() => removeLine(line.id)}
                         data-testid={`pos-line-remove-${line.id}`}

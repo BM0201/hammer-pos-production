@@ -145,11 +145,11 @@
 
 /* ─── Touch Optimizations ─────────────────────────────────────────── */
 @media (hover: none) and (pointer: coarse) {
-  /* Touch device optimizations */
-  button {
-    padding: 12px 16px;
-  }
-
+  /* Touch device optimizations.
+     Sin `button { padding }` global: fuera de capa le ganaba a todas las
+     utilidades de Tailwind y en tablet aplastaba a 0 px el ícono de cada
+     botón de solo ícono (× de eliminar línea, martillo del menú). Los
+     controles chicos se agrandan con `pointer-coarse:` en su componente. */
   input,
   select,
   textarea {

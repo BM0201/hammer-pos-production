@@ -199,7 +199,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
       </div>
 
       {/* Nav sections */}
-      <nav className="flex-1 overflow-y-auto px-2 py-1 space-y-4" aria-label="POS navigation">
+      <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-1 space-y-4" aria-label="POS navigation">
         {sections.map((section) => (
           <div key={section.title}>
             {!isCollapsed && (
@@ -221,7 +221,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
                     <Link
                       href={item.href as Route}
                       onClick={handleNavigation}
-                      className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[0.8125rem] font-medium transition-colors duration-[140ms]"
+                      className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 pointer-coarse:py-3 text-[0.8125rem] font-medium transition-colors duration-[140ms]"
                       style={{
                         background: active ? "var(--color-sidebar-active)" : "transparent",
                         color: active ? "var(--color-sidebar-text-active)" : "var(--color-sidebar-text)",
