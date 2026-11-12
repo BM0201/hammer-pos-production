@@ -19,7 +19,8 @@ import { useIdleLock } from "@/hooks/use-idle-lock";
  * desbloqueo fallido nunca puede bloquear el login real del usuario. El
  * endpoint tiene su propio límite (5 fallos / 15 min).
  */
-export function IdleLock({ timeoutMinutes = 5 }: { timeoutMinutes?: number }) {
+// 30 min: con 5 la caja se bloqueaba entre cliente y cliente (2026-11-12).
+export function IdleLock({ timeoutMinutes = 30 }: { timeoutMinutes?: number }) {
   const { locked, unlock } = useIdleLock(timeoutMinutes);
 
   const [username, setUsername] = useState<string | null>(null);
