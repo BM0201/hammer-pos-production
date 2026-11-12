@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 
@@ -17,7 +17,23 @@ type PosRealtimeSummary = {
   } | null;
 };
 
-export function usePosRealtimeSummary(branchId: string) {
+type PosRealtimeSummaryValue = {
+  branchId: string;
+  realtimeSummary: PosRealtimeSummary | null;
+  loadRealtimeSummary: () => Promise<void>;
+};
+
+/**
+ * PosShell comparte su resumen. Antes la caja tenía su propia copia: el
+ * endpoint (~1 s en la tablet) se pedía dos veces y, tras una venta, la caja
+ * recargaba SU copia mientras la barra de arriba esperaba al próximo poll.
+ */
+export const PosRealtimeSummaryShare = createContext<PosRealtimeSummaryValue | null>(null);
+
+export function usePosRealtimeSummary(branchId: string): PosRealtimeSummaryValue {
+  const shared = useContext(PosRealtimeSummaryShare);
+  const reuse = shared?.branchId === branchId;
+
   const [realtimeSummary, setRealtimeSummary] = useState<PosRealtimeSummary | null>(null);
   // Monotonically-increasing sequence number so stale in-flight responses
   // (from a previous poll tick) never overwrite a fresher one that resolved first.
@@ -36,9 +52,14 @@ export function usePosRealtimeSummary(branchId: string) {
   useOperationalPolling({
     task: loadRealtimeSummary,
     intervalMs: 15_000,
+    enabled: !reuse,
     deps: [loadRealtimeSummary],
     onError: () => undefined,
   });
 
-  return { realtimeSummary, loadRealtimeSummary };
+  const own = useMemo(
+    () => ({ branchId, realtimeSummary, loadRealtimeSummary }),
+    [branchId, realtimeSummary, loadRealtimeSummary],
+  );
+  return reuse ? shared : own;
 }

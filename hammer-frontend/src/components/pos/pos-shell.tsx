@@ -21,8 +21,8 @@ import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { applyUserTheme, ThemeToggle } from "@/components/ui/theme-toggle";
 import { PosSummaryCards } from "./components/pos-summary-cards";
-import { usePosRealtimeSummary } from "./hooks/use-pos-realtime-summary";
-import { usePosCashContext } from "./hooks/use-pos-cash-context";
+import { PosRealtimeSummaryShare, usePosRealtimeSummary } from "./hooks/use-pos-realtime-summary";
+import { PosCashContextShare, usePosCashContext } from "./hooks/use-pos-cash-context";
 import { useAuthHeartbeat } from "@/hooks/use-auth-heartbeat";
 import { LogoutButton } from "@/components/navigation/logout-button";
 import type { SessionPayload } from "@/types/auth";
@@ -84,8 +84,11 @@ export function PosShell({ session, children }: { session: ShellSession; childre
   const roleCfg = getRoleColor(session.roleCode);
 
   const branchId = getActiveBranchId(session.branchIds, session.primaryBranchId) ?? "";
-  const { realtimeSummary } = usePosRealtimeSummary(branchId);
-  const { activeCashSessionId, cashSessionProblem } = usePosCashContext(branchId);
+  // Se comparten con la página (la caja) por contexto: una sola petición de cada uno.
+  const summary = usePosRealtimeSummary(branchId);
+  const cashContext = usePosCashContext(branchId);
+  const { realtimeSummary } = summary;
+  const { activeCashSessionId, cashSessionProblem } = cashContext;
 
   /* ── Sidebar state ── */
   const [collapsed, setCollapsed] = useState(true);
@@ -442,7 +445,11 @@ export function PosShell({ session, children }: { session: ShellSession; childre
 
         {/* Page content */}
         <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 lg:p-5">
-          {children}
+          <PosRealtimeSummaryShare.Provider value={summary}>
+            <PosCashContextShare.Provider value={cashContext}>
+              {children}
+            </PosCashContextShare.Provider>
+          </PosRealtimeSummaryShare.Provider>
         </main>
       </div>
     </div>
