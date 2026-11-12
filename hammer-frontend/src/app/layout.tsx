@@ -32,7 +32,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
 
   return (
     <html lang="es" className={inter.variable} suppressHydrationWarning>
-      <body className="min-h-screen" suppressHydrationWarning>
+      {/* dvh, no vh: en la app instalada a pantalla completa Chrome fija 100vh
+          al arrancar con +56 px de una barra que no existe y la caja se desplazaba. */}
+      <body className="min-h-dvh" suppressHydrationWarning>
         {/* Runs before first paint to avoid FOUC on theme reload. Prefers the
             per-user key (hammer-theme-<userId>) over the shared global key —
             on a shared terminal the global key still carries the PREVIOUS
