@@ -32,9 +32,11 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
 
   return (
     <html lang="es" className={inter.variable} suppressHydrationWarning>
-      {/* dvh, no vh: en la app instalada a pantalla completa Chrome fija 100vh
-          al arrancar con +56 px de una barra que no existe y la caja se desplazaba. */}
-      <body className="min-h-dvh" suppressHydrationWarning>
+      {/* Sin min-height en body: en la app instalada a pantalla completa Chrome
+          resuelve vh/dvh en la primera pintura con +56 px de una barra que no
+          existe y no lo recalcula, así que la caja se desplazaba. El fondo del
+          body ya cubre el lienzo y cada shell pone su propio min-h-screen. */}
+      <body suppressHydrationWarning>
         {/* Runs before first paint to avoid FOUC on theme reload. Prefers the
             per-user key (hammer-theme-<userId>) over the shared global key —
             on a shared terminal the global key still carries the PREVIOUS
