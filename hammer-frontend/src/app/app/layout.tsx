@@ -4,6 +4,7 @@ import { useState, useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Toaster } from "react-hot-toast";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
+import { SessionContext } from "@/lib/client/session";
 import { AppShellRouter } from "@/components/layout/app-shell-router";
 import { PosShell } from "@/components/pos/pos-shell";
 import { HammerSplash } from "@/components/layout/hammer-splash";
@@ -81,11 +82,13 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           error: { iconTheme: { primary: "#dc2626", secondary: "#fff" } },
         }}
       />
-      {usePosShell ? (
-        <PosShell session={session}>{children}</PosShell>
-      ) : (
-        <AppShellRouter session={session}>{children}</AppShellRouter>
-      )}
+      <SessionContext.Provider value={session}>
+        {usePosShell ? (
+          <PosShell session={session}>{children}</PosShell>
+        ) : (
+          <AppShellRouter session={session}>{children}</AppShellRouter>
+        )}
+      </SessionContext.Provider>
     </>
   );
 }

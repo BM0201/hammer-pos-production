@@ -7,7 +7,7 @@
  */
 "use client";
 
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
 import type { SessionPayload } from "@/types/auth";
@@ -19,18 +19,32 @@ export type SessionState =
   | { status: "error"; session: null; error: string };
 
 /**
+ * Sesión que el layout de /app ya trajo. Sin esto cada página y cada panel
+ * volvía a pedir /api/auth/session en cascada (3 idas seguidas en la caja,
+ * ~300 ms cada una en la tablet).
+ */
+export const SessionContext = createContext<SessionPayload | null>(null);
+
+/**
  * Hook that fetches the current session and exposes it as React state.
  * Redirects to /login if the session is invalid and `redirectOnUnauth` is true.
+ * Dentro del layout de /app devuelve la sesión del layout sin ir al servidor.
  */
 export function useSession(redirectOnUnauth = false): SessionState {
   const router = useRouter();
+  const provided = useContext(SessionContext);
   const [state, setState] = useState<SessionState>({
     status: "loading",
     session: null,
     error: null,
   });
+  const fromLayout = useMemo<SessionState | null>(
+    () => (provided ? { status: "authenticated", session: provided, error: null } : null),
+    [provided],
+  );
 
   useEffect(() => {
+    if (provided) return;
     let cancelled = false;
     apiFetch("/api/auth/session")
       .then(async (r) => {
@@ -69,7 +83,7 @@ export function useSession(redirectOnUnauth = false): SessionState {
     return () => {
       cancelled = true;
     };
-  }, [redirectOnUnauth, router]);
+  }, [provided, redirectOnUnauth, router]);
 
-  return state;
+  return fromLayout ?? state;
 }
