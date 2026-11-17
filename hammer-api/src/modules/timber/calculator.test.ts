@@ -278,3 +278,12 @@ test("timber trip: modo TOTAL sin costo escrito NO inventa uno con el costPerFoo
   assert.equal(result.totals.woodTripTotalCost, 0);
   assert.equal(result.totals.landedCostPerFoot, 0);
 });
+
+test("aserrado: va aparte de la madera pero entra al costo aterrizado por pie como el flete", () => {
+  const lines: TimberTripLineInput[] = [{ thickness: 1, width: 12, length: 16, pieces: 10 }]; // 160 pies
+  const result = calculateTimberTrip(lines, 0, PRICING, { costPerFootInput: 20, expenses: { freightAmount: 320, sawingAmount: 480 } });
+  assert.equal(result.totals.woodTripTotalCost, 3200, "la madera sola no incluye el aserrado");
+  assert.equal(result.totals.tripExpensesTotal, 800);
+  assert.equal(result.totals.landedCostPerFoot, 25, "(3200 + 320 + 480) / 160");
+  assert.equal(result.lines[0].calculatedCostPerPiece, 400);
+});

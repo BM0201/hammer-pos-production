@@ -35,10 +35,12 @@ function readApi(relFromRepoRoot) {
   return readFileSync(abs, "utf8");
 }
 
-const WORKSPACE = "components/timber/timber-workspace.tsx";
+const MEASURES = "components/timber/timber-measure.ts";
+const CUBICATION = "components/timber/trip-cubication.tsx";
+const LOGIC = "components/timber/trip-logic.ts";
 
 test("Parte A: STANDARD_MEASURES tiene las 54 medidas reales, no las 10 anteriores", () => {
-  const c = read(WORKSPACE);
+  const c = read(MEASURES);
   const matches = c.match(/\{ thickness: \d+, width: \d+, length: \d+, pieces: 0 \}/g) ?? [];
   assert.equal(matches.length, 54, `debe haber 54 medidas, hay ${matches.length}`);
   // Una de las nuevas (no estaba en la lista vieja de 10, todas de 1"):
@@ -47,43 +49,41 @@ test("Parte A: STANDARD_MEASURES tiene las 54 medidas reales, no las 10 anterior
 });
 
 test("Parte B: existe el botón 'Cargar cubicación desde Excel' y acepta solo .xlsx", () => {
-  const c = read(WORKSPACE);
+  const c = read(CUBICATION);
   assert.ok(c.includes("Cargar cubicación desde Excel"));
   assert.ok(c.includes('accept=".xlsx"'), "el input de archivo debe restringirse a .xlsx");
-  assert.ok(c.includes("onCubicationFileSelected(e.target.files?.[0] ?? null)"), "debe disparar el handler de carga al elegir un archivo");
+  assert.ok(c.includes("onFileSelected(e.target.files?.[0] ?? null)"), "debe disparar el handler de carga al elegir un archivo");
 });
 
 test("Parte B.3: el preview se pide al backend, no se calcula en el cliente", () => {
-  const c = read(WORKSPACE);
+  const c = read(CUBICATION);
   assert.ok(c.includes("/api/timber/trips/${tripId}/cubication-import"), "debe llamar al endpoint de preview real");
   assert.ok(c.includes('method: "POST"'));
 });
 
-test("Parte B.4: aplicar el import NO llama a un endpoint de escritura nuevo — edita `lines` local y deja que el PUT de siempre lo guarde", () => {
-  const c = read(WORKSPACE);
-  // applyCubicationImport debe usar setLines (el mismo estado que
-  // updateLinePieces/addMeasure/removeLine ya mutan), no un fetch propio.
-  const fnMatch = c.match(/function applyCubicationImport\([\s\S]{0,600}?\n  \}/);
-  assert.ok(fnMatch, "debe existir applyCubicationImport");
-  assert.ok(fnMatch[0].includes("setLines"), "debe mutar el estado local `lines`, no escribir directo a la API");
-  assert.ok(!fnMatch[0].includes("apiFetch"), "no debe llamar a la API — el autosave existente se encarga de persistir");
+test("Parte B.4: aplicar el import NO llama a un endpoint de escritura nuevo — edita `lines` local y el PUT de siempre lo guarda", () => {
+  const c = read(CUBICATION);
+  const fnMatch = c.match(/function applyImport\(\)[\s\S]{0,500}?\n  \}/);
+  assert.ok(fnMatch, "debe existir applyImport");
+  assert.ok(fnMatch[0].includes("setLines((prev) => mergeCubicationImport(prev, recognized))"), "debe mutar el estado local `lines`");
+  assert.ok(!fnMatch[0].includes("timberRequest") && !fnMatch[0].includes("apiFetch"), "no debe llamar a la API — el autosave persiste");
 });
 
 test("Parte B.4: medida que ya existe en el viaje se REEMPLAZA (no se suma) — el usuario recuenta de cero", () => {
-  const c = read(WORKSPACE);
-  const fnMatch = c.match(/function applyCubicationImport\([\s\S]{0,600}?\n  \}/);
-  assert.ok(fnMatch, "debe existir applyCubicationImport");
-  assert.match(fnMatch[0], /merged\[idx\]\s*=\s*\{\s*\.\.\.merged\[idx\],\s*pieces:\s*item\.pieces\s*\}/, "debe reemplazar pieces, no sumarlo");
+  const c = read(LOGIC);
+  const fnMatch = c.match(/export function mergeCubicationImport\([\s\S]{0,600}?\n\}/);
+  assert.ok(fnMatch, "debe existir mergeCubicationImport");
+  assert.match(fnMatch[0], /merged\[idx\]\s*=\s*\{\s*\.\.\.merged\[idx\],\s*pieces:\s*item\.pieces\s*\}/,"debe reemplazar pieces, no sumarlo");
 });
 
 test("backend: readExcelBuffer/readExcelBase64 aceptan sheetName opcional para pedir la hoja 'Simple' por nombre", () => {
-  const service = readApi("hammer-api/src/modules/timber/service.ts");
+  const service = readApi("hammer-api/src/modules/timber/cubication-import.ts");
   assert.ok(service.includes('readExcelBase64(fileBase64, "Simple")'), "debe pedir la hoja Simple, no la primera hoja a ciegas");
   const reader = readApi("hammer-api/src/modules/import-excel/excel-reader.ts");
   assert.ok(reader.includes("sheetName?: string"), "readExcelBuffer debe seguir aceptando el caso sin sheetName (compatibilidad con los llamadores existentes)");
 });
 
 test("backend: la columna PIES del archivo nunca se usa — el preview recalcula con calculateBoardFeet", () => {
-  const service = readApi("hammer-api/src/modules/timber/service.ts");
+  const service = readApi("hammer-api/src/modules/timber/cubication-import.ts");
   assert.ok(service.includes("calculateBoardFeet({ thickness, width, length })"), "debe reusar la fórmula real, no una copia ni el valor del archivo");
 });

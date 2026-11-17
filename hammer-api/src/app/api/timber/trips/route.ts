@@ -4,7 +4,7 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { assertMaster } from "@/modules/security/rbac-helpers";
 import { createTimberTrip, listTimberTrips } from "@/modules/timber/service";
 import { createTimberTripSchema } from "@/modules/timber/validators";
-import { toHttpErrorResponse } from "@/lib/http";
+import { timberErrorResponse, timberValidationFail } from "@/modules/timber/errors";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, created, fail } from "@/lib/api/response";
 
@@ -32,8 +32,7 @@ export async function GET(req: NextRequest) {
     const result = await listTimberTrips({ status, destinationBranchId, search, page, limit });
     return ok(result);
   } catch (err: unknown) {
-    console.error("[TIMBER_TRIPS_GET]", err);
-    return toHttpErrorResponse(err);
+    return timberErrorResponse(err);
   }
 }
 
@@ -44,16 +43,12 @@ export async function POST(req: NextRequest) {
     await requireCsrf(req, session);
     assertMaster(session);
 
-    const body = await req.json();
-    const parsed = createTimberTripSchema.safeParse(body);
-    if (!parsed.success) {
-      return fail("ERROR", "Validación fallida", 400);
-    }
+    const parsed = createTimberTripSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) return timberValidationFail(parsed.error.issues);
 
     const result = await createTimberTrip(parsed.data, session.userId);
     return created(result);
   } catch (err: unknown) {
-    console.error("[TIMBER_TRIPS_POST]", err);
-    return toHttpErrorResponse(err);
+    return timberErrorResponse(err);
   }
 }

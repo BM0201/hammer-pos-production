@@ -84,7 +84,7 @@ function mockTripDetail(trip: MockTrip) {
     marginPercent: calc.totals.globalMarginPct,
     pricePolicy: trip.body.pricePolicy ?? "RECALC_FROM_PRICE_PER_INCH",
     invoicedFeet: trip.body.invoicedFeet ?? null,
-    freightAmount: trip.body.expenses?.freightAmount ?? 0, fuelAmount: trip.body.expenses?.fuelAmount ?? 0, perDiemAmount: trip.body.expenses?.perDiemAmount ?? 0, permitsAmount: trip.body.expenses?.permitsAmount ?? 0, otherExpensesAmount: trip.body.expenses?.otherExpensesAmount ?? 0,
+    freightAmount: trip.body.expenses?.freightAmount ?? 0, fuelAmount: trip.body.expenses?.fuelAmount ?? 0, perDiemAmount: trip.body.expenses?.perDiemAmount ?? 0, permitsAmount: trip.body.expenses?.permitsAmount ?? 0, otherExpensesAmount: trip.body.expenses?.otherExpensesAmount ?? 0, sawingAmount: trip.body.expenses?.sawingAmount ?? 0,
     supplierName: trip.body.supplierName ?? null,
     origin: trip.body.origin ?? null,
     reconciliation: calculateReconciliation(calc.totals.totalFeet, trip.body.invoicedFeet ?? null, 0.01),
@@ -1299,6 +1299,11 @@ const server = http.createServer(async (req, res) => {
     const body = await readJson(req);
     if (body.action === "cancel") mockTrip.status = "CANCELLED";
     if (body.action === "confirm") {
+      // Mismas reglas que confirmTimberTrip, para ver los mensajes en la pantalla.
+      const detail = mockTripDetail(mockTrip);
+      if (mockTrip.status !== "DRAFT") return send(res, 409, { ok: false, error: { code: "TRIP_ALREADY_CONFIRMED", message: "Este viaje ya se ingresó al inventario." } });
+      if (!(detail.woodTripTotalCost > 0)) return send(res, 400, { ok: false, error: { code: "TRIP_REQUIRES_COST", message: "Falta el costo de la madera (precio por pie o total del viaje)." } });
+      if (detail.reconciliation.status === "REVIEW" && body.acknowledgeReconciliation !== true) return send(res, 400, { ok: false, error: { code: "RECONCILIATION_REQUIRES_ACK", message: "Los pies no cuadran con la factura del aserradero: marcá que lo revisaste para continuar." } });
       mockTrip.tripCode = mockNextTripCode();
       mockTrip.status = "TRANSFERRED";
     }

@@ -1365,7 +1365,9 @@ model TimberTrip {
   perDiemAmount       Decimal @default(0)
   permitsAmount       Decimal @default(0)
   otherExpensesAmount Decimal @default(0)
-  /// Computed: suma de los 5 gastos de arriba
+  /// Aserrado: aparte de la compra de la madera (antes iba sumado en el total del viaje o en Otros).
+  sawingAmount        Decimal @default(0)
+  /// Computed: suma de los 6 gastos de arriba
   tripExpensesTotal   Decimal @default(0)
   /// Computed: (maderaTotal + tripExpensesTotal) / totalFeet — el costo real que se usa
   /// para costear líneas, WAC de inventario y márgenes (reemplaza a computedCostPerFoot).

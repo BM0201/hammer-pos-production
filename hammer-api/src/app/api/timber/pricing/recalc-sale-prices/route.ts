@@ -3,7 +3,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { assertFinanceAccess } from "@/modules/security/rbac-helpers";
 import { previewTimberSalePriceRecalc, applyTimberSalePriceRecalc } from "@/modules/timber/service";
-import { toHttpErrorResponse } from "@/lib/http";
+import { timberErrorResponse } from "@/modules/timber/errors";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, fail } from "@/lib/api/response";
 
@@ -20,11 +20,7 @@ export async function GET(req: NextRequest) {
     const rows = await previewTimberSalePriceRecalc(branchId);
     return ok(rows);
   } catch (err: unknown) {
-    if (err instanceof Error && err.message === "BRANCH_NOT_FOUND") {
-      return fail("NOT_FOUND", err.message, 404);
-    }
-    console.error("[TIMBER_RECALC_SALE_PRICES_GET]", err);
-    return toHttpErrorResponse(err);
+    return timberErrorResponse(err);
   }
 }
 
@@ -39,15 +35,11 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json().catch(() => ({}));
     const branchId = typeof body?.branchId === "string" ? body.branchId : "";
-    if (!branchId) return fail("ERROR", "branchId es requerido", 400);
+    if (!branchId) return fail("VALIDATION_ERROR", "Elegí una sucursal.", 400);
 
     const result = await applyTimberSalePriceRecalc(branchId, session.userId);
     return ok(result);
   } catch (err: unknown) {
-    if (err instanceof Error && err.message === "BRANCH_NOT_FOUND") {
-      return fail("NOT_FOUND", err.message, 404);
-    }
-    console.error("[TIMBER_RECALC_SALE_PRICES_POST]", err);
-    return toHttpErrorResponse(err);
+    return timberErrorResponse(err);
   }
 }

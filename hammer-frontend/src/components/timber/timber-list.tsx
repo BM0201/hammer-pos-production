@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { ConfirmDialog } from "@/components/ui/dialog";
 
 type TimberItem = {
   id: string;
@@ -75,6 +76,7 @@ export function TimberList() {
   const [typeFilter, setTypeFilter] = useState("");
   const [page, setPage] = useState(1);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [askDelete, setAskDelete] = useState<TimberItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [branches, setBranches] = useState<Array<{ id: string; code: string; name: string }>>([]);
   // null = todavía sin resolver. Precio y stock son por sucursal: el precio general del catálogo es un relleno (C$1).
@@ -82,8 +84,8 @@ export function TimberList() {
 
   useEffect(() => {
     Promise.all([
-      fetch("/api/branches").then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/master/inventory/config/primary-branch").then((r) => (r.ok ? r.json() : null)),
+      apiFetch("/api/branches").then((r) => (r.ok ? r.json() : null)),
+      apiFetch("/api/master/inventory/config/primary-branch").then((r) => (r.ok ? r.json() : null)),
     ])
       .then(([rawBranches, rawPrimary]) => {
         const list = rawBranches ? unwrapApiData(rawBranches) ?? [] : [];
@@ -105,7 +107,7 @@ export function TimberList() {
       params.set("page", String(page));
       params.set("limit", "15");
 
-      const res = await fetch(`/api/timber?${params.toString()}`);
+      const res = await apiFetch(`/api/timber?${params.toString()}`);
       if (res.ok) {
         const json = unwrapApiData(await res.json());
         setData(json);
@@ -125,7 +127,6 @@ export function TimberList() {
   }, [fetchData]);
 
   const handleDelete = useCallback(async (id: string) => {
-    if (!confirm("¿Está seguro de eliminar este producto de madera?")) return;
     setDeletingId(id);
     setError(null);
     try {
@@ -140,6 +141,7 @@ export function TimberList() {
       setError("Error de conexión al eliminar");
     } finally {
       setDeletingId(null);
+      setAskDelete(null);
     }
   }, [fetchData]);
 
@@ -161,8 +163,19 @@ export function TimberList() {
       {/* Error notification */}
       {error && (
         <div className="hm-alert hm-alert-danger">
-          <span></span> {error}
+          {error}
         </div>
+      )}
+
+      {askDelete && (
+        <ConfirmDialog
+          title={`¿Eliminar ${askDelete.product.name}?`}
+          message="La medida sale del catálogo y del POS. Solo se puede si nunca tuvo movimientos ni viajes."
+          confirmLabel="Eliminar"
+          busy={deletingId === askDelete.id}
+          onConfirm={() => void handleDelete(askDelete.id)}
+          onCancel={() => setAskDelete(null)}
+        />
       )}
 
       {/* Toolbar */}
@@ -230,6 +243,7 @@ export function TimberList() {
           </div>
         ) : (
           <>
+            <div className="overflow-x-auto">
             <Table>
               <THead>
                 <TR>
@@ -308,7 +322,7 @@ export function TimberList() {
                           size="sm"
                           className="text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)]"
                           title="Eliminar"
-                          onClick={() => handleDelete(item.id)}
+                          onClick={() => setAskDelete(item)}
                           disabled={!canEditTimber || deletingId === item.id}
                         >
                           {deletingId === item.id ? (
@@ -323,6 +337,7 @@ export function TimberList() {
                 );})}
               </TBody>
             </Table>
+            </div>
 
             {/* Pagination */}
             {data.totalPages > 1 && (

@@ -58,6 +58,7 @@ const timberTripExpensesSchema = z.object({
   perDiemAmount: z.number().nonnegative("Los viáticos deben ser ≥ 0").max(10000000).optional(),
   permitsAmount: z.number().nonnegative("Los permisos deben ser ≥ 0").max(10000000).optional(),
   otherExpensesAmount: z.number().nonnegative("Otros gastos deben ser ≥ 0").max(10000000).optional(),
+  sawingAmount: z.number().nonnegative("El aserrado debe ser ≥ 0").max(10000000).optional(),
 });
 
 const timberPricePolicySchema = z.enum(["RECALC_FROM_PRICE_PER_INCH", "COST_ONLY", "TARGET_MARGIN"]);

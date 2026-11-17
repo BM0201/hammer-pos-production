@@ -141,6 +141,8 @@ interface TimberTripExpenses {
   perDiemAmount?: number;
   permitsAmount?: number;
   otherExpensesAmount?: number;
+  /** Aserrado, aparte de la compra de la madera. */
+  sawingAmount?: number;
 }
 
 type ReconciliationStatus = "OK" | "REVIEW" | "NOT_APPLICABLE";
@@ -405,7 +407,8 @@ export function calculateTimberTrip(
       (expenses.fuelAmount ?? 0) +
       (expenses.perDiemAmount ?? 0) +
       (expenses.permitsAmount ?? 0) +
-      (expenses.otherExpensesAmount ?? 0),
+      (expenses.otherExpensesAmount ?? 0) +
+      (expenses.sawingAmount ?? 0),
     MONEY_DECIMALS,
   );
   const landedTotal = roundTo(maderaTotal + tripExpensesTotal, MONEY_DECIMALS);
@@ -573,3 +576,13 @@ export const DEFAULT_PRICING: TimberPricing = {
   pricePerInchCuadro: DEFAULT_PRICE_PER_INCH_CUADRO,
 };
 
+
+/** Dinero a 2 decimales, sin el error de 1.005 → 1.00. */
+export function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+/** Pies tablares a 4 decimales. */
+export function roundFeet(value: number): number {
+  return Math.round((value + Number.EPSILON) * 10000) / 10000;
+}

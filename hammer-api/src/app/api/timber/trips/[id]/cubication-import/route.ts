@@ -3,7 +3,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { assertMaster } from "@/modules/security/rbac-helpers";
 import { previewTimberCubicationImport } from "@/modules/timber/service";
-import { toHttpErrorResponse } from "@/lib/http";
+import { timberErrorResponse } from "@/modules/timber/errors";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, fail } from "@/lib/api/response";
 
@@ -30,23 +30,12 @@ export async function POST(
     const body = await req.json().catch(() => null);
     const fileBase64 = typeof body?.fileBase64 === "string" ? body.fileBase64 : null;
     if (!fileBase64) {
-      return fail("VALIDATION_ERROR", "fileBase64 es obligatorio.", 400);
+      return fail("VALIDATION_ERROR", "Elegí un archivo .xlsx de cubicación.", 400);
     }
 
     const preview = await previewTimberCubicationImport(id, fileBase64);
     return ok(preview);
   } catch (err: unknown) {
-    if (err instanceof Error) {
-      if (err.message === "TIMBER_TRIP_NOT_FOUND") {
-        return fail("NOT_FOUND", err.message, 404);
-      }
-      if (err.message === "EMPTY_CUBICATION_FILE") {
-        return fail("VALIDATION_ERROR", "El archivo está vacío o no se pudo leer.", 400);
-      }
-      if (err.message === "CUBICATION_COLUMNS_NOT_FOUND") {
-        return fail("VALIDATION_ERROR", "No se encontraron las columnas MEDIDA y PIEZAS en la hoja \"Simple\" (o la primera hoja) del archivo.", 400);
-      }
-    }
-    return toHttpErrorResponse(err);
+    return timberErrorResponse(err);
   }
 }
