@@ -1,5 +1,9 @@
 # Auditoría Hammer POS — 2026-07-22
 
+> **Estado al 2026-11-17 — este documento está desactualizado.** Verificado contra el código:
+> - **Cerrados:** C1 (borrado masivo bloqueado si existe un pago POSTED), C2 (aprobar ejecuta la acción real), C4 (sync offline con CSRF + RBAC + política de descuento), C5 (`CREDIT` fuera del flujo de cajero), C6 (gastos con vigencia), C7 (reportes con día Managua), C8 (campaña validada con la autoridad del Master — y desde 983e712 solo con precio de catálogo), C9 (cierre en `$transaction`), ALTO de Aprobaciones (`resolveRequestTx` con `FOR UPDATE` + CAS), MEDIO XYZ por día UTC (983e712).
+> - **No re-verificados:** C3 y el resto de los ALTO/MEDIO/BAJO. Antes de trabajar uno, confirmar que sigue abierto.
+
 ## Resumen ejecutivo
 
 El sistema tiene una base técnica sólida en las partes que ya recibieron trabajo dedicado (día operativo, sesión/roles, ejecución de decisiones del Brain), pero la auditoría de los 12 módulos restantes encontró **9 hallazgos críticos** — la mayoría patrones nuevos, no variaciones de bugs ya conocidos. Los tres más graves:

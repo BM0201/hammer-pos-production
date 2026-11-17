@@ -3,6 +3,7 @@ import { fail, ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { getCurrentSession } from "@/modules/auth/service";
+import { requireCsrf } from "@/modules/security/csrf";
 import { isMaster, hasCapabilityInAnyAssignedBranch } from "@/modules/rbac/guards";
 import { CAPABILITIES } from "@/modules/rbac/policies";
 import { updateExpenseConcept } from "@/modules/finance/expense-concepts";
@@ -18,6 +19,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     if (!isMaster(session) && !hasCapabilityInAnyAssignedBranch(session!, CAPABILITIES.FINANCE_MANAGE_EXPENSES)) {
       return fail("FORBIDDEN", "No tienes permiso para administrar gastos.", 403);
     }
