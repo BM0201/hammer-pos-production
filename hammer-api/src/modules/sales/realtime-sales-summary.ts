@@ -23,8 +23,8 @@ function fixedDateParts(date: Date) {
 
 /**
  * YMD (en calendario Managua) de un INSTANTE real — ej. "¿a qué día local
- * pertenece este `new Date()`?". Exportada solo para el test que documenta la
- * diferencia con businessDateToYmdUTC.
+ * pertenece este `new Date()`?". Úsala para agrupar ventas por día (createdAt);
+ * `toISOString().slice(0, 10)` da el día UTC y corre las ventas de la noche al día siguiente.
  */
 export function businessDateYmd(date: Date) {
   const { year, month, day } = fixedDateParts(date);

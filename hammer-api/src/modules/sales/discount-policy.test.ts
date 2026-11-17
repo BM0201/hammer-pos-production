@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
-import { computeDiscountAgainstCatalogPrice, validateDiscountForRole } from "@/modules/sales/discount-policy";
+import { computeDiscountAgainstCatalogPrice, discountAuthorityRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
 import { resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pricing";
 
 function decimal(value: number) {
@@ -235,4 +235,32 @@ test("Fase 2 (síntoma real): miembro de fusión con costo inflado por encima de
     overrideReason: "Sobregiro autorizado mientras se corrige el costo base del canónico.",
   });
   assert.equal(forMasterWithReason.allowed, true);
+});
+
+/**
+ * Auditoría 2026-11-17, hallazgo 1: un cajero mandaba unitPrice=10 en un
+ * producto de C$100 (costo 80) con campaña del 5%; la línea se validaba como
+ * Master y pasaba a C$9.50. Con precio manual la autoridad vuelve a ser el cajero.
+ */
+test("campaña + precio manual: el cajero no hereda la autoridad del Master", () => {
+  assert.equal(discountAuthorityRole({ actorRole: "CAJA", discountFromActiveCampaign: true, manualUnitPrice: false }), "MASTER");
+  assert.equal(discountAuthorityRole({ actorRole: "CAJA", discountFromActiveCampaign: false, manualUnitPrice: false }), "CAJA");
+
+  const role = discountAuthorityRole({ actorRole: "CAJA", discountFromActiveCampaign: true, manualUnitPrice: true });
+  assert.equal(role, "CAJA");
+  const { netUnitPriceAfterDiscount, discountPercent } = computeDiscountAgainstCatalogPrice({
+    catalogPrice: decimal(100),
+    unitPrice: decimal(10),
+    discountAmount: decimal(0.5),
+    quantity: decimal(1),
+  });
+  const result = validateDiscountForRole({
+    role,
+    discountPercent,
+    effectiveCost: decimal(80),
+    netUnitPriceAfterDiscount,
+    overrideReason: "Descuento aplicado por campaña activa (creada por Master).",
+  });
+  assert.equal(result.allowed, false);
+  assert.equal(result.code, "DISCOUNT_LIMIT_EXCEEDED");
 });

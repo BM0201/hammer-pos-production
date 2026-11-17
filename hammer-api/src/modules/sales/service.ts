@@ -10,7 +10,7 @@ import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "
 import { refreshOperationalDaySummaryTx, resolveOperationalDayForOperationTx } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
-import { computeDiscountAgainstCatalogPrice, getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
+import { computeDiscountAgainstCatalogPrice, discountAuthorityRole, getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
@@ -292,7 +292,11 @@ export async function addSaleOrderLine(input: {
     });
     // Descuento de campaña activa -> la autoridad es quien creó/activó la
     // campaña (siempre Master, ver createDiscount), no el rol de quien vende.
-    const discountPolicyRole = input.discountFromActiveCampaign ? "MASTER" : input.actorRole;
+    const discountPolicyRole = discountAuthorityRole({
+      actorRole: input.actorRole,
+      discountFromActiveCampaign: input.discountFromActiveCampaign,
+      manualUnitPrice: input.unitPrice !== undefined,
+    });
     const policy = validateDiscountForRole({
       role: discountPolicyRole,
       discountPercent,

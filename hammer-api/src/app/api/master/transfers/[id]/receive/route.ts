@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { receiveTransfer } from "@/modules/transfers/service";
@@ -27,10 +28,11 @@ export async function POST(
     const result = await receiveTransfer(id, session.userId, await readOptionalJson(request));
 
     // Reposición v2 (Fase 1.5): refrescar snapshot de señales de la sucursal destino — best-effort.
-    (async () => {
+    // after(): en Vercel la función se congela al responder; sin esto la recarga no terminaba.
+    after(async () => {
       const transfer = await prisma.transfer.findUnique({ where: { id }, select: { toBranchId: true } });
       if (transfer) await refreshReplenishmentSignalSnapshot(transfer.toBranchId);
-    })().catch(() => {});
+    });
 
     return ok(result);
   } catch (error) {

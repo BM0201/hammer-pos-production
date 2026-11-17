@@ -66,6 +66,20 @@ export function getMaxDiscountPercentForRole(role: string | null | undefined): n
   }
 }
 
+/**
+ * Quién responde por el descuento de la línea. Una campaña activa la creó un
+ * Master, así que su descuento se valida como Master — pero solo si el precio
+ * es el de catálogo: con un unitPrice manual, el resto de la rebaja la puso
+ * quien vende y se valida con su rol (si no, un cajero vendía a cualquier precio).
+ */
+export function discountAuthorityRole(input: {
+  actorRole: string | null | undefined;
+  discountFromActiveCampaign?: boolean;
+  manualUnitPrice: boolean;
+}): string | null | undefined {
+  return input.discountFromActiveCampaign && !input.manualUnitPrice ? "MASTER" : input.actorRole;
+}
+
 export function canOverrideBelowCost(role: string | null | undefined): boolean {
   const normalized = (role ?? "").toUpperCase();
   return normalized === "MASTER" || normalized === "OWNER" || normalized === "SYSTEM_ADMIN" || normalized === "ADMIN" || normalized === "BRANCH_ADMIN";

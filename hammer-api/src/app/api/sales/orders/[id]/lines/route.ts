@@ -68,7 +68,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       const unitPrice = parsed.data.unitPrice ?? Number(pricing.effectivePrice);
       discountAmount = unitPrice * parsed.data.quantity * (parsed.data.discountPercent / 100);
     }
-    if (discountAmount === 0) {
+    // Con precio manual no se aplica campaña: esa línea la responde quien vende.
+    if (discountAmount === 0 && parsed.data.unitPrice === undefined) {
       try {
         const product = await prisma.product.findUnique({
           where: { id: parsed.data.productId },

@@ -6,31 +6,30 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import type { DocumentType } from "@prisma/client";
+import { Prisma, type DocumentType } from "@prisma/client";
+import { businessDateFromNow } from "@/modules/operations/business-date";
 import { generateDeliveryOrderHtml } from "./generators/delivery-order";
 import { generateManualInvoiceReceiptHtml } from "./generators/manual-invoice-receipt";
 import type { DocumentOrderData, PrintSettingsData, DocumentGenerationOptions } from "./types";
 
 // ─── Sequence generation for delivery order numbers ──────────────────────────
 
+/** OE-<sucursal>-<YYYYMMDD de Managua>- — el servidor corre en UTC; con su reloj las órdenes de la noche salían con la fecha de mañana. */
+export function deliveryOrderPrefix(branchCode: string, now = new Date()): string {
+  return `OE-${branchCode}-${businessDateFromNow(now).toISOString().slice(0, 10).replaceAll("-", "")}-`;
+}
+
 async function generateDeliveryOrderNumber(branchCode: string): Promise<string> {
-  const prefix = `OE-${branchCode}`;
-  const today = new Date();
-  const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
-
-  // Contar órdenes de entrega del día para la sucursal
-  const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
-
-  const count = await prisma.saleOrder.count({
-    where: {
-      deliveryOrderNumber: { startsWith: `${prefix}-${dateStr}` },
-      deliveryOrderIssuedAt: { gte: startOfDay, lt: endOfDay },
-    },
+  const prefix = deliveryOrderPrefix(branchCode);
+  // Máximo por prefijo (no conteo por ventana): el prefijo ya lleva el día, y así
+  // continúa sobre números viejos que quedaron con la fecha UTC.
+  const last = await prisma.saleOrder.findFirst({
+    where: { deliveryOrderNumber: { startsWith: prefix } },
+    orderBy: { deliveryOrderNumber: "desc" },
+    select: { deliveryOrderNumber: true },
   });
-
-  const seq = String(count + 1).padStart(4, "0");
-  return `${prefix}-${dateStr}-${seq}`;
+  const lastSeq = last?.deliveryOrderNumber ? parseInt(last.deliveryOrderNumber.slice(prefix.length), 10) : 0;
+  return `${prefix}${String((Number.isNaN(lastSeq) ? 0 : lastSeq) + 1).padStart(4, "0")}`;
 }
 
 // ─── Build document data from order ─────────────────────────────────────────
@@ -127,17 +126,21 @@ export async function issueDeliveryOrder(orderId: string): Promise<string> {
   // Si ya tiene número, retornarlo
   if (order.deliveryOrderNumber) return order.deliveryOrderNumber;
 
-  const doNumber = await generateDeliveryOrderNumber(order.branch.code);
-
-  await prisma.saleOrder.update({
-    where: { id: orderId },
-    data: {
-      deliveryOrderNumber: doNumber,
-      deliveryOrderIssuedAt: new Date(),
-    },
-  });
-
-  return doNumber;
+  // Dos cajas de la misma sucursal pueden sacar el mismo número a la vez: el
+  // índice único rechaza al segundo (P2002) y reintenta con el siguiente.
+  for (let attempt = 1; ; attempt++) {
+    const doNumber = await generateDeliveryOrderNumber(order.branch.code);
+    try {
+      await prisma.saleOrder.update({
+        where: { id: orderId },
+        data: { deliveryOrderNumber: doNumber, deliveryOrderIssuedAt: new Date() },
+      });
+      return doNumber;
+    } catch (error) {
+      const isNumberTaken = error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+      if (!isNumberTaken || attempt >= 3) throw error;
+    }
+  }
 }
 
 // ─── Register manual invoice ────────────────────────────────────────────────

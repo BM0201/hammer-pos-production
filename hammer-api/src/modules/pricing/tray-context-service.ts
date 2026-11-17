@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { businessDateYmd } from "@/modules/sales/realtime-sales-summary";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { describeAbcXyzClass, type CombinedAbcXyzClass } from "@/modules/pricing/commercial-intelligence";
@@ -70,7 +71,7 @@ export async function computeRealizedMarginBatch(
     bucket.weightedMarginSum = bucket.weightedMarginSum.add(marginPctLine.mul(qty));
     bucket.qtySum = bucket.qtySum.add(qty);
     bucket.lineCount += 1;
-    bucket.days.add(line.saleOrder.createdAt.toISOString().slice(0, 10));
+    bucket.days.add(businessDateYmd(line.saleOrder.createdAt));
     byKey.set(key, bucket);
   }
 

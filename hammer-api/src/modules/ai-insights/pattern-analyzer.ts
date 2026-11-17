@@ -15,6 +15,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
+import { businessDateYmd } from "@/modules/sales/realtime-sales-summary";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import {
   mean,
@@ -291,7 +292,7 @@ async function analyzeDemandTrends(
     if (!productDaily.has(pid)) {
       productDaily.set(pid, { name: line.product.name, dailyMap: new Map() });
     }
-    const dk = line.saleOrder.createdAt.toISOString().slice(0, 10);
+    const dk = businessDateYmd(line.saleOrder.createdAt);
     const entry = productDaily.get(pid)!;
     entry.dailyMap.set(dk, (entry.dailyMap.get(dk) ?? 0) + Number(line.quantity));
   }
@@ -466,7 +467,7 @@ export async function generateRecommendations(
     // Daily totals
     const dailyMap = new Map<string, number>();
     for (const o of orders) {
-      const dk = o.createdAt.toISOString().slice(0, 10);
+      const dk = businessDateYmd(o.createdAt);
       dailyMap.set(dk, (dailyMap.get(dk) ?? 0) + Number(o.grandTotal));
     }
     const sortedDays = [...dailyMap.keys()].sort();

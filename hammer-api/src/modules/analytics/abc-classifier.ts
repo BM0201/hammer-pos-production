@@ -16,6 +16,7 @@
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { businessDateYmd } from "@/modules/sales/realtime-sales-summary";
 import { resolveAbcXyzClassification } from "@/modules/analytics/abc-xyz-classification";
 import { getProductStockConversionsBatch } from "@/modules/inventory/unit-conversion";
 
@@ -154,7 +155,7 @@ export async function calculateXYZClassification(year: number, month: number) {
   // Group by product and day
   const productDailySales = new Map<string, Map<string, number>>();
   for (const m of movements) {
-    const dateKey = m.createdAt.toISOString().slice(0, 10);
+    const dateKey = businessDateYmd(m.createdAt);
     if (!productDailySales.has(m.productId)) productDailySales.set(m.productId, new Map());
     const daily = productDailySales.get(m.productId)!;
     daily.set(dateKey, (daily.get(dateKey) ?? 0) + Number(m.quantity));
@@ -403,7 +404,7 @@ export async function generateProductAnalytics(year: number, month: number) {
     });
     const dailyMap = new Map<string, number>();
     for (const m of movements) {
-      const dk = m.createdAt.toISOString().slice(0, 10);
+      const dk = businessDateYmd(m.createdAt);
       dailyMap.set(dk, (dailyMap.get(dk) ?? 0) + Number(m.quantity));
     }
     const values = Array.from(dailyMap.values());
