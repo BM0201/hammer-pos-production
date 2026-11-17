@@ -49,6 +49,7 @@ import { checkOutlier, computeCategoryStats } from "../src/modules/finance/expen
 import { calculateReconciliation, calculateTimber, calculateTimberTrip, DEFAULT_CLASSIFICATION_CONFIG, DEFAULT_PRICING } from "../src/modules/timber/calculator";
 import { buildCatalogExportWorkbookFromRows } from "../src/modules/catalog-inventory/export-service";
 import { calculatePricingSuggestion } from "../src/modules/pricing/calculator";
+import { branchPriceSpread } from "../src/modules/pricing/branch-comparison-service";
 
 const PORT = Number(process.env.PORT) || 4000;
 const SESSION_COOKIE = "__Host-hammer_session=dev-preview; Path=/; Secure; HttpOnly; SameSite=Lax";
@@ -647,6 +648,20 @@ const server = http.createServer(async (req, res) => {
       branchCost: null, weightedAverageCost: null, effectiveCost: 59, costSource: "NONE", categoryId: p.categoryId, categoryName: "Hierro",
       categoryPolicy: { targetMarginPercent: 30, minProfitAmount: 5, monthlyExpenseAllocation: 0, estimatedMonthlyUnits: 100, isVirtualDefault: true },
     });
+  }
+  if (path === "/api/pricing/branch-comparison" && method === "GET") {
+    // Gastos/unidades distintos por sucursal para ver la comparación; la fórmula es la real.
+    const q = url.searchParams;
+    const productId = q.get("productId") ?? "";
+    const standard = mockStandardPrices.get(productId) ?? 100;
+    const perBranch: Record<string, { expenses: number; units: number; margin: number }> = { "br-central": { expenses: 46000, units: 1000, margin: 30 }, "br-demo": { expenses: 12000, units: 400, margin: 30 } };
+    const rows = branches.map((b) => {
+      const cfg = perBranch[b.id] ?? { expenses: 0, units: 1000, margin: 30 };
+      const r = calculatePricingSuggestion({ baseCost: Number(q.get("baseCost")), taxPercent: Number(q.get("taxPercent") ?? 0), includeTaxInCost: q.get("includeTaxInCost") === "true", monthlyOperatingExpenses: cfg.expenses, estimatedMonthlyUnits: cfg.units, expenseAllocationScope: "BRANCH", branchMonthlyUnits: cfg.units, marginPercent: cfg.margin, roundingRule: (q.get("roundingRule") ?? "NEAREST_1") as Parameters<typeof calculatePricingSuggestion>[0]["roundingRule"] });
+      const currentPrice = mockBranchPrices.get(`${productId}:${b.id}`)?.price ?? standard;
+      return { branchId: b.id, branchName: b.name, configExists: b.id in perBranch, monthlyExpenses: r.monthlyOperatingExpenses, estimatedMonthlyUnits: cfg.units, operatingExpensePerUnit: r.operatingExpensePerUnit, totalInternalCost: r.totalInternalCost, marginPercent: r.marginPercent, suggestedPrice: r.suggestedPrice, currentPrice, diffPercent: Math.round(((currentPrice - r.suggestedPrice) / r.suggestedPrice) * 1000) / 10 };
+    });
+    return ok(res, { rows, spread: branchPriceSpread(rows.map((r) => r.suggestedPrice)) });
   }
   const setPriceMatch = path.match(/^\/api\/master\/pricing\/product\/([^/]+)\/branches\/([^/]+)\/set-price$/);
   if (setPriceMatch && method === "POST") {

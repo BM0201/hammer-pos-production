@@ -18,6 +18,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { ProductCombobox, type ComboboxProduct } from "@/components/catalog-inventory/product-combobox";
+import { BranchPriceComparison } from "@/components/pricing/branch-price-comparison";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -1140,6 +1141,17 @@ export function PricingCalculatorPanel({
           </div>
         );
       })()}
+
+      {productContext && Number(calcCost) > 0 && (
+        <BranchPriceComparison
+          productId={productContext.productId}
+          baseCost={Number(calcCost)}
+          taxPercent={Number(ivaPercent) || 0}
+          includeTaxInCost={includeTaxInCost}
+          roundingRule={advancedCalc.roundingRule}
+          onApplied={onSaved}
+        />
+      )}
 
       {/* §2.3 — previsualización antes de confirmar: aplicar precios en lote es irreversible en la práctica */}
       {applyPreview && (
