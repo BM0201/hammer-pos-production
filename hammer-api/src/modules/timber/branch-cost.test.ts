@@ -24,6 +24,7 @@ const row = (overrides: Partial<TimberBranchCostRow> = {}): TimberBranchCostRow 
   currentCost: 1150,
   newCost: 784,
   price: 1360,
+  placeholderPrice: null,
   ...overrides,
 });
 
@@ -58,6 +59,13 @@ test("totales: pies y valor de la sucursal, y las medidas que quedan bajo costo"
   assert.equal(totals.currentValue, 11500);
   assert.equal(totals.newValue, 7840 + 110 * 228.67);
   assert.equal(totals.belowCost, 1);
+});
+
+test("precio de relleno (C$1): no cuenta como bajo costo ni como venta — se cuenta aparte como sin precio", () => {
+  const totals = summarizeTimberBranchCost([row(), row({ productId: "cuarton-335", stock: 4, price: null, placeholderPrice: 1, newCost: 514.5 })]);
+  assert.equal(totals.belowCost, 0);
+  assert.equal(totals.withoutPrice, 1);
+  assert.equal(totals.saleValue, 10 * 1360);
 });
 
 test("sin costo escrito todavía: mide contra el costo vigente", () => {

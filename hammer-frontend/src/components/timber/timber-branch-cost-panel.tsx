@@ -22,12 +22,14 @@ type BranchCostRow = {
   totalFeet: number;
   currentCost: number | null;
   newCost: number | null;
+  /** null sin precio real (vacío o de relleno, C$2 o menos). */
   price: number | null;
+  placeholderPrice: number | null;
 };
 type BranchCostPreview = {
   rows: BranchCostRow[];
   unreadable: string[];
-  totals: { pieces: number; feet: number; currentValue: number; newValue: number; saleValue: number; belowCost: number };
+  totals: { pieces: number; feet: number; currentValue: number; newValue: number; saleValue: number; belowCost: number; withoutPrice: number };
   byBranch: Array<{ branchId: string; code: string; name: string; pieces: number; feet: number }>;
 };
 
@@ -123,6 +125,11 @@ export function TimberBranchCostPanel({ branchId, branchName, savedCostPerFoot, 
               ⚠ {totals.belowCost} medida{totals.belowCost === 1 ? "" : "s"} con el precio por debajo de este costo. Revisá su precio en esta sucursal.
             </div>
           )}
+          {totals && totals.withoutPrice > 0 && (
+            <div className="border-b border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3.5 py-2 text-[12.5px] text-[var(--color-warning-700)]">
+              ⚠ {totals.withoutPrice} medida{totals.withoutPrice === 1 ? "" : "s"} sin precio de venta real en {branchName} (C$ 2 o menos cuenta como relleno). No entran en la ganancia ni en el margen hasta que les pongás precio.
+            </div>
+          )}
           {(preview?.unreadable.length ?? 0) > 0 && (
             <div className="border-b border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3.5 py-2 text-[12.5px] text-[var(--color-warning-700)]">
               No reciben costo porque el nombre no trae la medida: {preview?.unreadable.join(", ")}.
@@ -150,10 +157,16 @@ export function TimberBranchCostPanel({ branchId, branchName, savedCostPerFoot, 
                       <td className="hm-num text-[var(--color-text-muted)]">{fmt(row.boardFeet, 3)}</td>
                       <td className="hm-num">{fmt(row.totalFeet)}</td>
                       <td className="hm-num">
-                        {changed && <span className="text-[var(--color-text-soft)]">{row.currentCost !== null ? fmt(row.currentCost) : "—"} → </span>}
+                        {changed && row.currentCost !== null && <span className="text-[var(--color-text-soft)]">{fmt(row.currentCost)} → </span>}
                         <b>{cost !== null ? fmt(cost) : "—"}</b>
                       </td>
-                      <td className="hm-num">{row.price !== null ? fmt(row.price) : "—"}</td>
+                      <td className="hm-num">
+                        {row.price !== null ? fmt(row.price) : (
+                          <span className="text-[var(--color-warning-700)]" title="Un precio de C$ 2 o menos es de relleno, no un precio real">
+                            {row.placeholderPrice !== null ? `${fmt(row.placeholderPrice)} · relleno` : "Sin precio"}
+                          </span>
+                        )}
+                      </td>
                       <td className="hm-num" style={negative ? { color: "var(--color-danger-700)" } : undefined}>{profit !== null ? fmt(profit) : "—"}</td>
                       <td className="hm-num" style={negative ? { color: "var(--color-danger-700)", fontWeight: 600 } : undefined}>{profit !== null && row.price ? `${fmt((profit / row.price) * 100, 1)}%` : "—"}</td>
                     </tr>

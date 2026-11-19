@@ -64,6 +64,8 @@ const mockWood = [
   { id: "wood-regla", sku: "MAD-REG-136-0001", name: "REGLA 1X3X6", subtype: "REGLA", t: 1, w: 3, varas: 6, stock: 3, price: 300, cost: 260 },
   { id: "wood-cuarton", sku: "MAD-CUA-246-0001", name: "CUARTON 2X4X6", subtype: "CUARTON", t: 2, w: 4, varas: 6, stock: 116, price: 706, cost: 590 },
   { id: "wood-tablilla", sku: "MAD-TAB-163-0001", name: "TABLILLA 1X6X3", subtype: "TABLILLA", t: 1, w: 6, varas: 3, stock: 7, price: 265, cost: 111 },
+  // Precio de relleno (C$1) y sin costo, como CUARTON 3X3X5 en Rivas.
+  { id: "wood-cuarton-335", sku: "MAD-CUA-335-0001", name: "CUARTON 3X3X5", subtype: "CUARTON", t: 3, w: 3, varas: 5, stock: 0, price: 1, cost: null as number | null },
 ];
 const MOCK_FEET_BY_VARAS: Record<number, number> = { 3: 8, 4: 11, 5: 14, 6: 16 };
 const mockFixedCostPerFoot = new Map<string, number>();
@@ -1341,13 +1343,14 @@ const server = http.createServer(async (req, res) => {
     const rows = (url.searchParams.get("branchId") || method === "POST" ? mockWood : []).map((w) => {
       const lengthFeet = MOCK_FEET_BY_VARAS[w.varas];
       const boardFeet = (w.t * w.w * lengthFeet) / 12;
-      return { productId: w.id, sku: w.sku, name: w.name, thickness: w.t, width: w.w, lengthFeet, boardFeet, stock: w.stock, totalFeet: w.stock * boardFeet, currentCost: w.cost, newCost: costPerFoot ? Math.round(boardFeet * costPerFoot * 100) / 100 : null, price: w.price };
+      const realPrice = w.price > 2;
+      return { productId: w.id, sku: w.sku, name: w.name, thickness: w.t, width: w.w, lengthFeet, boardFeet, stock: w.stock, totalFeet: w.stock * boardFeet, currentCost: w.cost, newCost: costPerFoot ? Math.round(boardFeet * costPerFoot * 100) / 100 : null, price: realPrice ? w.price : null, placeholderPrice: realPrice ? null : w.price };
     });
     const feet = rows.reduce((sum, r) => sum + r.totalFeet, 0);
     const pieces = rows.reduce((sum, r) => sum + r.stock, 0);
     const preview = {
       rows, unreadable: [],
-      totals: { pieces, feet, currentValue: rows.reduce((sum, r) => sum + r.stock * r.currentCost, 0), newValue: rows.reduce((sum, r) => sum + r.stock * (r.newCost ?? r.currentCost), 0), saleValue: rows.reduce((sum, r) => sum + r.stock * r.price, 0), belowCost: rows.filter((r) => r.price < (r.newCost ?? r.currentCost)).length },
+      totals: { pieces, feet, currentValue: rows.reduce((sum, r) => sum + r.stock * (r.currentCost ?? 0), 0), newValue: rows.reduce((sum, r) => sum + r.stock * (r.newCost ?? r.currentCost ?? 0), 0), saleValue: rows.reduce((sum, r) => sum + r.stock * (r.price ?? 0), 0), belowCost: rows.filter((r) => r.price !== null && (r.newCost ?? r.currentCost) !== null && r.price < (r.newCost ?? r.currentCost)!).length, withoutPrice: rows.filter((r) => r.price === null).length },
       byBranch: branches.map((b, i) => ({ branchId: b.id, code: b.code, name: b.name, pieces: i === 0 ? mockWood.reduce((sum, w) => sum + w.stock, 0) : 0, feet: i === 0 ? mockWood.reduce((sum, w) => sum + (w.stock * w.t * w.w * MOCK_FEET_BY_VARAS[w.varas]) / 12, 0) : 0 })),
     };
     return ok(res, method === "POST" ? { applied: rows.length, preview } : preview);

@@ -36,6 +36,9 @@ export function woodMeasureOf(product: WoodMeasureSource, cubicationTable: Cubic
   return { thickness, width, varaLength, lengthFeet, boardFeet: calculateBoardFeet({ thickness, width, length: lengthFeet }) };
 }
 
+/** Precio <= C$2 = relleno ("algo hay que poner"), no un precio real: mismo piso que inventory/wac.ts. */
+export const TIMBER_PLACEHOLDER_PRICE_FLOOR = 2;
+
 export type TimberBranchCostRow = {
   productId: string;
   timberProductId: string | null;
@@ -51,7 +54,10 @@ export type TimberBranchCostRow = {
   currentCost: number | null;
   /** Pies por pieza × costo por pie. null si todavía no se escribió un costo por pie. */
   newCost: number | null;
+  /** Precio real de venta; null sin precio o con uno de relleno. */
   price: number | null;
+  /** El precio de relleno que tiene hoy (p. ej. C$1), para mostrarlo; null si no hay. */
+  placeholderPrice: number | null;
 };
 
 export type TimberBranchCostPreview = {
@@ -59,13 +65,13 @@ export type TimberBranchCostPreview = {
   rows: TimberBranchCostRow[];
   /** Productos de madera de la sucursal sin medida legible en el nombre: no reciben costo. */
   unreadable: string[];
-  totals: { pieces: number; feet: number; currentValue: number; newValue: number; saleValue: number; belowCost: number };
+  totals: { pieces: number; feet: number; currentValue: number; newValue: number; saleValue: number; belowCost: number; withoutPrice: number };
   byBranch: Array<{ branchId: string; code: string; name: string; pieces: number; feet: number }>;
 };
 
 /** Totales de la sucursal. Con costo nuevo, "bajo costo" se mide contra él: es lo que verá el POS. */
 export function summarizeTimberBranchCost(rows: TimberBranchCostRow[]): TimberBranchCostPreview["totals"] {
-  const totals = { pieces: 0, feet: 0, currentValue: 0, newValue: 0, saleValue: 0, belowCost: 0 };
+  const totals = { pieces: 0, feet: 0, currentValue: 0, newValue: 0, saleValue: 0, belowCost: 0, withoutPrice: 0 };
   for (const row of rows) {
     const cost = row.newCost ?? row.currentCost;
     totals.pieces += row.stock;
@@ -74,6 +80,7 @@ export function summarizeTimberBranchCost(rows: TimberBranchCostRow[]): TimberBr
     totals.newValue += row.stock * (cost ?? 0);
     totals.saleValue += row.stock * (row.price ?? 0);
     if (cost !== null && row.price !== null && row.price < cost) totals.belowCost += 1;
+    if (row.price === null) totals.withoutPrice += 1;
   }
   return {
     pieces: totals.pieces,
@@ -82,6 +89,7 @@ export function summarizeTimberBranchCost(rows: TimberBranchCostRow[]): TimberBr
     newValue: roundMoney(totals.newValue),
     saleValue: roundMoney(totals.saleValue),
     belowCost: totals.belowCost,
+    withoutPrice: totals.withoutPrice,
   };
 }
 
@@ -137,6 +145,9 @@ export async function previewTimberBranchCost(branchId: string | null, costPerFo
     if (!measure) continue;
     const effective = pricing.get(`${branchId}:${product.id}`);
     const stock = product.inventoryBalances.find((balance) => balance.branchId === branchId)?.quantityOnHand.toNumber() ?? 0;
+    const rawPrice = effective?.effectivePrice ? effective.effectivePrice.toNumber() : null;
+    // Un C$1 de relleno daba "margen -51,350%" y contaba como "bajo costo": no es un precio, falta ponerlo.
+    const realPrice = rawPrice !== null && rawPrice > TIMBER_PLACEHOLDER_PRICE_FLOOR;
     rows.push({
       productId: product.id,
       timberProductId: product.timberProduct?.id ?? null,
@@ -151,7 +162,8 @@ export async function previewTimberBranchCost(branchId: string | null, costPerFo
       totalFeet: roundFeet(stock * measure.boardFeet),
       currentCost: effective?.effectiveCost ? roundMoney(effective.effectiveCost.toNumber()) : null,
       newCost: costPerFoot ? roundMoney(measure.boardFeet * costPerFoot) : null,
-      price: effective?.effectivePrice ? effective.effectivePrice.toNumber() : null,
+      price: realPrice ? rawPrice : null,
+      placeholderPrice: !realPrice && rawPrice !== null && rawPrice > 0 ? rawPrice : null,
     });
   }
 
