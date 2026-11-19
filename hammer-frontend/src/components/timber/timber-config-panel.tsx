@@ -130,7 +130,7 @@ export function TimberConfigPanel() {
           sucursal puntual, y si esa sucursal ya tiene override propio o
           todavía está heredando el global (guardar acá crea su override). */}
       {branchId ? (
-        <div className="rounded-lg border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-3.5 py-2 text-[12.5px] text-[var(--color-info-800)]">
+        <div className="rounded-lg border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-3.5 py-2 text-[12.5px] text-[var(--color-info-700)]">
           {config.isBranchOverride
             ? <>Editando la configuración propia de <b>{activeBranchName}</b>.</>
             : <>{activeBranchName} todavía no tiene configuración propia — mostrando el default global. Guardar acá crea su override, sin afectar a las demás sucursales.</>}

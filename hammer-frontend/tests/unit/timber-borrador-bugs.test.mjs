@@ -41,7 +41,7 @@ const EDITOR = "components/timber/trip-editor.tsx";
 test("BUG 1: el borrador se cancela con el diálogo propio (no confirm() nativo), solo mientras es DRAFT", () => {
   const c = read(EDITOR);
   assert.ok(c.includes("Cancelar borrador"));
-  assert.match(c, /\{isEditable && <Button[^\n]*onClick=\{\(\) => setAskCancel\(true\)\}/, "el botón debe estar gateado por isEditable (status DRAFT)");
+  assert.match(c, /\{isEditable && \([\s\S]{0,300}?<button[^\n]*onClick=\{\(\) => setAskCancel\(true\)\}/, "el botón debe estar gateado por isEditable (status DRAFT)");
   assert.ok(c.includes("<ConfirmDialog"), "debe pedir confirmación con el diálogo de la app — es irreversible");
   assert.ok(!c.includes("window.confirm"), "sin confirm() nativo");
   const fnMatch = c.match(/async function cancelTrip\(\)[\s\S]{0,700}?\n  \}/);

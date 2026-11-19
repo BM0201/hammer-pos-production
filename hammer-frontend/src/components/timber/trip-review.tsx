@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Circle, AlertTriangle, PackageCheck } from "lucide-react";
+import { CheckCircle2, CircleAlert, AlertTriangle, PackageCheck } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -83,7 +83,7 @@ function DraftReview({ trip, onPolicyChange, onConfirmed }: { trip: TripDetail; 
       <Card noPadding>
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3.5 py-2.5">
           <b className="text-[12.5px]">Qué entra a {trip.destinationBranch.name}</b>
-          <span className="text-[11px] text-[var(--color-text-muted)]">{trip.totalPieces} piezas · {fmt(trip.totalFeet)} pies · costo final C$ {fmt(trip.landedCostPerFoot, 4)}/pie</span>
+          <span className="text-[12px] text-[var(--color-text-muted)]">{trip.totalPieces} piezas · {fmt(trip.totalFeet)} pies · costo final C$ {fmt(trip.landedCostPerFoot, 4)}/pie</span>
         </div>
         {loading || !preview ? (
           <div className="py-8 text-center text-sm text-[var(--color-text-muted)]">Calculando…</div>
@@ -92,7 +92,7 @@ function DraftReview({ trip, onPolicyChange, onConfirmed }: { trip: TripDetail; 
         ) : (
           <div className="overflow-x-auto">
             <table className="hm-sheet-table">
-              <thead><tr><th>Producto que recibe el stock</th><th className="r">Piezas</th><th className="r">Costo/pza</th><th className="r">Precio venta</th><th className="r">Margen</th></tr></thead>
+              <thead><tr><th className="min-w-[11rem]">Producto</th><th className="r">Piezas</th><th className="r">Costo/pza</th><th className="r">Precio venta</th><th className="r">Margen</th></tr></thead>
               <tbody>
                 {preview.lines.map((l) => {
                   const margin = marginOf(l);
@@ -111,7 +111,7 @@ function DraftReview({ trip, onPolicyChange, onConfirmed }: { trip: TripDetail; 
                       </td>
                       <td className="hm-num">
                         {l.sellingPrice.before !== null && l.sellingPrice.before !== l.sellingPrice.after && <span className="text-[var(--color-text-soft)]">{fmt(l.sellingPrice.before)} → </span>}
-                        <b className={drops ? "text-[var(--color-warning-800)]" : undefined}>{fmt(l.sellingPrice.after)}</b>
+                        <b className={drops ? "text-[var(--color-warning-700)]" : undefined}>{fmt(l.sellingPrice.after)}</b>
                       </td>
                       <td className={`hm-num font-semibold ${negative ? "text-[var(--color-danger-700)]" : ""}`}>{pct(margin)}</td>
                     </tr>
@@ -129,13 +129,13 @@ function DraftReview({ trip, onPolicyChange, onConfirmed }: { trip: TripDetail; 
           <div role="radiogroup" aria-label="Política de precio" className="space-y-1.5 text-[12.5px]">
             {PRICE_POLICIES.map(([value, label, hint]) => (
               <label key={value} className={`flex cursor-pointer items-start gap-2.5 rounded-lg border p-2.5 ${policy === value ? "border-[var(--color-master-500)] bg-[var(--color-surface-alt)]" : "border-[var(--color-border)]"}`}>
-                <input type="radio" name="price-policy" className="mt-0.5" checked={policy === value} disabled={loading || confirming} onChange={() => void changePolicy(value)} />
-                <span><b className="block">{label}</b><span className="text-[11.5px] text-[var(--color-text-muted)]">{hint}</span></span>
+                <input type="radio" name="price-policy" className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-master-500)]" checked={policy === value} disabled={loading || confirming} onChange={() => void changePolicy(value)} />
+                <span><b className="block">{label}</b><span className="text-[12px] text-[var(--color-text-muted)]">{hint}</span></span>
               </label>
             ))}
           </div>
           {readiness.priceDrops > 0 && policy !== "COST_ONLY" && (
-            <p className="mt-2.5 flex gap-1.5 text-[12px] text-[var(--color-warning-800)]">
+            <p className="mt-2.5 flex gap-1.5 text-[12px] text-[var(--color-warning-700)]">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               {readiness.priceDrops} medida{readiness.priceDrops === 1 ? "" : "s"} bajaría{readiness.priceDrops === 1 ? "" : "n"} de precio. Si los precios actuales están bien, elegí «Solo actualizar costos».
             </p>
@@ -144,32 +144,32 @@ function DraftReview({ trip, onPolicyChange, onConfirmed }: { trip: TripDetail; 
 
         <Card>
           <div className="hm-section-rule">Antes de ingresar</div>
-          <ul className="space-y-1.5 text-[12.5px]">
+          <ul aria-live="polite" className="space-y-2 text-[13px]">
             {readiness.items.map((item) => (
-              <li key={item.key} className={`flex items-start gap-2 ${item.ok ? "text-[var(--color-text)]" : "text-[var(--color-danger-700)]"}`}>
-                {item.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-success-700)]" /> : <Circle className="mt-0.5 h-4 w-4 shrink-0" />}
-                {item.label}
+              <li key={item.key} className={`flex items-start gap-2 ${item.ok ? "text-[var(--color-text-muted)]" : "font-semibold text-[var(--color-text)]"}`}>
+                {item.ok ? <CheckCircle2 aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-success-700)]" /> : <CircleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning-700)]" />}
+                <span><span className="sr-only">{item.ok ? "Listo: " : "Falta: "}</span>{item.label}</span>
               </li>
             ))}
           </ul>
 
           {trip.reconciliation.status === "REVIEW" && (
-            <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-2.5 text-[12.5px] text-[var(--color-warning-800)]">
-              <input type="checkbox" className="mt-0.5" checked={reconciliationAcknowledged} onChange={(e) => setReconciliationAcknowledged(e.target.checked)} />
+            <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-2.5 text-[12.5px] text-[var(--color-warning-700)]">
+              <input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--color-warning-700)]" checked={reconciliationAcknowledged} onChange={(e) => setReconciliationAcknowledged(e.target.checked)} />
               <span>Revisé la diferencia con la factura: cubicado {fmt(trip.totalFeet)} pies, factura {fmt(trip.reconciliation.invoicedFeet)} pies ({fmt(trip.reconciliation.differenceFeet)} pies). Ingresar igual.</span>
             </label>
           )}
           {readiness.negativeMarginLines > 0 && (
-            <label className="mt-3 block text-[11.5px] font-semibold text-[var(--color-danger-700)]">
+            <label className="mt-3 block text-[12px] font-semibold text-[var(--color-danger-700)]">
               Motivo para vender bajo costo
-              <input value={marginOverrideReason} onChange={(e) => setMarginOverrideReason(e.target.value)} placeholder="Ej: precio de lanzamiento, madera de segunda…" className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm font-normal text-[var(--color-text)]" />
+              <input value={marginOverrideReason} onChange={(e) => setMarginOverrideReason(e.target.value)} placeholder="Ej: precio de lanzamiento, madera de segunda…" className="mt-1 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-sm font-normal text-[var(--color-text)]" />
             </label>
           )}
 
           <Button variant="primary" size="lg" className="mt-4 w-full" icon={<PackageCheck className="h-4 w-4" />} loading={confirming} disabled={!readiness.canConfirm || loading} onClick={confirm}>
             Ingresar al inventario
           </Button>
-          <p className="mt-1.5 text-center text-[11px] text-[var(--color-text-soft)]">Suma las piezas al inventario de {trip.destinationBranch.name} y le asigna el número al viaje. No se puede deshacer.</p>
+          <p className="mt-2 text-center text-[12px] text-[var(--color-text-muted)]">Suma las piezas al inventario de {trip.destinationBranch.name} y le asigna el número al viaje. No se puede deshacer.</p>
         </Card>
       </div>
     </div>
@@ -181,7 +181,7 @@ function TripSummaryView({ trip }: { trip: TripDetail }) {
   const cancelled = trip.status === "CANCELLED";
   return (
     <div className="space-y-4">
-      <div className={`rounded-xl border p-3.5 text-[12.5px] ${cancelled ? "border-[var(--color-border)] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]" : "border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-800)]"}`}>
+      <div className={`rounded-xl border p-3.5 text-[12.5px] ${cancelled ? "border-[var(--color-border)] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]" : "border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]"}`}>
         {cancelled
           ? "Este viaje se canceló: nunca tocó el inventario."
           : <>Ingresado al inventario de <b>{trip.destinationBranch.name}</b>{trip.confirmedAt && <> el {fmtDateTimeShort(trip.confirmedAt)}</>}.{trip.marginOverrideReason && <> Motivo de margen negativo: «{trip.marginOverrideReason}».</>}</>}

@@ -46,8 +46,8 @@ export function TripsList({ onOpen }: { onOpen: (id: string) => void }) {
           </p>
         </div>
         <span className="hidden flex-1 sm:block" />
-        <div className="flex w-full items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-soft)] sm:w-auto">
-          <Search className="h-4 w-4 shrink-0" />
+        <div className="flex min-h-11 w-full items-center gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text-soft)] focus-within:border-[var(--color-master-500)] sm:w-auto">
+          <Search className="h-4 w-4 shrink-0" aria-hidden />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por número o proveedor…" aria-label="Buscar viaje" className="w-full bg-transparent text-[var(--color-text)] outline-none sm:w-56" />
         </div>
         <Button variant="primary" className="w-full sm:w-auto" icon={<Plus className="h-4 w-4" />} onClick={() => setPicking(true)}>Nuevo viaje</Button>
@@ -57,9 +57,12 @@ export function TripsList({ onOpen }: { onOpen: (id: string) => void }) {
         {loading ? (
           <div className="p-8 text-center text-sm text-[var(--color-text-muted)]">Cargando…</div>
         ) : trips.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 p-10 text-center">
-            <TreePine className="h-8 w-8 text-[var(--color-text-soft)]" />
-            <p className="text-sm text-[var(--color-text-muted)]">{search ? "Ningún viaje coincide con la búsqueda." : "Todavía no hay viajes. Empezá con «Nuevo viaje»."}</p>
+          <div className="flex flex-col items-center gap-3 p-10 text-center">
+            <TreePine className="h-9 w-9 text-[var(--color-text-soft)]" aria-hidden />
+            <p className="text-sm text-[var(--color-text-muted)]">{search ? "Ningún viaje coincide con la búsqueda." : "Todavía no hay viajes de madera."}</p>
+            {search
+              ? <Button variant="ghost" onClick={() => setSearch("")}>Limpiar búsqueda</Button>
+              : <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setPicking(true)}>Registrar el primer viaje</Button>}
           </div>
         ) : (
           <div className="overflow-x-auto">

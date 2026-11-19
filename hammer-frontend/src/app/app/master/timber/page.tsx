@@ -35,9 +35,9 @@ function TimberPageContent() {
             role="tab"
             aria-selected={tab === key}
             onClick={() => router.push(key === "viajes" ? "?" : `?tab=${key}`)}
-            className={`flex flex-none items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-2.5 sm:flex-1 text-[12.5px] font-semibold sm:px-3 ${tab === key ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm" : "text-[var(--color-text-muted)]"}`}
+            className={`flex min-h-11 flex-none items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-[13px] font-semibold transition-colors sm:flex-1 ${tab === key ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm" : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}
           >
-            <Icon className="hidden h-3.5 w-3.5 sm:block" /> {label}
+            <Icon className="hidden h-4 w-4 sm:block" aria-hidden /> {label}
           </button>
         ))}
       </div>

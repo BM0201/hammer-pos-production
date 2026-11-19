@@ -71,13 +71,13 @@ export function TripCubication({ tripId, lines, setLines, isEditable }: {
     setPreview(null);
   }
 
-  const inputClass = "w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 font-mono text-sm text-[var(--color-text)]";
+  const inputClass = "w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] min-h-11 px-3 py-2.5 font-mono text-sm text-[var(--color-text)]";
 
   return (
     <Card noPadding>
       <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3.5 py-2.5">
         <b className="text-[12.5px]">Cubicación</b>
-        <span className="text-[11px] text-[var(--color-text-muted)]">{lines.length} medida{lines.length === 1 ? "" : "s"}</span>
+        <span className="text-[12px] text-[var(--color-text-muted)]">{lines.length} medida{lines.length === 1 ? "" : "s"}</span>
         <span className="flex-1" />
         {isEditable && (
           <>
@@ -124,15 +124,15 @@ export function TripCubication({ tripId, lines, setLines, isEditable }: {
                   <td><b>{label}</b></td>
                   <td>
                     {isEditable ? (
-                      <input type="number" inputMode="numeric" min={0} step={1} value={l.pieces} onChange={(e) => { const pieces = Math.max(0, Math.trunc(Number(e.target.value) || 0)); setLines((prev) => prev.map((x, j) => (j === i ? { ...x, pieces } : x))); }} aria-label={`Piezas de ${label}`} className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-right font-mono text-[12.5px]" />
+                      <input type="number" inputMode="numeric" min={0} step={1} value={l.pieces} onChange={(e) => { const pieces = Math.max(0, Math.trunc(Number(e.target.value) || 0)); setLines((prev) => prev.map((x, j) => (j === i ? { ...x, pieces } : x))); }} aria-label={`Piezas de ${label}`} className="min-h-10 w-20 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-right font-mono text-sm" />
                     ) : <span className="hm-num">{l.pieces}</span>}
                   </td>
                   <td className="hm-num text-[var(--color-text-muted)]">{fmt(feetPerPiece, 3)}</td>
                   <td className="hm-num">{fmt(feetPerPiece * l.pieces)}</td>
                   <td>
                     {isEditable && (
-                      <button type="button" onClick={() => setLines((prev) => prev.filter((_, j) => j !== i))} aria-label={`Quitar ${label}`} className="rounded p-1.5 text-[var(--color-text-soft)] hover:text-[var(--color-danger-700)]">
-                        <X className="h-4 w-4" />
+                      <button type="button" onClick={() => setLines((prev) => prev.filter((_, j) => j !== i))} aria-label={`Quitar ${label}`} className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-text-soft)] transition-colors hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-700)]">
+                        <X className="h-4 w-4" aria-hidden />
                       </button>
                     )}
                   </td>
@@ -176,9 +176,9 @@ export function TripCubication({ tripId, lines, setLines, isEditable }: {
               </table>
             </div>
             {preview.unrecognized.length > 0 && (
-              <div className="rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3">
-                <b className="text-[12.5px] text-[var(--color-warning-800)]">{preview.unrecognized.length} fila{preview.unrecognized.length === 1 ? "" : "s"} sin reconocer: agregalas a mano si hacen falta</b>
-                <ul className="mt-1.5 space-y-1 text-[11.5px] text-[var(--color-warning-800)]">
+              <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3">
+                <b className="text-[12.5px] text-[var(--color-warning-700)]">{preview.unrecognized.length} fila{preview.unrecognized.length === 1 ? "" : "s"} sin reconocer: agregalas a mano si hacen falta</b>
+                <ul className="mt-1.5 space-y-1 text-[12px] text-[var(--color-warning-700)]">
                   {preview.unrecognized.map((u) => (
                     <li key={u.rowNumber}>Fila {u.rowNumber}: “{u.rawMedida || "(vacío)"}” / “{u.rawPiezas || "(vacío)"}” — {u.reason}</li>
                   ))}

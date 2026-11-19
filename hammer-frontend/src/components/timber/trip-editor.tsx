@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, CloudOff, Loader2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, CloudOff, Loader2, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
@@ -149,8 +149,8 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" aria-label="Volver a la lista de viajes" onClick={onBack} className="rounded-lg p-2 text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]">
-          <ArrowLeft className="h-4 w-4" />
+        <button type="button" aria-label="Volver a la lista de viajes" onClick={onBack} className="-ml-2 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-text)]">
+          <ArrowLeft className="h-5 w-5" aria-hidden />
         </button>
         <div className="min-w-0">
           <h2 className="text-lg font-bold tracking-tight text-[var(--color-text)]">
@@ -164,24 +164,36 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
         <Badge variant={status.variant}>{status.label}</Badge>
         <span className="flex-1" />
         {isEditable && <SaveIndicator state={saveState} onRetry={() => void save()} />}
-        {isEditable && <Button variant="ghost" size="sm" className="text-[var(--color-danger-700)]" onClick={() => setAskCancel(true)}>Cancelar borrador</Button>}
+        {isEditable && (
+          // Destructivo: color de peligro propio, separado del botón principal (ghost pisaba el color del texto).
+          <button type="button" onClick={() => setAskCancel(true)} className="inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-[var(--color-danger-200)] px-3 text-sm font-semibold text-[var(--color-danger-700)] transition-colors hover:bg-[var(--color-danger-50)]">
+            <Trash2 className="h-4 w-4" aria-hidden />Cancelar borrador
+          </button>
+        )}
       </div>
 
       {isEditable && (
-        <div role="tablist" className="flex items-center gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1">
-          {([[1, "1 · Cubicación y costos"], [2, "2 · Revisar e ingresar"]] as const).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              role="tab"
-              aria-selected={step === value}
-              disabled={value === 2 && !hasPieces}
-              onClick={() => void goToStep(value)}
-              className={`flex-1 rounded-lg px-2 py-2.5 text-[12.5px] font-semibold disabled:opacity-50 ${step === value ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm" : "text-[var(--color-text-muted)]"}`}
-            >
-              {label}
-            </button>
-          ))}
+        <div role="tablist" aria-label="Pasos del viaje" className="flex items-center gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1">
+          {([[1, "Cubicación y costos"], [2, "Revisar e ingresar"]] as const).map(([value, label]) => {
+            const current = step === value;
+            const done = value === 1 && step === 2;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={current}
+                disabled={value === 2 && !hasPieces}
+                onClick={() => void goToStep(value)}
+                className={`flex min-h-11 flex-1 items-center justify-center gap-2 rounded-lg px-2 text-[13px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${current ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm" : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}
+              >
+                <span aria-hidden className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[12px] font-bold ${current ? "bg-[var(--color-text)] text-[var(--color-surface)]" : done ? "bg-[var(--color-success-50)] text-[var(--color-success-700)]" : "border border-[var(--color-border-strong)]"}`}>
+                  {done ? <Check className="h-3.5 w-3.5" /> : value}
+                </span>
+                <span className="sr-only">Paso {value}: </span>{label}
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -218,15 +230,17 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
   );
 }
 
+/** En una región role="status": el lector de pantalla anuncia "Guardado" sin mover el foco. */
 function SaveIndicator({ state, onRetry }: { state: SaveState; onRetry: () => void }) {
-  if (state === "saving") return <span className="inline-flex items-center gap-1 text-xs text-[var(--color-text-soft)]"><Loader2 className="h-3 w-3 animate-spin" />Guardando…</span>;
-  if (state === "saved") return <span className="inline-flex items-center gap-1 text-xs text-[var(--color-success-700)]"><Check className="h-3 w-3" />Guardado</span>;
-  if (state === "error") {
-    return (
-      <button type="button" onClick={onRetry} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-[var(--color-danger-700)] hover:bg-[var(--color-surface-alt)]">
-        <CloudOff className="h-3 w-3" />No se guardó — reintentar
-      </button>
-    );
-  }
-  return null;
+  return (
+    <span role="status" className="inline-flex min-h-11 items-center text-[12px]">
+      {state === "saving" && <span className="inline-flex items-center gap-1 text-[var(--color-text-muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />Guardando…</span>}
+      {state === "saved" && <span className="inline-flex items-center gap-1 text-[var(--color-success-700)]"><Check className="h-3.5 w-3.5" aria-hidden />Guardado</span>}
+      {state === "error" && (
+        <button type="button" onClick={onRetry} className="inline-flex min-h-11 items-center gap-1 rounded-xl px-2.5 font-semibold text-[var(--color-danger-700)] hover:bg-[var(--color-danger-50)]">
+          <CloudOff className="h-3.5 w-3.5" aria-hidden />No se guardó — reintentar
+        </button>
+      )}
+    </span>
+  );
 }

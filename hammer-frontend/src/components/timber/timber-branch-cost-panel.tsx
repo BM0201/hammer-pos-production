@@ -119,12 +119,12 @@ export function TimberBranchCostPanel({ branchId, branchName, savedCostPerFoot, 
           </div>
 
           {totals && totals.belowCost > 0 && (
-            <div className="border-b border-[var(--color-warning-300)] bg-[var(--color-warning-50)] px-3.5 py-2 text-[12.5px] text-[var(--color-warning-800)]">
+            <div className="border-b border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3.5 py-2 text-[12.5px] text-[var(--color-warning-700)]">
               ⚠ {totals.belowCost} medida{totals.belowCost === 1 ? "" : "s"} con el precio por debajo de este costo. Revisá su precio en esta sucursal.
             </div>
           )}
           {(preview?.unreadable.length ?? 0) > 0 && (
-            <div className="border-b border-[var(--color-warning-300)] bg-[var(--color-warning-50)] px-3.5 py-2 text-[12.5px] text-[var(--color-warning-800)]">
+            <div className="border-b border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3.5 py-2 text-[12.5px] text-[var(--color-warning-700)]">
               No reciben costo porque el nombre no trae la medida: {preview?.unreadable.join(", ")}.
             </div>
           )}

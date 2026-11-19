@@ -15,8 +15,8 @@ export type TripCostForm = {
   invoicedFeet: number | "";
 };
 
-const labelClass = "block text-[11.5px] font-semibold text-[var(--color-text-muted)]";
-const inputClass = "mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)] disabled:opacity-70";
+const labelClass = "block text-[12px] font-semibold text-[var(--color-text-muted)]";
+const inputClass = "mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 min-h-11 text-sm text-[var(--color-text)] disabled:opacity-70";
 const numberValue = (v: string): number | "" => (v === "" ? "" : Math.max(0, Number(v) || 0));
 
 /** Datos del viaje, costo de la madera, gastos (aserrado aparte) y pies de la factura. */
@@ -50,7 +50,7 @@ export function TripCostPanel({ form, setForm, lines, reconciliation, isEditable
         <div className="hm-section-rule">Costo de la madera</div>
         <div role="radiogroup" aria-label="Cómo se escribe el costo" className="mb-2.5 flex gap-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-0.5">
           {([["PER_FOOT", "Precio por pie"], ["TOTAL", "Total del viaje"]] as const).map(([mode, label]) => (
-            <button key={mode} type="button" role="radio" aria-checked={form.costMode === mode} disabled={!isEditable} onClick={() => setForm({ costMode: mode })} className={`flex-1 rounded-md py-2 text-[12.5px] font-semibold ${form.costMode === mode ? "bg-[var(--color-surface)] text-[var(--color-master-700)] shadow-sm" : "text-[var(--color-text-muted)]"}`}>
+            <button key={mode} type="button" role="radio" aria-checked={form.costMode === mode} disabled={!isEditable} onClick={() => setForm({ costMode: mode })} className={`min-h-10 flex-1 rounded-md text-[13px] font-semibold transition-colors ${form.costMode === mode ? "bg-[var(--color-surface)] text-[var(--color-master-700)] shadow-sm" : "text-[var(--color-text-muted)]"}`}>
               {label}
             </button>
           ))}
@@ -65,16 +65,16 @@ export function TripCostPanel({ form, setForm, lines, reconciliation, isEditable
           </label>
         )}
         <div className="mt-2.5 flex justify-between text-[12.5px]"><span className="text-[var(--color-text-muted)]">Madera ({fmt(cost.totalFeet)} pies × {fmt(cost.costPerFoot)})</span><b>C$ {fmt(cost.woodTotal)}</b></div>
-        {noCost && isEditable && <p className="mt-1.5 text-[12px] text-[var(--color-warning-800)]">Sin costo de la madera no se puede ingresar el viaje.</p>}
+        {noCost && isEditable && <p role="status" className="mt-1.5 text-[12px] text-[var(--color-warning-700)]">Sin costo de la madera no se puede ingresar el viaje.</p>}
       </Card>
 
       <Card>
         <div className="hm-section-rule">Aserrado y gastos del viaje</div>
         <div className="grid grid-cols-2 gap-2.5">
           {EXPENSE_FIELDS.map(([label, key]) => (
-            <label key={key} className="block text-[11px] font-semibold text-[var(--color-text-muted)]">
+            <label key={key} className={labelClass}>
               {label}
-              <input disabled={!isEditable} type="number" inputMode="decimal" min={0} step="0.01" placeholder="0" value={form.expenses[key] || ""} onChange={(e) => setForm({ expenses: { ...form.expenses, [key]: Number(numberValue(e.target.value)) || 0 } })} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-right font-mono text-[12.5px] disabled:opacity-70" />
+              <input disabled={!isEditable} type="number" inputMode="decimal" min={0} step="0.01" placeholder="0" value={form.expenses[key] || ""} onChange={(e) => setForm({ expenses: { ...form.expenses, [key]: Number(numberValue(e.target.value)) || 0 } })} className={`${inputClass} text-right font-mono`} />
             </label>
           ))}
         </div>
