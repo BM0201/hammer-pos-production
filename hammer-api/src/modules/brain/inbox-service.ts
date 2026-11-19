@@ -5,6 +5,7 @@ import {
   getDecisionCatalogEntry, getActionTypesForArea, getCategoriesForArea, formatEvidence,
   AREA_BY_CATEGORY, AREA_LABELS, type DecisionArea,
 } from "@/modules/brain/decision-catalog";
+import { buildDecisionSuggestion, type SuggestionOption } from "@/modules/brain/suggestions";
 
 /**
  * Parte A 1.1 — "red de seguridad": una decisión sin `proposedActionType`
@@ -127,6 +128,8 @@ export type InboxGroup = {
   hasReappeared: boolean;
   /** Parte A · Commit 2.2 — productId distintos del grupo, para "Crear carga de precios" (área PRICING). Vacío si ninguna decisión del grupo tiene producto puntual. */
   productIds: string[];
+  /** Ayuda corta de qué hacer con este tipo (suggestions.ts). */
+  help: string;
 };
 
 export async function getBrainInbox(filters: InboxFilters, db: Db = prisma): Promise<{ groups: InboxGroup[]; areas: Array<{ area: DecisionArea; count: number; criticalCount: number }> }> {
@@ -222,6 +225,7 @@ export async function getBrainInbox(filters: InboxFilters, db: Db = prisma): Pro
         oldestDetectedAt: acc.oldestDetectedAt,
         hasReappeared: reappearedKeys.has(acc.key),
         productIds: [...(productIdsByKey.get(acc.key) ?? [])],
+        help: buildDecisionSuggestion({ proposedActionType: isUnknown ? null : acc.proposedActionType, category: acc.category, status: "CLOSED", href: null, evidence: {}, action: {} }).help,
       };
     })
     .sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || b.impactAmount - a.impactAmount || b.count - a.count);
@@ -251,6 +255,8 @@ type InboxItem = {
   status: BrainDecisionStatus;
   resolution: ReturnType<typeof getDecisionCatalogEntry>["resolution"];
   hasReappeared: boolean;
+  /** La opción recomendada de suggestions.ts (null si está cerrada). */
+  suggestion: SuggestionOption | null;
 };
 
 function str(value: unknown): string | null {
@@ -343,6 +349,8 @@ export async function getBrainInboxItems(type: string, filters: InboxFilters, pa
 
   const items: InboxItem[] = page.map((decision) => {
     const catalogEntry = getDecisionCatalogEntry(decision.proposedActionType, decision.category);
+    const action = (decision.proposedActionJson as Record<string, unknown>) ?? {};
+    const href = catalogEntry.href({ branchId: decision.branchId, productId: decision.productId, evidence: formatEvidence(decision.evidenceJson).reduce((acc, e) => ({ ...acc, [e.key]: e.value }), {}), action });
     return {
       id: decision.id,
       entityLabel: entityLabelFor(decision, cashLabels, orderLabels),
@@ -352,11 +360,12 @@ export async function getBrainInboxItems(type: string, filters: InboxFilters, pa
       // decisión, que los detectores ya escriben con números concretos.
       description: decision.description || decision.title || catalogEntry.label,
       metrics: formatEvidence(decision.evidenceJson).slice(0, 2).map((e) => ({ label: e.label, value: e.value })),
-      href: catalogEntry.href({ branchId: decision.branchId, productId: decision.productId, evidence: formatEvidence(decision.evidenceJson).reduce((acc, e) => ({ ...acc, [e.key]: e.value }), {}), action: (decision.proposedActionJson as Record<string, unknown>) ?? {} }),
+      href,
       detectedAgo: decision.createdAt,
       status: decision.status,
       resolution: catalogEntry.resolution,
       hasReappeared: reappearedSet.has(decision.id),
+      suggestion: buildDecisionSuggestion({ proposedActionType: decision.proposedActionType, category: decision.category, status: decision.status, href, evidence: (decision.evidenceJson as Record<string, unknown>) ?? {}, action }).recommended,
     };
   });
 

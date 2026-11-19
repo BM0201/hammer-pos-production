@@ -151,3 +151,28 @@ export const ACTION_LABELS: Record<DecisionAction, string> = {
   DISMISS: "No aplica",
   REOPEN: "Reabrir",
 };
+
+/** "Qué te sugiero" — la forma la arma hammer-api/src/modules/brain/suggestions.ts. */
+export type SuggestionOption = {
+  kind: "APPLY_PRICE" | "KEEP_PRICE" | "RUN" | "RESOLVE" | "GO_RESOLVE";
+  label: string;
+  explain: string;
+  price?: number;
+  needsConfirm: boolean;
+};
+export type DecisionSuggestion = { recommended: SuggestionOption | null; alternatives: SuggestionOption[]; help: string };
+
+/** La Bandeja de precios devuelve 200 con `failed[].reason` = código crudo (tray-service.ts); acá en español. */
+const SUGGESTION_FAILURE_MESSAGES: Record<string, string> = {
+  ALREADY_PROCESSED: "Esta decisión ya se procesó. Actualizá la pantalla.",
+  COST_REQUIRES_REVIEW: "El costo parece mal cargado: corregilo en Precios antes de aplicar.",
+  DECISION_MISSING_SUGGESTED_PRICE: "Esta decisión no trae un precio sugerido. Revisala en Precios.",
+  DECISION_NOT_PRICING: "Esta decisión no es de precios.",
+  BELOW_COST_NOT_ALLOWED: "El costo cambió desde que se detectó y el precio sugerido quedaría bajo el costo. Revisalo en Precios.",
+  NOT_KEEPABLE: "Bajo el costo no se puede mantener el precio: corregí el precio o el costo.",
+};
+
+export function suggestionFailureMessage(reason: string): string {
+  const code = reason.split(":")[0].trim();
+  return SUGGESTION_FAILURE_MESSAGES[code] ?? "No se pudo aplicar la sugerencia. Revisala en Precios.";
+}

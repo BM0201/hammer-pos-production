@@ -50,6 +50,8 @@ import { calculateReconciliation, calculateTimber, calculateTimberTrip, DEFAULT_
 import { buildCatalogExportWorkbookFromRows } from "../src/modules/catalog-inventory/export-service";
 import { calculatePricingSuggestion } from "../src/modules/pricing/calculator";
 import { branchPriceSpread } from "../src/modules/pricing/branch-comparison-service";
+import { formatEvidence, getDecisionCatalogEntry } from "../src/modules/brain/decision-catalog";
+import { buildDecisionSuggestion } from "../src/modules/brain/suggestions";
 
 const PORT = Number(process.env.PORT) || 4000;
 const SESSION_COOKIE = "__Host-hammer_session=dev-preview; Path=/; Secure; HttpOnly; SameSite=Lax";
@@ -116,6 +118,17 @@ function mockTripPreview(trip: MockTrip) {
 const branches = [
   { id: "br-central", code: "CEN", name: "Central" },
   { id: "br-demo", code: "DEMO", name: "Demo antigüedad" },
+];
+
+/* ── Centro de decisiones: una decisión de cada forma de sugerencia ── */
+type MockDecision = { id: string; type: string; category: string; severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO"; status: string; branchId: string | null; productId: string | null; title: string; description: string; recommendation: string; impact: number; createdAt: string; evidence: Record<string, unknown>; action: Record<string, unknown> };
+const mockDecisionAt = new Date(Date.now() - 3 * 3600000).toISOString();
+const mockDecisions: MockDecision[] = [
+  { id: "bd-below", type: "REVIEW_PRICE_BELOW_COST", category: "PRICING", severity: "CRITICAL", status: "OPEN", branchId: "br-central", productId: "p-varilla", title: "Bajo el costo: VARILLA 3/8", description: "CEN vende a C$ 110.00 con costo C$ 120.00.", recommendation: "Precio efectivo debajo del costo efectivo.", impact: 280, createdAt: mockDecisionAt, evidence: { effectivePrice: 110, effectiveCost: 120, marginPct: -9.1 }, action: { productId: "p-varilla", branchId: "br-central", currentPrice: 110, suggestedPrice: 145 } },
+  { id: "bd-stale", type: "COST_CHANGED_PRICE_STALE", category: "PRICING", severity: "HIGH", status: "OPEN", branchId: "br-central", productId: "p-pintura", title: "Costo actualizado, precio sin tocar", description: "CEN: el costo pasó a C$ 300.00. Margen efectivo hoy: 16.7%.", recommendation: "Recalcular el precio con el costo actual.", impact: 120, createdAt: mockDecisionAt, evidence: { effectivePrice: 360, effectiveCost: 300, marginPct: 16.7 }, action: { productId: "p-pintura", branchId: "br-central", currentPrice: 360, suggestedPrice: 410 } },
+  { id: "bd-dudoso", type: "REVIEW_PRICE_MARGIN_POLICY", category: "PRICING", severity: "MEDIUM", status: "OPEN", branchId: "br-demo", productId: "p-plywood", title: "Margen bajo: PLYWOOD", description: "DEMO opera con margen de 3%.", recommendation: "Costo dudoso: revisar antes de confiar en este margen.", impact: 0, createdAt: mockDecisionAt, evidence: { effectivePrice: 300, effectiveCost: 290, costLooksWrong: true }, action: { productId: "p-plywood", branchId: "br-demo", currentPrice: 300, suggestedPrice: 380 } },
+  { id: "bd-cash", type: "RECALCULATE_CASH_SESSION", category: "CASH", severity: "HIGH", status: "OPEN", branchId: "br-central", productId: null, title: "Caja con snapshot desactualizado", description: "Caja 01: el esperado guardado no coincide con los pagos.", recommendation: "Recalcular la caja.", impact: 0, createdAt: mockDecisionAt, evidence: { cashSessionId: "cs-1" }, action: { cashSessionId: "cs-1" } },
+  { id: "bd-cam", type: "REVIEW_CAMERA_HEALTH", category: "SECURITY", severity: "LOW", status: "OPEN", branchId: "br-demo", productId: null, title: "Cámara 2 sin reportar", description: "La cámara 2 no reporta hace 3 h.", recommendation: "Revisar energía y red.", impact: 0, createdAt: mockDecisionAt, evidence: {}, action: {} },
 ];
 
 type MockEmployee = {
@@ -1354,6 +1367,64 @@ const server = http.createServer(async (req, res) => {
       byBranch: branches.map((b, i) => ({ branchId: b.id, code: b.code, name: b.name, pieces: i === 0 ? mockWood.reduce((sum, w) => sum + w.stock, 0) : 0, feet: i === 0 ? mockWood.reduce((sum, w) => sum + (w.stock * w.t * w.w * MOCK_FEET_BY_VARAS[w.varas]) / 12, 0) : 0 })),
     };
     return ok(res, method === "POST" ? { applied: rows.length, preview } : preview);
+  }
+
+  // ── Centro de decisiones (Brain): sugerencias con la lógica real (suggestions.ts) ──
+  if (path.startsWith("/api/master/brain/") || path.startsWith("/api/master/pricing/tray/")) {
+    const enrich = (d: MockDecision) => {
+      const entry = getDecisionCatalogEntry(d.type, d.category);
+      const branch = branches.find((b) => b.id === d.branchId) ?? null;
+      const product = mockProducts.find((p) => p.id === d.productId) ?? null;
+      const href = entry.href({ branchId: d.branchId, productId: d.productId, evidence: d.evidence, action: d.action });
+      return { entry, branch, product, href, suggestion: buildDecisionSuggestion({ proposedActionType: d.type, category: d.category, status: d.status, href, evidence: d.evidence, action: d.action }) };
+    };
+    const viewStatuses = (s: string | null) => (s === "RESOLVED" ? ["RESOLVED", "EXECUTED"] : s === "SNOOZED" ? ["SNOOZED"] : s === "DISMISSED" ? ["DISMISSED"] : ["OPEN", "APPROVED", "MANUAL_REVIEW", "FAILED"]);
+    const visible = mockDecisions.filter((d) => viewStatuses(url.searchParams.get("status")).includes(d.status));
+    if (path === "/api/master/brain/health") return ok(res, { lastRun: { status: "OK", finishedAt: new Date(Date.now() - 10 * 60000).toISOString(), detectors: [] }, isRunning: false, nextScheduledAt: new Date(Date.now() + 50 * 60000).toISOString() });
+    if (path === "/api/master/brain/summary") {
+      const open = mockDecisions.filter((d) => d.status === "OPEN");
+      return ok(res, { criticalPending: open.filter((d) => d.severity === "CRITICAL").length, totalPending: open.length, estimatedImpactPending: open.reduce((s, d) => s + d.impact, 0), resolvedLast7Days: { user: mockDecisions.filter((d) => d.status === "RESOLVED").length, auto: 0, execution: mockDecisions.filter((d) => d.status === "EXECUTED").length }, pendingOverSevenDays: 0 });
+    }
+    if (path === "/api/master/brain/inbox") {
+      const types = [...new Set(visible.map((d) => d.type))];
+      const groups = types.map((type) => {
+        const ds = visible.filter((d) => d.type === type);
+        const { entry } = enrich(ds[0]);
+        return { type, typeLabel: entry.label, area: entry.area, cta: entry.cta, groupHref: entry.href({ branchId: null, productId: null, evidence: {}, action: {} }), severity: ds[0].severity, count: ds.length, branches: branches.filter((b) => ds.some((d) => d.branchId === b.id)), impactAmount: ds.reduce((s, d) => s + d.impact, 0), oldestDetectedAt: ds[0].createdAt, hasReappeared: false, productIds: ds.map((d) => d.productId).filter(Boolean), help: buildDecisionSuggestion({ proposedActionType: type, category: ds[0].category, status: "CLOSED", href: null, evidence: {}, action: {} }).help };
+      });
+      const areas = [...new Set(groups.map((g) => g.area))].map((area) => ({ area, count: groups.filter((g) => g.area === area).reduce((s, g) => s + g.count, 0), criticalCount: groups.filter((g) => g.area === area && g.severity === "CRITICAL").reduce((s, g) => s + g.count, 0) }));
+      return ok(res, { groups, areas });
+    }
+    const itemsMatch = path.match(/^\/api\/master\/brain\/inbox\/([^/]+)\/items$/);
+    if (itemsMatch) {
+      return ok(res, { nextCursor: null, items: visible.filter((d) => d.type === decodeURIComponent(itemsMatch[1])).map((d) => {
+        const { entry, branch, product, href, suggestion } = enrich(d);
+        return { id: d.id, entityLabel: product ? `${product.sku} · ${product.name}` : d.title, branchLabel: branch ? `${branch.code} · ${branch.name}` : null, description: d.description, metrics: formatEvidence(d.evidence).slice(0, 2).map((e) => ({ label: e.label, value: e.value })), href, detectedAgo: d.createdAt, status: d.status, resolution: entry.resolution, hasReappeared: false, suggestion: suggestion.recommended };
+      }) });
+    }
+    const decisionMatch = path.match(/^\/api\/master\/brain\/decisions\/([^/]+)(?:\/(run|resolve|snooze|dismiss|reopen))?$/);
+    const decision = decisionMatch ? mockDecisions.find((d) => d.id === decisionMatch[1]) : undefined;
+    if (decisionMatch && !decision) return send(res, 404, { ok: false, error: { code: "NOT_FOUND", message: "Decisión no encontrada." } });
+    if (decision && decisionMatch?.[2]) {
+      const verb = decisionMatch[2];
+      decision.status = verb === "run" ? "EXECUTED" : verb === "resolve" ? "RESOLVED" : verb === "snooze" ? "SNOOZED" : verb === "dismiss" ? "DISMISSED" : "OPEN";
+    }
+    if (decision) {
+      const { entry, branch, product, href, suggestion } = enrich(decision);
+      return ok(res, { id: decision.id, title: decision.title, description: decision.description, recommendation: decision.recommendation, severity: decision.severity, status: decision.status, typeLabel: entry.label, area: entry.area, cta: entry.cta, href, resolution: entry.resolution, evidence: formatEvidence(decision.evidence), suggestion, history: [], branch, product: product ? { sku: product.sku, name: product.name } : null, createdAt: decision.createdAt, lastDetectedAt: decision.createdAt });
+    }
+    if (path === "/api/master/pricing/tray/apply" || path === "/api/master/pricing/tray/keep") {
+      const body = await readJson(req) as { items?: Array<{ decisionId: string }>; decisionIds?: string[] };
+      const ids = body.items?.map((i) => i.decisionId) ?? body.decisionIds ?? [];
+      const failed: Array<{ decisionId: string; reason: string }> = [];
+      for (const id of ids) {
+        const d = mockDecisions.find((x) => x.id === id);
+        if (!d || d.status !== "OPEN") failed.push({ decisionId: id, reason: "ALREADY_PROCESSED" });
+        else if (d.evidence.costLooksWrong === true) failed.push({ decisionId: id, reason: "COST_REQUIRES_REVIEW" });
+        else d.status = path.endsWith("keep") ? "RESOLVED" : "EXECUTED";
+      }
+      return ok(res, path.endsWith("keep") ? { kept: ids.filter((id) => !failed.some((f) => f.decisionId === id)), rejected: failed } : { applied: [], failed });
+    }
   }
 
   // Todo lo demás: respuesta vacía inofensiva para que el shell no truene.

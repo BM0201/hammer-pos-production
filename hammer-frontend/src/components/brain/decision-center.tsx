@@ -9,7 +9,8 @@ import { useSubmitting } from "@/lib/client/use-submitting";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { money } from "@/lib/format";
-import { healthLineStatus, formatTimeAgo, buildInboxUrl, groupsNeedingItemLoad, AREA_LABELS, STATUS_TAB_LABELS, type DecisionAction } from "@/lib/brain-ui";
+import { healthLineStatus, formatTimeAgo, buildInboxUrl, groupsNeedingItemLoad, suggestionFailureMessage, AREA_LABELS, STATUS_TAB_LABELS, type DecisionAction, type SuggestionOption } from "@/lib/brain-ui";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import { DecisionGroupRow, type DecisionGroupData, type InboxItem } from "@/components/brain/decision-group";
 import { DecisionDrawer, type DecisionDetail } from "@/components/brain/decision-drawer";
 import { DismissReasonModal } from "@/components/brain/dismiss-reason-modal";
@@ -76,6 +77,7 @@ export function DecisionCenter() {
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [dismissTarget, setDismissTarget] = useState<{ ids: string[]; onDone: () => void } | null>(null);
   const [dismissing, setDismissing] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{ id: string; option: SuggestionOption } | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQ(q), 350);
@@ -213,6 +215,10 @@ export function DecisionCenter() {
       const res = await apiFetch(`/api/master/brain/decisions/${id}/${endpoint}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const raw = await res.json().catch(() => null);
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo completar la acción.");
+      // runBrainDecisionTx vuelve a OPEN (200) cuando faltan datos para ejecutar — no es un "Listo".
+      if (endpoint === "run" && (unwrapApiData(raw) as { status?: string } | null)?.status !== "EXECUTED") {
+        throw new Error("No se pudo ejecutar: a la decisión le faltan datos. Resolvela desde la pantalla del módulo.");
+      }
       toast.success("Listo.");
       if (drawerId === id) setDrawerId(null);
       await load();
@@ -229,13 +235,55 @@ export function DecisionCenter() {
       return;
     }
     if (action === "RUN") {
-      if (!window.confirm("¿Ejecutar esta acción? El sistema va a crear o actualizar un registro real.")) return;
-      void runAction(id, "run", {});
+      setPendingConfirm({ id, option: { kind: "RUN", label: "Ejecutar esta acción", explain: "El sistema va a crear o actualizar un registro real.", needsConfirm: true } });
       return;
     }
     const endpoint = ENDPOINT_BY_ACTION[action];
     if (!endpoint) return;
     void runAction(id, endpoint, action === "SNOOZE" ? { days: extra?.days } : {});
+  }
+
+  /** Precio sugerido / mantener precio: los mismos endpoints (lock, guard de costo, bitácora) que la Bandeja de precios. */
+  async function applyPriceSuggestion(id: string, keep: boolean) {
+    setActionBusyId(id);
+    try {
+      const res = await apiFetch(keep ? "/api/master/pricing/tray/keep" : "/api/master/pricing/tray/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(keep
+          ? { decisionIds: [id], note: "Revisado en el Centro de decisiones: se mantiene el precio." }
+          : { items: [{ decisionId: id, method: "SUGGESTED" }], reason: "Aplicado desde el Centro de decisiones" }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo aplicar la sugerencia.");
+      const data = unwrapApiData(raw) as { failed?: Array<{ reason: string }>; rejected?: Array<{ reason: string }> };
+      const failure = (data.failed ?? data.rejected ?? [])[0];
+      if (failure) throw new Error(suggestionFailureMessage(failure.reason));
+      toast.success(keep ? "Precio mantenido y marcado como revisado." : "Precio aplicado.");
+      if (drawerId === id) setDrawerId(null);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo aplicar la sugerencia.");
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  async function executeSuggestion(id: string, option: SuggestionOption) {
+    if (option.kind === "APPLY_PRICE" || option.kind === "KEEP_PRICE") await applyPriceSuggestion(id, option.kind === "KEEP_PRICE");
+    else if (option.kind === "RUN") await runAction(id, "run", {});
+    else if (option.kind === "RESOLVE") await runAction(id, "resolve", {});
+  }
+
+  function handleSuggestion(id: string, option: SuggestionOption) {
+    if (option.needsConfirm) setPendingConfirm({ id, option });
+    else void executeSuggestion(id, option);
+  }
+
+  async function confirmSuggestion() {
+    if (!pendingConfirm) return;
+    await executeSuggestion(pendingConfirm.id, pendingConfirm.option);
+    setPendingConfirm(null);
   }
 
   async function handleBulkAction(ids: string[], action: DecisionAction, extra?: { days?: number }) {
@@ -373,7 +421,7 @@ export function DecisionCenter() {
         </Card>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[200px_1fr]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
         <div className="flex gap-1.5 overflow-x-auto lg:flex-col lg:overflow-visible">
           <button type="button" onClick={() => updateUrl({ area: "" })} className={`shrink-0 rounded-lg px-3 py-2 text-left text-sm ${!area ? "bg-[var(--color-surface-raised)] font-medium text-[var(--color-text)]" : "text-[var(--color-text-muted)]"}`}>
             Todas las áreas
@@ -396,7 +444,7 @@ export function DecisionCenter() {
 
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex gap-1 rounded-lg bg-[var(--color-surface-raised)] p-1">
+            <div className="flex max-w-full gap-1 overflow-x-auto rounded-lg bg-[var(--color-surface-raised)] p-1">
               {STATUS_TABS.map((tab) => (
                 <button
                   key={tab}
@@ -436,6 +484,7 @@ export function DecisionCenter() {
                   loadingItems={loadingItemsFor.has(group.type)}
                   allowBulkSelection={statusTab === "PENDING"}
                   onRowAction={handleAction}
+                  onSuggestion={handleSuggestion}
                   onBulkAction={(ids, action, extra) => void handleBulkAction(ids, action, extra)}
                   onOpenDetail={openDetail}
                   onCreatePriceLoad={createPriceLoad}
@@ -452,7 +501,20 @@ export function DecisionCenter() {
           decision={drawerDecision}
           onClose={() => setDrawerId(null)}
           onAction={(action, extra) => handleAction(drawerId, action, extra)}
+          onSuggestion={(option) => handleSuggestion(drawerId, option)}
           busy={actionBusyId === drawerId}
+        />
+      )}
+
+      {pendingConfirm && (
+        <ConfirmDialog
+          title={`¿${pendingConfirm.option.label}?`}
+          message={pendingConfirm.option.explain}
+          confirmLabel={pendingConfirm.option.kind === "KEEP_PRICE" ? "Sí, mantener" : pendingConfirm.option.kind === "APPLY_PRICE" ? "Sí, aplicar" : "Sí, ejecutar"}
+          tone="primary"
+          busy={actionBusyId === pendingConfirm.id}
+          onConfirm={() => void confirmSuggestion()}
+          onCancel={() => setPendingConfirm(null)}
         />
       )}
 

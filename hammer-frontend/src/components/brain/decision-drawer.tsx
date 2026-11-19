@@ -1,10 +1,10 @@
 "use client";
 
-import { X, AlertTriangle } from "lucide-react";
+import { X, Lightbulb } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { money, qty } from "@/lib/format";
-import { formatTimeAgo, actionsForDecision, ACTION_LABELS, type DecisionAction } from "@/lib/brain-ui";
+import { formatTimeAgo, actionsForDecision, ACTION_LABELS, type DecisionAction, type DecisionSuggestion, type SuggestionOption } from "@/lib/brain-ui";
 import { SnoozeSelect } from "@/components/brain/snooze-select";
 
 type EvidenceItem = { key: string; label: string; value: unknown; format: "money" | "percent" | "number" | "date" | "text" };
@@ -23,6 +23,7 @@ export type DecisionDetail = {
   href: string | null;
   resolution: "IN_MODULE" | "EXECUTABLE" | "ACKNOWLEDGE";
   evidence: EvidenceItem[];
+  suggestion: DecisionSuggestion;
   history: HistoryItem[];
   branch: { code: string; name: string } | null;
   product: { sku: string; name: string } | null;
@@ -46,11 +47,13 @@ export function DecisionDrawer({
   decision,
   onClose,
   onAction,
+  onSuggestion,
   busy,
 }: {
   decision: DecisionDetail;
   onClose: () => void;
   onAction: (action: DecisionAction, extra?: { days?: number }) => void;
+  onSuggestion: (option: SuggestionOption) => void;
   busy: boolean;
 }) {
   const actions = actionsForDecision({ resolution: decision.resolution, status: decision.status });
@@ -70,6 +73,8 @@ export function DecisionDrawer({
             <p className="text-sm text-[var(--color-text)]">{decision.description}</p>
             <p className="mt-2 text-sm text-[var(--color-text-muted)]"><strong className="text-[var(--color-text)]">Por qué importa:</strong> {decision.recommendation}</p>
           </div>
+
+          <SuggestionPanel suggestion={decision.suggestion} href={decision.href} busy={busy} onPick={onSuggestion} onNavigate={onClose} />
 
           {(decision.branch || decision.product) && (
             <div className="flex flex-wrap gap-2 text-xs text-[var(--color-text-muted)]">
@@ -110,18 +115,6 @@ export function DecisionDrawer({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] px-4 py-3">
-          {actions.includes("GO_RESOLVE") && decision.href && (
-            <Link href={decision.href as never} className="hm-btn hm-btn-primary" onClick={onClose}>{decision.cta}</Link>
-          )}
-          {actions.includes("RUN") && (
-            <Button type="button" variant="success" onClick={() => onAction("RUN")} loading={busy} icon={<AlertTriangle className="h-4 w-4" />}>{ACTION_LABELS.RUN}</Button>
-          )}
-          {actions.includes("ACKNOWLEDGE") && (
-            <Button type="button" variant="success" onClick={() => onAction("ACKNOWLEDGE")} loading={busy}>{ACTION_LABELS.ACKNOWLEDGE}</Button>
-          )}
-          {actions.includes("RESOLVE") && (
-            <Button type="button" variant="success" onClick={() => onAction("RESOLVE")} loading={busy}>{ACTION_LABELS.RESOLVE}</Button>
-          )}
           {actions.includes("SNOOZE") && <SnoozeSelect disabled={busy} onPick={(days) => onAction("SNOOZE", { days })} />}
           {actions.includes("DISMISS") && (
             <Button type="button" variant="ghost" onClick={() => onAction("DISMISS")} disabled={busy}>{ACTION_LABELS.DISMISS}</Button>
@@ -131,6 +124,56 @@ export function DecisionDrawer({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function SuggestionButton({ option, href, primary, busy, onPick, onNavigate }: {
+  option: SuggestionOption;
+  href: string | null;
+  primary: boolean;
+  busy: boolean;
+  onPick: (option: SuggestionOption) => void;
+  onNavigate: () => void;
+}) {
+  const className = `hm-btn ${primary ? "hm-btn-primary" : "hm-btn-secondary"} min-h-11 w-full whitespace-normal sm:w-auto`;
+  if (option.kind === "GO_RESOLVE") {
+    return href ? <Link href={href as never} className={className} onClick={onNavigate}>{option.label}</Link> : null;
+  }
+  return <Button type="button" variant={primary ? "primary" : "secondary"} className="min-h-11 w-full whitespace-normal sm:w-auto" loading={busy} onClick={() => onPick(option)}>{option.label}</Button>;
+}
+
+/** "Qué te sugiero": la opción recomendada arriba, alternativas abajo, cada una con qué cambia. */
+function SuggestionPanel({ suggestion, href, busy, onPick, onNavigate }: {
+  suggestion: DecisionSuggestion;
+  href: string | null;
+  busy: boolean;
+  onPick: (option: SuggestionOption) => void;
+  onNavigate: () => void;
+}) {
+  return (
+    <div className="space-y-3 rounded-lg border border-[var(--color-primary-200)] bg-[var(--color-primary-50)] p-3">
+      <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--color-primary-700)]">
+        <Lightbulb className="h-4 w-4" aria-hidden="true" />Qué te sugiero
+      </h3>
+      <p className="text-sm text-[var(--color-text)]">{suggestion.help}</p>
+      {suggestion.recommended && (
+        <div className="space-y-1.5">
+          <SuggestionButton option={suggestion.recommended} href={href} primary busy={busy} onPick={onPick} onNavigate={onNavigate} />
+          <p className="text-xs text-[var(--color-text-muted)]">{suggestion.recommended.explain}</p>
+        </div>
+      )}
+      {suggestion.alternatives.length > 0 && (
+        <div className="space-y-2 border-t border-[var(--color-primary-200)] pt-3">
+          <p className="text-xs font-medium text-[var(--color-text-muted)]">Otras opciones</p>
+          {suggestion.alternatives.map((option) => (
+            <div key={option.kind} className="space-y-1">
+              <SuggestionButton option={option} href={href} primary={false} busy={busy} onPick={onPick} onNavigate={onNavigate} />
+              <p className="text-xs text-[var(--color-text-muted)]">{option.explain}</p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

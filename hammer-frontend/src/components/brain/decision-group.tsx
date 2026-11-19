@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, AlertTriangle, RefreshCcw, ClipboardList, MoreHorizontal } from "lucide-react";
+import { ChevronDown, ChevronRight, AlertTriangle, RefreshCcw, ClipboardList, MoreHorizontal, Lightbulb } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { money } from "@/lib/format";
-import { formatTimeAgo, actionsForDecision, ACTION_LABELS, type DecisionAction } from "@/lib/brain-ui";
+import { formatTimeAgo, actionsForDecision, ACTION_LABELS, type DecisionAction, type SuggestionOption } from "@/lib/brain-ui";
 import { SnoozeSelect } from "@/components/brain/snooze-select";
 
 export type DecisionGroupData = {
@@ -21,6 +21,7 @@ export type DecisionGroupData = {
   oldestDetectedAt: string;
   hasReappeared: boolean;
   productIds: string[];
+  help: string;
 };
 
 export type InboxItem = {
@@ -34,6 +35,7 @@ export type InboxItem = {
   status: string;
   resolution: "IN_MODULE" | "EXECUTABLE" | "ACKNOWLEDGE";
   hasReappeared: boolean;
+  suggestion: SuggestionOption | null;
 };
 
 const SEVERITY_BADGE: Record<DecisionGroupData["severity"], { label: string; className: string }> = {
@@ -52,6 +54,7 @@ export function DecisionGroupRow({
   loadingItems,
   allowBulkSelection,
   onRowAction,
+  onSuggestion,
   onBulkAction,
   onOpenDetail,
   onCreatePriceLoad,
@@ -64,6 +67,7 @@ export function DecisionGroupRow({
   loadingItems: boolean;
   allowBulkSelection: boolean;
   onRowAction: (itemId: string, action: DecisionAction, extra?: { days?: number }) => void;
+  onSuggestion: (itemId: string, option: SuggestionOption) => void;
   onBulkAction: (ids: string[], action: DecisionAction, extra?: { days?: number }) => void;
   onOpenDetail: (itemId: string) => void;
   onCreatePriceLoad: (group: DecisionGroupData) => void;
@@ -109,6 +113,12 @@ export function DecisionGroupRow({
 
       {expanded && (
         <div className="space-y-3 px-3 pb-3">
+          {group.help && (
+            <p className="flex items-start gap-1.5 pl-7 text-sm text-[var(--color-text-secondary)]">
+              <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-primary-700)]" aria-hidden="true" />
+              <span><strong className="text-[var(--color-text)]">Qué hacer:</strong> {group.help}</span>
+            </p>
+          )}
           <div className="flex flex-wrap gap-2 pl-7">
             {group.groupHref && (
               <Link href={group.groupHref as never} className="hm-btn hm-btn-secondary hm-btn-sm">{group.cta}</Link>
@@ -165,8 +175,11 @@ export function DecisionGroupRow({
                       {rowActions.includes("GO_RESOLVE") && item.href && (
                         <Link href={item.href as never} className="hm-btn hm-btn-secondary hm-btn-sm">{ACTION_LABELS.GO_RESOLVE}</Link>
                       )}
+                      {item.suggestion && (item.suggestion.kind === "APPLY_PRICE" || item.suggestion.kind === "KEEP_PRICE") && (
+                        <Button type="button" variant="primary" size="sm" className="min-h-11" onClick={() => onSuggestion(item.id, item.suggestion!)} loading={busy} title={item.suggestion.explain}>{item.suggestion.label}</Button>
+                      )}
                       {rowActions.includes("RUN") && (
-                        <Button type="button" variant="success" size="sm" onClick={() => onRowAction(item.id, "RUN")} loading={busy} icon={<AlertTriangle className="h-3.5 w-3.5" />}>{ACTION_LABELS.RUN}</Button>
+                        <Button type="button" variant="success" size="sm" className="min-h-11" onClick={() => (item.suggestion?.kind === "RUN" ? onSuggestion(item.id, item.suggestion) : onRowAction(item.id, "RUN"))} loading={busy} icon={<AlertTriangle className="h-3.5 w-3.5" />}>{ACTION_LABELS.RUN}</Button>
                       )}
                       {rowActions.includes("ACKNOWLEDGE") && (
                         <Button type="button" variant="success" size="sm" onClick={() => onRowAction(item.id, "ACKNOWLEDGE")} loading={busy}>{ACTION_LABELS.ACKNOWLEDGE}</Button>

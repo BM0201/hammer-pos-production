@@ -90,3 +90,10 @@ test("buildInboxUrl — arma branchId, area, status (no default) y q juntos", ()
   const url = buildInboxUrl("/app/master/brain", { branchId: "b1", area: "PRICING", status: "SNOOZED", q: "cemento" });
   assert.equal(url, "/app/master/brain?branchId=b1&area=PRICING&status=SNOOZED&q=cemento");
 });
+
+test("suggestionFailureMessage — códigos de la Bandeja en español, con o sin detalle tras ':'", async () => {
+  const { suggestionFailureMessage } = await import("@/lib/brain-ui");
+  assert.match(suggestionFailureMessage("BELOW_COST_NOT_ALLOWED"), /bajo el costo/);
+  assert.match(suggestionFailureMessage("NOT_KEEPABLE: Bajo el costo no se puede mantener"), /no se puede mantener/);
+  assert.match(suggestionFailureMessage("ALGO_RARO"), /No se pudo aplicar/);
+});

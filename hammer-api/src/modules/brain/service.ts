@@ -10,6 +10,7 @@ import {
   severityRank,
 } from "@/modules/brain/scoring";
 import { getDecisionCatalogEntry, formatEvidence, labelForActionLog } from "@/modules/brain/decision-catalog";
+import { buildDecisionSuggestion } from "@/modules/brain/suggestions";
 import { KNOWN_DETECTOR_KEYS } from "@/modules/brain/detector-registry";
 import type { BrainDecisionDraft, BrainScanResult, BrainDetectorLimits, BrainScanScope } from "@/modules/brain/types";
 
@@ -74,12 +75,9 @@ function recordValue(value: unknown): Record<string, unknown> {
  */
 function enrichDecision(decision: DecisionWithRelations) {
   const catalogEntry = getDecisionCatalogEntry(decision.proposedActionType, decision.category);
-  const href = catalogEntry.href({
-    branchId: decision.branchId,
-    productId: decision.productId,
-    evidence: recordValue(decision.evidenceJson),
-    action: recordValue(decision.proposedActionJson),
-  });
+  const evidence = recordValue(decision.evidenceJson);
+  const action = recordValue(decision.proposedActionJson);
+  const href = catalogEntry.href({ branchId: decision.branchId, productId: decision.productId, evidence, action });
 
   return {
     ...decision,
@@ -89,6 +87,7 @@ function enrichDecision(decision: DecisionWithRelations) {
     cta: catalogEntry.cta,
     href,
     evidence: formatEvidence(decision.evidenceJson),
+    suggestion: buildDecisionSuggestion({ proposedActionType: decision.proposedActionType, category: decision.category, status: decision.status, href, evidence, action }),
     // Fase 2.5/3.5 — historial en español, no el código crudo (REOPENED, etc).
     history: decision.actionLogs.map((log) => ({
       id: log.id,
