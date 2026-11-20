@@ -3,27 +3,61 @@
  * poder probarlas directo. La consulta vive en service.ts (getBranchDayView).
  */
 
-/** Cuando el producto no tiene punto de reorden ni mínimo en la sucursal. */
-const DEFAULT_LOW_STOCK_THRESHOLD = 5;
+/** Ritmo de venta: 2 semanas aplanan el día flojo y el pedido grande de una vez. */
+export const PACE_WINDOW_DAYS = 14;
+/** Alcanza para 3 días o menos: hay que pedir ya. Hasta 7: hay que vigilarlo. */
+const SHORT_DAYS = 3;
+const WATCH_DAYS = 7;
 
-export function lowStockThreshold(setting: { reorderPoint: number | null; minStock: number | null } | null): number {
-  return setting?.reorderPoint ?? setting?.minStock ?? DEFAULT_LOW_STOCK_THRESHOLD;
-}
+export type StockLevel = "out" | "short" | "watch" | "ok";
 
-export type LowStockCandidate = {
+export type SoldStockInput = {
   productId: string;
   name: string;
   unit: string;
   onHand: number;
-  threshold: number;
   soldToday: number;
+  /** Vendido en los últimos PACE_WINDOW_DAYS días, hoy incluido. */
+  soldInWindow: number;
+  /** Punto de reorden (o mínimo) de la sucursal; null si no se configuró. */
+  reorderPoint: number | null;
 };
 
-/** Solo lo vendido hoy que quedó en su umbral o debajo; primero lo que más se vendió. */
-export function pickLowStock(candidates: LowStockCandidate[], limit = 8): LowStockCandidate[] {
-  return candidates
-    .filter((c) => c.onHand <= c.threshold)
-    .sort((a, b) => b.soldToday - a.soldToday || a.onHand - b.onHand)
+export type SoldStockRow = Omit<SoldStockInput, "soldInWindow" | "reorderPoint"> & {
+  /** Días que alcanza lo que queda al ritmo reciente; null sin ventas en la ventana. */
+  daysOfCover: number | null;
+  level: StockLevel;
+};
+
+const LEVEL_ORDER: Record<StockLevel, number> = { out: 0, short: 1, watch: 2, ok: 3 };
+
+export function stockLevel(onHand: number, daysOfCover: number | null, reorderPoint: number | null): StockLevel {
+  if (onHand <= 0) return "out";
+  if (reorderPoint !== null && onHand <= reorderPoint) return "short";
+  if (daysOfCover === null) return "ok";
+  if (daysOfCover <= SHORT_DAYS) return "short";
+  if (daysOfCover <= WATCH_DAYS) return "watch";
+  return "ok";
+}
+
+/**
+ * Cuánto alcanza lo vendido hoy. Antes era "lo que quedó en 5 o menos" y casi
+ * siempre salía vacío (un cemento con 20 bolsas que vende 13 al día no
+ * entraba). Siempre muestra lo vendido hoy, lo más urgente primero.
+ */
+export function rankSoldStock(items: SoldStockInput[], limit = 8): SoldStockRow[] {
+  return items
+    .map(({ soldInWindow, reorderPoint, ...rest }) => {
+      const perDay = soldInWindow / PACE_WINDOW_DAYS;
+      const daysOfCover = perDay > 0 ? Math.round((Math.max(rest.onHand, 0) / perDay) * 10) / 10 : null;
+      return { ...rest, daysOfCover, level: stockLevel(rest.onHand, daysOfCover, reorderPoint) };
+    })
+    .sort(
+      (a, b) =>
+        LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level] ||
+        (a.daysOfCover ?? Infinity) - (b.daysOfCover ?? Infinity) ||
+        b.soldToday - a.soldToday,
+    )
     .slice(0, limit);
 }
 

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getBranchSalesRealtimeSummary, getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import { calculateExpectedCashForSessionTx } from "@/modules/cash-session/service";
-import { buildPendingList, lowStockThreshold, pickLowStock, type PendingKey } from "@/modules/dashboard/my-day";
+import { buildPendingList, PACE_WINDOW_DAYS, rankSoldStock, type PendingKey } from "@/modules/dashboard/my-day";
 
 const ACTIVE_CASH_STATUSES = ["OPEN", "RECONCILING", "AUTO_CLOSED_PENDING_REVIEW"] as const;
 
@@ -12,7 +12,7 @@ type DayViewAccess = Record<PendingKey, boolean> & { cash: boolean };
 
 /**
  * "Mi día" de la caja: estado de caja, lo que falta, ventas de hoy y lo que
- * se está agotando de lo vendido hoy. Reemplaza los 4 resúmenes por rol que
+ * cuánto alcanza lo vendido hoy. Reemplaza los 4 resúmenes por rol que
  * repetían la barra de arriba. El día es el día operativo de Managua, el
  * mismo que usa la barra (getBranchSalesRealtimeSummary).
  */
@@ -107,49 +107,86 @@ export async function getBranchDayView(branchId: string, userId: string, access:
       method: p.method,
       paidAt: p.paidAt,
     })),
-    lowStock: await listLowStockSoldToday(branchId, soldToday),
+    lowStock: await listSoldTodayStock(branchId, soldToday, window.end),
   };
 }
 
-/**
- * Lo vendido hoy que quedó en su punto de reorden (o mínimo, o 5) o debajo.
- * Antes "Inventario crítico" contaba todo lo que tuviera ≤ 5 en la sucursal
- * (212 en Managua), incluido lo que nunca se volvió a pedir, y no decía cuál.
- */
-async function listLowStockSoldToday(
-  branchId: string,
-  soldToday: Array<{ productId: string; _sum: { quantity: Prisma.Decimal | null } }>,
-) {
-  if (soldToday.length === 0) return [];
-  const soldById = new Map(soldToday.map((s) => [s.productId, Number(s._sum.quantity ?? 0)]));
-  const productIds = [...soldById.keys()];
+type SoldRow = { productId: string; _sum: { quantity: Prisma.Decimal | null } };
 
-  // shortcut: un derivado de fusión no aparece (su stock vive en el canónico, que no tiene ventas propias); si hace falta, mapear derivado → canónico.
-  const [balances, settings] = await Promise.all([
+/**
+ * Lo vendido hoy con lo que queda y cuántos días alcanza al ritmo de las
+ * últimas 2 semanas. Un derivado de fusión (bolsa, lata) se cuenta en su
+ * canónico, que es donde vive el stock, convertido con conversionFactor.
+ */
+async function listSoldTodayStock(branchId: string, soldToday: SoldRow[], dayEnd: Date) {
+  if (soldToday.length === 0) return [];
+  const soldIds = soldToday.map((s) => s.productId);
+
+  const memberships = await prisma.productStockGroupMember.findMany({
+    where: { productId: { in: soldIds }, isActive: true, stockGroup: { isActive: true } },
+    select: {
+      stockGroup: { select: { products: { where: { isActive: true }, select: { productId: true, conversionFactor: true, isCanonical: true } } } },
+    },
+  });
+  // productId → producto que guarda el stock y factor a su unidad.
+  const toStock = new Map<string, { stockId: string; factor: number }>();
+  for (const { stockGroup } of memberships) {
+    const canonical = stockGroup.products.find((p) => p.isCanonical);
+    if (!canonical) continue;
+    const canonicalFactor = Number(canonical.conversionFactor) || 1;
+    for (const p of stockGroup.products) {
+      if (!toStock.has(p.productId)) toStock.set(p.productId, { stockId: canonical.productId, factor: Number(p.conversionFactor) / canonicalFactor });
+    }
+  }
+  const byStock = (rows: SoldRow[]) => {
+    const totals = new Map<string, number>();
+    for (const r of rows) {
+      const { stockId, factor } = toStock.get(r.productId) ?? { stockId: r.productId, factor: 1 };
+      totals.set(stockId, (totals.get(stockId) ?? 0) + Number(r._sum.quantity ?? 0) * factor);
+    }
+    return totals;
+  };
+  const todayByStock = byStock(soldToday);
+  const stockIds = [...todayByStock.keys()];
+
+  const [recent, balances, settings] = await Promise.all([
+    prisma.saleOrderLine.groupBy({
+      by: ["productId"],
+      where: {
+        productId: { in: [...new Set([...soldIds, ...toStock.keys()])] },
+        saleOrder: {
+          branchId,
+          status: { not: SaleOrderStatus.CANCELLED },
+          createdAt: { gte: new Date(dayEnd.getTime() - PACE_WINDOW_DAYS * 86_400_000), lt: dayEnd },
+        },
+      },
+      _sum: { quantity: true },
+    }),
+    // Sin derivados: uno cuyo grupo no tiene canónico activo quedaría siempre en 0.
     prisma.inventoryBalance.findMany({
-      where: { branchId, productId: { in: productIds }, product: { isActive: true, ...excludeDerivedStockGroupMembers() } },
+      where: { branchId, productId: { in: stockIds }, product: { isActive: true, ...excludeDerivedStockGroupMembers() } },
       select: { productId: true, quantityOnHand: true, product: { select: { name: true, unit: true } } },
     }),
     prisma.branchProductSetting.findMany({
-      where: { branchId, productId: { in: productIds } },
+      where: { branchId, productId: { in: stockIds } },
       select: { productId: true, reorderPoint: true, minStock: true },
     }),
   ]);
-  const settingById = new Map(
-    settings.map((s) => [
-      s.productId,
-      { reorderPoint: s.reorderPoint === null ? null : Number(s.reorderPoint), minStock: s.minStock === null ? null : Number(s.minStock) },
-    ]),
-  );
+  const recentByStock = byStock(recent);
+  const reorderById = new Map(settings.map((s) => [s.productId, s.reorderPoint ?? s.minStock]));
 
-  return pickLowStock(
-    balances.map((b) => ({
-      productId: b.productId,
-      name: b.product.name,
-      unit: b.product.unit,
-      onHand: Number(b.quantityOnHand),
-      threshold: lowStockThreshold(settingById.get(b.productId) ?? null),
-      soldToday: soldById.get(b.productId) ?? 0,
-    })),
+  return rankSoldStock(
+    balances.map((b) => {
+      const reorder = reorderById.get(b.productId);
+      return {
+        productId: b.productId,
+        name: b.product.name,
+        unit: b.product.unit,
+        onHand: Number(b.quantityOnHand),
+        soldToday: todayByStock.get(b.productId) ?? 0,
+        soldInWindow: recentByStock.get(b.productId) ?? 0,
+        reorderPoint: reorder == null ? null : Number(reorder),
+      };
+    }),
   );
 }

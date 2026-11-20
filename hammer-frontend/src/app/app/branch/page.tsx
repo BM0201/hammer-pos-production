@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
-import { money, fmtTimeShort } from "@/lib/format";
+import { money, fmtTimeShort, qty2 } from "@/lib/format";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { useSession } from "@/lib/client/session";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
@@ -28,6 +28,8 @@ import { components } from "@/styles/design-system";
  * sección llega solo si el usuario tiene permiso para lo que muestra. */
 
 type PendingKey = "payments" | "myDrafts" | "dispatches" | "transports" | "approvals";
+
+type StockLevel = "out" | "short" | "watch" | "ok";
 
 type DayView = {
   branchName: string;
@@ -51,7 +53,7 @@ type DayView = {
   };
   pending: Array<{ key: PendingKey; count: number }>;
   recentSales: Array<{ paymentId: string; orderNumber: string; amount: number; method: string; paidAt: string }>;
-  lowStock: Array<{ productId: string; name: string; unit: string; onHand: number; threshold: number; soldToday: number }>;
+  lowStock: Array<{ productId: string; name: string; unit: string; onHand: number; soldToday: number; daysOfCover: number | null; level: StockLevel }>;
 };
 
 const PENDING: Record<PendingKey, { label: (n: number) => string; href: string; icon: ReactNode }> = {
@@ -227,30 +229,50 @@ function RecentSalesSection({ recent }: { recent: DayView["recentSales"] }) {
   );
 }
 
-function LowStockSection({ items }: { items: DayView["lowStock"] }) {
+const LEVEL_BADGE: Record<StockLevel, string> = {
+  out: "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]",
+  short: "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]",
+  watch: "bg-[var(--color-warning-50)] text-[var(--color-warning-700)]",
+  ok: "bg-[var(--color-success-50)] text-[var(--color-success-700)]",
+};
+
+function coverLabel(p: DayView["lowStock"][number]): string {
+  if (p.level === "out") return "Agotado";
+  if (p.daysOfCover === null) return "Sin ritmo aún";
+  if (p.daysOfCover < 1) return "Menos de 1 día";
+  if (p.daysOfCover > 60) return "Más de 2 meses";
+  const days = Math.floor(p.daysOfCover);
+  return `${days} ${days === 1 ? "día" : "días"}`;
+}
+
+function StockSection({ items, className }: { items: DayView["lowStock"]; className?: string }) {
+  const toOrder = items.filter((p) => p.level === "out" || p.level === "short").length;
   return (
-    <Section title="Se está agotando" icon={<PackageX className="h-4 w-4" />}>
-      <p className="-mt-1 text-xs text-[var(--color-text-muted)]">Lo que se vendió hoy y quedó en su mínimo o debajo.</p>
+    <Section
+      title="Cuánto alcanza"
+      icon={<PackageX className="h-4 w-4" />}
+      className={className}
+      action={toOrder > 0 ? (
+        <span className="rounded-full bg-[var(--color-danger-50)] px-2.5 py-1 text-xs font-semibold text-[var(--color-danger-700)]">
+          {toOrder} por pedir
+        </span>
+      ) : null}
+    >
+      <p className="-mt-1 text-xs text-[var(--color-text-muted)]">Lo vendido hoy y para cuántos días queda, al ritmo de las últimas 2 semanas.</p>
       {items.length === 0 ? (
-        <p className="text-sm text-[var(--color-text-secondary)]">Nada de lo vendido hoy está bajo su mínimo.</p>
+        <p className="text-sm text-[var(--color-text-secondary)]">Todavía no se vende nada hoy.</p>
       ) : (
-        <ul className="divide-y divide-[var(--color-border)]">
+        <ul className="grid gap-x-6 sm:grid-cols-2">
           {items.map((p) => (
-            <li key={p.productId} className="flex items-center gap-3 py-2.5">
+            <li key={p.productId} className="flex items-center gap-3 border-b border-[var(--color-border)] py-2.5">
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-[var(--color-text)]">{p.name}</span>
+                <span className="block truncate text-sm font-medium text-[var(--color-text)]" title={p.name}>{p.name}</span>
                 <span className="text-xs text-[var(--color-text-muted)]">
-                  Vendidos hoy {p.soldToday} · mínimo {p.threshold}
+                  Hoy {qty2(p.soldToday)} · quedan {qty2(p.onHand)} {p.unit}
                 </span>
               </span>
-              <span
-                className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold tabular-nums ${
-                  p.onHand <= 0
-                    ? "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]"
-                    : "bg-[var(--color-warning-50)] text-[var(--color-warning-700)]"
-                }`}
-              >
-                {p.onHand <= 0 ? "Agotado" : `Quedan ${p.onHand} ${p.unit}`}
+              <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold tabular-nums ${LEVEL_BADGE[p.level]}`}>
+                {coverLabel(p)}
               </span>
             </li>
           ))}
@@ -331,12 +353,12 @@ export default function BranchDayPage() {
         ) : null}
       </header>
 
-      <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {data.cashSessions ? <CashSection sessions={data.cashSessions} /> : null}
         <PendingSection pending={data.pending} />
         <SalesSection sales={data.sales} />
         <RecentSalesSection recent={data.recentSales} />
-        <LowStockSection items={data.lowStock} />
+        <StockSection items={data.lowStock} className="md:col-span-2" />
       </div>
     </section>
   );

@@ -1,32 +1,37 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildPendingList, lowStockThreshold, pickLowStock, type LowStockCandidate } from "@/modules/dashboard/my-day";
+import { buildPendingList, rankSoldStock, stockLevel, type SoldStockInput } from "@/modules/dashboard/my-day";
 
-test("umbral: punto de reorden, luego mínimo, luego 5", () => {
-  assert.equal(lowStockThreshold({ reorderPoint: 20, minStock: 10 }), 20);
-  assert.equal(lowStockThreshold({ reorderPoint: null, minStock: 10 }), 10);
-  assert.equal(lowStockThreshold({ reorderPoint: null, minStock: null }), 5);
-  assert.equal(lowStockThreshold(null), 5);
-  assert.equal(lowStockThreshold({ reorderPoint: 0, minStock: 10 }), 0);
+const item = (over: Partial<SoldStockInput>): SoldStockInput => ({
+  productId: "p", name: "P", unit: "UN", onHand: 100, soldToday: 1, soldInWindow: 14, reorderPoint: null, ...over,
 });
 
-const item = (over: Partial<LowStockCandidate>): LowStockCandidate => ({
-  productId: "p", name: "P", unit: "UN", onHand: 1, threshold: 5, soldToday: 1, ...over,
+test("alcance: días al ritmo de 14 días y nivel por umbral", () => {
+  // 13 bolsas al día durante 14 días, quedan 20: alcanza 1.5 días (antes no salía por tener más de 5).
+  const [cemento] = rankSoldStock([item({ onHand: 20, soldToday: 13, soldInWindow: 182 })]);
+  assert.equal(cemento.daysOfCover, 1.5);
+  assert.equal(cemento.level, "short");
+  assert.equal(stockLevel(0, null, null), "out");
+  assert.equal(stockLevel(50, 30, 60), "short"); // bajo su punto de reorden aunque alcance
+  assert.equal(stockLevel(10, 5, null), "watch");
+  assert.equal(stockLevel(10, 20, null), "ok");
+  assert.equal(stockLevel(10, null, null), "ok");
 });
 
-test("stock bajo: deja fuera lo que está sobre su umbral y ordena por lo más vendido", () => {
-  const out = pickLowStock([
-    item({ productId: "sobra", onHand: 30, threshold: 5, soldToday: 50 }),
-    item({ productId: "justo", onHand: 5, threshold: 5, soldToday: 2 }),
-    item({ productId: "mas-vendido", onHand: 3, threshold: 5, soldToday: 9 }),
-    item({ productId: "agotado", onHand: 0, threshold: 5, soldToday: 2 }),
+test("alcance: siempre lista lo vendido hoy, lo más urgente primero", () => {
+  const out = rankSoldStock([
+    item({ productId: "sobra", onHand: 500, soldInWindow: 14 }),
+    item({ productId: "vigilar", onHand: 5, soldInWindow: 14 }),
+    item({ productId: "agotado", onHand: 0 }),
+    item({ productId: "pedir", onHand: 2, soldInWindow: 14 }),
   ]);
-  assert.deepEqual(out.map((c) => c.productId), ["mas-vendido", "agotado", "justo"]);
+  assert.deepEqual(out.map((c) => c.productId), ["agotado", "pedir", "vigilar", "sobra"]);
+  assert.equal(out[0].daysOfCover, 0);
 });
 
-test("stock bajo: respeta el límite", () => {
-  const many = Array.from({ length: 12 }, (_, i) => item({ productId: `p${i}`, soldToday: i }));
-  assert.equal(pickLowStock(many, 8).length, 8);
+test("alcance: respeta el límite", () => {
+  const many = Array.from({ length: 12 }, (_, i) => item({ productId: `p${i}` }));
+  assert.equal(rankSoldStock(many, 8).length, 8);
 });
 
 test("pendientes: solo con permiso y con algo que hacer, en orden fijo", () => {
