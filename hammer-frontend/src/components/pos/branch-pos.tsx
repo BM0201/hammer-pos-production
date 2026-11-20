@@ -384,7 +384,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
       />
 
       <section className="min-h-0 flex-1 overflow-hidden">
-        <div className="grid h-full min-h-0 grid-cols-1 grid-rows-[minmax(12rem,0.75fr)_minmax(0,1.25fr)] gap-4 lg:grid-cols-[0.9fr_1.1fr] lg:grid-rows-1">
+        <div className="grid h-full min-h-0 grid-cols-1 grid-rows-[minmax(12rem,50svh)_auto] gap-4 lg:grid-cols-[0.9fr_1.1fr] lg:grid-rows-1">
           <PosCatalogPanel
             search={search}
             setSearch={setSearch}
@@ -433,15 +433,15 @@ export function BranchPos({ branchId }: { branchId: string }) {
                       <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>{money(line.unitPrice)} × {line.quantity}</p>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => offlineCart.updateQuantity(line.lineId, line.quantity - 1)} className="rounded p-1 hover:bg-[var(--color-surface-raised)]">
-                        <Minus className="h-3 w-3" />
+                      <button type="button" aria-label="Quitar uno" onClick={() => offlineCart.updateQuantity(line.lineId, line.quantity - 1)} className="rounded p-1.5 hover:bg-[var(--color-surface-raised)] pointer-coarse:p-3">
+                        <Minus className="h-4 w-4" />
                       </button>
                       <span className="w-6 text-center text-sm tabular-nums">{line.quantity}</span>
-                      <button onClick={() => offlineCart.updateQuantity(line.lineId, line.quantity + 1)} className="rounded p-1 hover:bg-[var(--color-surface-raised)]">
-                        <Plus className="h-3 w-3" />
+                      <button type="button" aria-label="Agregar uno" onClick={() => offlineCart.updateQuantity(line.lineId, line.quantity + 1)} className="rounded p-1.5 hover:bg-[var(--color-surface-raised)] pointer-coarse:p-3">
+                        <Plus className="h-4 w-4" />
                       </button>
-                      <button onClick={() => offlineCart.removeLine(line.lineId)} className="rounded p-1 ml-1" style={{ color: "var(--color-danger-500)" }}>
-                        <Trash2 className="h-3 w-3" />
+                      <button type="button" aria-label="Eliminar línea" onClick={() => offlineCart.removeLine(line.lineId)} className="rounded p-1.5 ml-1 pointer-coarse:p-3" style={{ color: "var(--color-danger-500)" }}>
+                        <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
                     <p className="text-sm font-bold tabular-nums w-20 text-right shrink-0" style={{ color: "var(--color-text)" }}>

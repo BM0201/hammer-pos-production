@@ -176,7 +176,7 @@ export function PosCatalogPanel({
       <div className="flex flex-shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
         <h2 className="text-sm font-semibold text-[var(--color-text)]">Catálogo</h2>
         {showingTopSelling && !search.trim() ? (
-          <span className="rounded-full bg-[var(--color-success-100)] px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-[var(--color-success-700)]">
+          <span className="rounded-full bg-[var(--color-success-100)] px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-success-700)]">
             Top vendidos
           </span>
         ) : null}
@@ -236,7 +236,7 @@ export function PosCatalogPanel({
                         {group.family} · {group.items.length} producto{group.items.length === 1 ? "" : "s"}
                       </span>
                       {group.categoryName ? (
-                        <span className="rounded-full bg-[var(--color-surface-muted)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-text-secondary)]">
+                        <span className="rounded-full bg-[var(--color-surface-muted)] px-2 py-0.5 text-[0.6875rem] font-medium text-[var(--color-text-secondary)]">
                           {group.categoryName}
                         </span>
                       ) : null}

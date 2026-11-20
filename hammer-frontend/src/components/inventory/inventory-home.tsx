@@ -349,7 +349,7 @@ function AttentionItemRow({ item }: { item: AttentionItem }) {
       </div>
       <div className="flex shrink-0 items-center gap-3">
         <span className="text-sm font-bold text-[var(--color-text)]">{item.count.toLocaleString("es-NI")}</span>
-        <Link href={item.actionHref as Route} className="text-xs font-semibold text-[var(--color-info-600)] hover:underline">
+        <Link href={item.actionHref as Route} className="text-xs font-semibold text-[var(--color-info-700)] hover:underline">
           {item.actionLabel}
         </Link>
       </div>

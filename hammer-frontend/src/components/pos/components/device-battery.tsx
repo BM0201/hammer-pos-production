@@ -67,7 +67,7 @@ export function DeviceBattery() {
     >
       <Icon className="h-4 w-4" aria-hidden />
       <span className="text-[13px] font-semibold tabular-nums">{percent}%</span>
-      {detail ? <span className="text-[11px] text-[var(--color-sidebar-section)]">{detail}</span> : null}
+      {detail ? <span className="hidden text-[11px] text-[var(--color-sidebar-section)] sm:inline">{detail}</span> : null}
     </div>
   );
 }

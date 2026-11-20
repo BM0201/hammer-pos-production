@@ -108,7 +108,7 @@ function InventoryLookupContent() {
       {notFound && !loading ? (
         <div className="rounded-xl border border-[var(--color-border-strong)] p-4 text-sm text-[var(--color-text-muted)]">
           No encontramos ningún producto con ese código — probá buscando por nombre, o revisá si el código ya está registrado en{" "}
-          <Link href={"/app/master/catalog/barcodes" as Route} className="font-semibold text-[var(--color-info-600)] hover:underline">Códigos de barra</Link>.
+          <Link href={"/app/master/catalog/barcodes" as Route} className="font-semibold text-[var(--color-info-700)] hover:underline">Códigos de barra</Link>.
         </div>
       ) : null}
 
@@ -120,7 +120,7 @@ function InventoryLookupContent() {
               <p className="truncate text-sm font-semibold text-[var(--color-text)]">{product.name}</p>
               <p className="font-mono text-xs text-[var(--color-text-muted)]">{product.sku}{product.barcode ? ` · ${product.barcode}` : ""} · {product.unit}</p>
             </div>
-            <Link href={`/app/master/catalog-inventory/products/${product.id}` as Route} className="ml-auto shrink-0 text-xs font-semibold text-[var(--color-info-600)] hover:underline">Ver ficha →</Link>
+            <Link href={`/app/master/catalog-inventory/products/${product.id}` as Route} className="ml-auto shrink-0 text-xs font-semibold text-[var(--color-info-700)] hover:underline">Ver ficha →</Link>
           </div>
 
           <div className="mt-4 divide-y divide-[var(--color-border)]">

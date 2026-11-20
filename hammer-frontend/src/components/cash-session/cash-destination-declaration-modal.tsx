@@ -224,7 +224,7 @@ export function CashDestinationDeclarationModal({
                 </select>
               )}
             </div>
-            {needsHandOverPerson && <p className="mt-1 text-[0.65rem] text-[var(--color-danger-600)]">Falta quién recibe.</p>}
+            {needsHandOverPerson && <p className="mt-1 text-[0.6875rem] text-[var(--color-danger-600)]">Falta quién recibe.</p>}
           </div>
 
           <div className="rounded-lg border border-[var(--color-border)] p-3">
@@ -250,11 +250,11 @@ export function CashDestinationDeclarationModal({
                     </option>
                   ))}
                 </select>
-                <p className="mt-1 text-[0.65rem] text-[var(--color-text-soft)]">Se acreditará en C$ (córdobas).</p>
+                <p className="mt-1 text-[0.6875rem] text-[var(--color-text-soft)]">Se acreditará en C$ (córdobas).</p>
               </>
             )}
-            {needsDepositCarrier && <p className="mt-1 text-[0.65rem] text-[var(--color-danger-600)]">Falta quién lo lleva.</p>}
-            {needsDepositAccount && <p className="mt-1 text-[0.65rem] text-[var(--color-danger-600)]">Falta la cuenta destino.</p>}
+            {needsDepositCarrier && <p className="mt-1 text-[0.6875rem] text-[var(--color-danger-600)]">Falta quién lo lleva.</p>}
+            {needsDepositAccount && <p className="mt-1 text-[0.6875rem] text-[var(--color-danger-600)]">Falta la cuenta destino.</p>}
           </div>
 
           <div className="rounded-lg border border-[var(--color-border)] p-3">
@@ -283,7 +283,7 @@ export function CashDestinationDeclarationModal({
               </div>
             )}
             {belowPostponed && (
-              <p className="mt-1.5 text-[0.65rem] text-[var(--color-warning-700)]">
+              <p className="mt-1.5 text-[0.6875rem] text-[var(--color-warning-700)]">
                 Esto es menos de lo que ya declaraste pospuesto (C$ {postponedTotal.toFixed(2)}) — estás cambiando lo que dijiste antes.
               </p>
             )}

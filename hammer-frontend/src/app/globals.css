@@ -297,7 +297,7 @@
   --color-page-bg:#1A1917; --color-surface:#232120; --color-surface-muted:#1F1D1B; --color-surface-alt:#2C2A28;
   --color-surface-raised:#2C2A28; --color-surface-hover:#2C2A28;
   --color-border:#38352F; --color-border-strong:#4A463F; --color-border-mid:#4A463F;
-  --color-text:#F5F3EF; --color-text-secondary:#D6D2CA; --color-text-muted:#A8A39A; --color-text-soft:#847F76;
+  --color-text:#F5F3EF; --color-text-secondary:#D6D2CA; --color-text-muted:#A8A39A; --color-text-soft:#938E85;
   --shadow-card:0 1px 3px rgba(0,0,0,.45);
   --shadow-card-hover:0 6px 18px -2px rgba(0,0,0,.55),0 2px 6px -2px rgba(0,0,0,.35);
   --shadow-xs:0 1px 2px rgba(0,0,0,.40);
@@ -305,7 +305,7 @@
   --shadow-modal:0 28px 56px -12px rgba(0,0,0,.70),0 12px 24px -8px rgba(0,0,0,.40);
   /* sidebar oscuro */
   --color-sidebar:#1A1917; --color-sidebar-hover:#2C2A28; --color-sidebar-active:#232120;
-  --color-sidebar-text:#D6D2CA; --color-sidebar-text-active:#F5F3EF; --color-sidebar-section:#847F76;
+  --color-sidebar-text:#D6D2CA; --color-sidebar-text-active:#F5F3EF; --color-sidebar-section:#9A958C;
   --sidebar-item-icon:#A8A39A; --sidebar-item-icon-hover:#F5F3EF;
   /* master text anchor #60A5FA */
   --color-master-50:color-mix(in srgb,#60A5FA 14%,#232120); --color-master-100:color-mix(in srgb,#60A5FA 22%,#232120);
@@ -355,6 +355,11 @@
 
 /* ── Semantic -500/-600 tokens: override for legibility on charcoal ── */
 [data-theme="dark"] {
+  /* Botones rellenos: los -600/-700 de arriba se aclaran para usarse como TEXTO;
+     con texto blanco encima quedaban en 1.6–2.8:1. Fondos propios, ≥ 5:1 con blanco. */
+  --btn-primary-bg: #0E7490; --btn-primary-hover: #155E75;
+  --btn-success-bg: #047857; --btn-success-hover: #065F46;
+  --btn-danger-bg: #B91C1C; --btn-danger-hover: #991B1B;
   --color-success-500: #34D399; --color-success-600: #34D399;
   --color-warning-500: #FBBF24; --color-warning-600: #FBBF24;
   --color-danger-500:  #F87171; --color-danger-600:  #F87171;
@@ -440,7 +445,8 @@ input:disabled {
   cursor: not-allowed;
 }
 
-a { color: inherit; text-decoration: none; }
+/* En capa base: fuera de capa le ganaba a text-white y demás clases de los enlaces. */
+@layer base { a { color: inherit; text-decoration: none; } }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -519,7 +525,7 @@ a { color: inherit; text-decoration: none; }
 
 /* Primary – default (for shared pages) */
 .hm-btn-primary {
-  background: linear-gradient(135deg, var(--color-info-600), var(--color-info-700));
+  background: linear-gradient(135deg, var(--btn-primary-hover, var(--color-info-600)), var(--btn-primary-bg, var(--color-info-700)));
   color: #fff;
   box-shadow: 0 1px 3px rgb(37 99 235 / 0.3);
 }

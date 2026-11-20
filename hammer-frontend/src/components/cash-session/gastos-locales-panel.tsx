@@ -101,7 +101,7 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
         ) : expenses.length === 0 ? (
           <div className="px-4 py-5 text-center">
             <p className="text-xs text-[var(--color-text-muted)]">Sin gastos operativos registrados hoy.</p>
-            <p className="mt-1 text-[0.65rem] text-[var(--color-text-soft)]">
+            <p className="mt-1 text-[0.6875rem] text-[var(--color-text-soft)]">
               Los gastos que registres arriba aparecen aquí al instante y se limpian solos al cerrar el día.
               El día de pago (15 y fin de mes) también verás aquí la planilla, ya posteada por Master.
             </p>
@@ -112,7 +112,7 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
             return (
               <div key={cat}>
                 <div className="flex items-center justify-between bg-[var(--color-surface-muted)] px-4 py-2">
-                  <span className={`rounded border px-1.5 py-0.5 text-[0.65rem] font-semibold ${CATEGORY_COLOR[cat] ?? CATEGORY_COLOR.OTHER}`}>
+                  <span className={`rounded border px-1.5 py-0.5 text-[0.6875rem] font-semibold ${CATEGORY_COLOR[cat] ?? CATEGORY_COLOR.OTHER}`}>
                     {CATEGORY_LABELS[cat] ?? cat}
                   </span>
                   <span className="text-xs font-bold text-[var(--color-text-secondary)]">
@@ -124,14 +124,14 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
                     <div className="min-w-0">
                       <p className="truncate text-sm text-[var(--color-text)]">{exp.description}</p>
                       {exp.employee && (
-                        <p className="text-[0.65rem] text-[var(--color-text-muted)]">{exp.employee.fullName}</p>
+                        <p className="text-[0.6875rem] text-[var(--color-text-muted)]">{exp.employee.fullName}</p>
                       )}
                       {exp.isAutoCalculated && (
-                        <span className="text-[0.6rem] text-[var(--color-info-600)]">Calculado automáticamente</span>
+                        <span className="text-[0.6875rem] text-[var(--color-info-600)]">Calculado automáticamente</span>
                       )}
                       {exp.category === "PAYROLL" && exp.disbursementCashApplied != null && (
                         <span
-                          className={`ml-1.5 inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.6rem] font-semibold ${
+                          className={`ml-1.5 inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.6875rem] font-semibold ${
                             exp.disbursementCashApplied
                               ? "border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]"
                               : "border-[var(--color-warning-200)] bg-[var(--color-warning-50)] text-[var(--color-warning-700)]"

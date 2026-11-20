@@ -29,14 +29,14 @@ function pillState(activeCashSessionId: string | null, cashSessionProblem?: Cash
   return { label: "Caja cerrada", dot: "bg-[var(--color-sidebar-section)]" };
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, hideOnPhone = false }: { label: string; value: string; hideOnPhone?: boolean }) {
   return (
     <div
-      className="flex flex-col border-l border-[var(--color-sidebar-hover)] px-4"
+      className={`${hideOnPhone ? "hidden sm:flex" : "flex"} flex-col whitespace-nowrap border-l border-[var(--color-sidebar-hover)] px-2.5 sm:px-4`}
       style={{ lineHeight: 1.2 }}
     >
-      <span className="text-[10.5px] text-[var(--color-sidebar-section)]">{label}</span>
-      <span className="text-[15px] font-semibold tabular-nums text-[var(--color-sidebar-text-active)]">
+      <span className="text-[11px] text-[var(--color-sidebar-section)]">{label}</span>
+      <span className="text-[14px] font-semibold tabular-nums text-[var(--color-sidebar-text-active)] sm:text-[15px]">
         {value}
       </span>
     </div>
@@ -52,13 +52,17 @@ export function PosSummaryCards({
   return (
     <div className="flex items-center" data-testid="pos-summary-chips">
       {/* Caja pill */}
-      <div className="mr-3 inline-flex items-center gap-2 rounded-full border border-[var(--color-sidebar-hover)] bg-[var(--color-sidebar)] px-3 py-1.5 text-[12.5px] text-[var(--color-sidebar-text)]">
-        <span className={`h-2 w-2 flex-shrink-0 rounded-full ${pill.dot}`} />
-        <span>{pill.label}</span>
+      {/* En teléfono solo el punto: el texto no cabe junto a las cifras. */}
+      <div
+        className="mr-2 inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--color-sidebar-hover)] bg-[var(--color-sidebar)] px-2.5 py-1.5 text-[12.5px] text-[var(--color-sidebar-text)] sm:mr-3 sm:px-3"
+        title={pill.label}
+      >
+        <span className={`h-2.5 w-2.5 flex-shrink-0 rounded-full ${pill.dot}`} aria-hidden />
+        <span className="sr-only sm:not-sr-only">{pill.label}</span>
       </div>
 
       <Stat label="Ventas hoy" value={money(realtimeSummary?.paidSalesTotal ?? 0)} />
-      <Stat label="Cobradas" value={String(realtimeSummary?.paidSalesCount ?? 0)} />
+      <Stat label="Cobradas" value={String(realtimeSummary?.paidSalesCount ?? 0)} hideOnPhone />
       <Stat label="Por cobrar" value={money(realtimeSummary?.pendingPaymentTotal ?? 0)} />
     </div>
   );

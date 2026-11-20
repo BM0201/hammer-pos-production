@@ -7,6 +7,7 @@ import { useCashSessionStatus } from "@/lib/client/use-cash-session-status";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { components } from "@/styles/design-system";
 import { showToast } from "@/components/ui/toast";
 import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
 import { apiFetch } from "@/lib/client/api";
@@ -224,12 +225,13 @@ export function CashierPayments({ branchId }: { branchId: string }) {
         {!cashSessionState.hasOpenSession ? (
           <Link
             href={"/app/branch/cash" as Route}
-            className="text-xs font-semibold text-[var(--color-info-600)] underline hover:text-[var(--color-info-700)]"
+            className={`${components.button.base} ${components.button.secondary} ${components.button.sizes.sm}`}
           >
             Ir a Caja
           </Link>
         ) : null}
-        <span className="ml-auto text-[11px] text-[var(--color-text-muted)]">
+        {/* Atajos de teclado: en tablet o teléfono no hay F1–F3. */}
+        <span className="ml-auto text-xs text-[var(--color-text-muted)] pointer-coarse:hidden">
           F1 efectivo · F2 tarjeta · F3 transferencia
         </span>
       </div>
@@ -247,7 +249,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
           La caja está en conciliación. Termina el cierre desde{" "}
           <Link
             href={"/app/branch/cash" as Route}
-            className="font-semibold text-[var(--color-info-600)] underline hover:text-[var(--color-info-700)]"
+            className="font-semibold text-[var(--color-info-700)] underline"
           >
             Caja
           </Link>{" "}
@@ -258,7 +260,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
           La caja fue cerrada automáticamente y requiere revisión. Ve a{" "}
           <Link
             href={"/app/branch/cash" as Route}
-            className="font-semibold text-[var(--color-info-600)] underline hover:text-[var(--color-info-700)]"
+            className="font-semibold text-[var(--color-info-700)] underline"
           >
             Caja
           </Link>{" "}
@@ -269,7 +271,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
           La caja está cerrada. Debes abrir una sesión desde{" "}
           <Link
             href={"/app/branch/cash" as Route}
-            className="font-semibold text-[var(--color-info-600)] underline hover:text-[var(--color-info-700)]"
+            className="font-semibold text-[var(--color-info-700)] underline"
           >
             Caja
           </Link>{" "}
@@ -342,7 +344,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
                     <tr key={line.id} className="border-b border-[var(--color-border)] transition-colors hover:bg-[var(--color-surface-alt)]">
                       <td className="px-3 py-2">
                         <div className="font-medium text-[var(--color-text)]">{line.product?.name ?? "—"}</div>
-                        {line.product?.sku && <div className="text-[0.65rem] text-[var(--color-text-soft)]">SKU: {line.product.sku}</div>}
+                        {line.product?.sku && <div className="text-[0.6875rem] text-[var(--color-text-soft)]">SKU: {line.product.sku}</div>}
                       </td>
                       <td className="px-2 py-2 text-right font-mono text-xs">{Number(line.quantity).toFixed(2)}</td>
                       <td className="px-2 py-2 text-right font-mono text-xs">C$ {Number(line.unitPrice).toFixed(2)}</td>

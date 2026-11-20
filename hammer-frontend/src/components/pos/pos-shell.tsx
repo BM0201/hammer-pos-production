@@ -286,7 +286,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
                 <p className="text-[0.75rem] font-semibold truncate" style={{ color: "var(--color-sidebar-text-active)" }}>
                   {session.username}
                 </p>
-                <p className="text-[0.625rem] truncate" style={{ color: "var(--color-sidebar-section)" }}>
+                <p className="text-[0.6875rem] truncate" style={{ color: "var(--color-sidebar-section)" }}>
                   {roleCfg.label}
                 </p>
               </div>
@@ -326,7 +326,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
                 <p className="text-[0.75rem] font-semibold truncate" style={{ color: "var(--color-sidebar-text-active)" }}>
                   {session.username}
                 </p>
-                <p className="text-[0.625rem]" style={{ color: "var(--color-sidebar-section)" }}>
+                <p className="text-[0.6875rem]" style={{ color: "var(--color-sidebar-section)" }}>
                   Cuenta {roleCfg.label}
                 </p>
               </div>
@@ -357,7 +357,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
       {/* Mobile hamburger */}
       <button
         onClick={() => setMobileOpen(true)}
-        className="md:hidden fixed top-3 left-3 z-50 p-2 rounded-lg shadow-lg bg-[var(--color-sidebar)] text-white"
+        className="md:hidden fixed top-0.5 left-1 z-50 flex h-11 w-11 items-center justify-center rounded-lg bg-[var(--color-sidebar)] text-white"
         aria-label="Abrir menú"
         aria-expanded={mobileOpen}
       >
@@ -384,7 +384,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
       >
         <button
           onClick={closeMobile}
-          className="absolute top-3 right-3 p-1 rounded-lg text-[var(--color-sidebar-text)] hover:text-[var(--color-sidebar-text-active)] hover:bg-[var(--color-sidebar-hover)]"
+          className="absolute top-1.5 right-1.5 p-2.5 rounded-lg text-[var(--color-sidebar-text)] hover:text-[var(--color-sidebar-text-active)] hover:bg-[var(--color-sidebar-hover)]"
           aria-label="Cerrar menú"
         >
           <X className="h-5 w-5" />
@@ -432,7 +432,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Topbar */}
         <header
-          className="flex h-12 shrink-0 items-center gap-3 border-b border-white/10 bg-[var(--color-sidebar)] px-3"
+          className="flex h-12 shrink-0 items-center gap-2 border-b border-white/10 bg-[var(--color-sidebar)] pl-14 pr-2 md:gap-3 md:px-3"
           data-testid="pos-topbar"
         >
           <div className="flex-1 overflow-hidden">

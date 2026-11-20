@@ -156,7 +156,7 @@ export function ChargeDialog({ open, onClose, total, branchId, onConfirm, isSubm
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-[var(--color-text-soft)] hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-text)]"
+            className="rounded-lg p-1.5 text-[var(--color-text-soft)] hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-text)] pointer-coarse:p-3"
             aria-label="Cerrar (Esc)"
             title="Esc"
           >

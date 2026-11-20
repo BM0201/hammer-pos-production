@@ -6,10 +6,10 @@
 export const components = {
   button: {
     base: "inline-flex items-center justify-center font-semibold rounded-xl transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-45 disabled:cursor-not-allowed disabled:shadow-none min-h-[42px] min-w-[42px] active:scale-[0.98]",
-    primary: "bg-[var(--color-info-700)] hover:bg-[var(--color-info-600)] text-white focus:ring-[var(--color-info-500)] shadow-md shadow-blue-900/15 hover:shadow-lg hover:shadow-blue-900/20",
+    primary: "bg-[var(--btn-primary-bg,var(--color-info-700))] hover:bg-[var(--btn-primary-hover,var(--color-info-600))] text-white focus:ring-[var(--color-info-500)] shadow-md shadow-blue-900/15 hover:shadow-lg hover:shadow-blue-900/20",
     secondary: "bg-[var(--color-surface)] hover:bg-[var(--color-surface-muted)] text-[var(--color-text)] focus:ring-[var(--color-text-soft)] border-[1.5px] border-[var(--color-border)] shadow-sm hover:shadow-md hover:border-[var(--color-border-strong)]",
-    danger: "bg-[var(--color-danger-600)] hover:bg-[var(--color-danger-700)] text-white focus:ring-[var(--color-danger-500)] shadow-md shadow-red-900/15 hover:shadow-lg hover:shadow-red-900/20",
-    success: "bg-[var(--color-success-600)] hover:bg-[var(--color-success-700)] text-white focus:ring-[var(--color-success-500)] shadow-md shadow-green-900/15 hover:shadow-lg hover:shadow-green-900/20",
+    danger: "bg-[var(--btn-danger-bg,var(--color-danger-600))] hover:bg-[var(--btn-danger-hover,var(--color-danger-700))] text-white focus:ring-[var(--color-danger-500)] shadow-md shadow-red-900/15 hover:shadow-lg hover:shadow-red-900/20",
+    success: "bg-[var(--btn-success-bg,var(--color-success-600))] hover:bg-[var(--btn-success-hover,var(--color-success-700))] text-white focus:ring-[var(--color-success-500)] shadow-md shadow-green-900/15 hover:shadow-lg hover:shadow-green-900/20",
     ghost: "bg-transparent hover:bg-[var(--color-surface-alt)] text-[var(--color-text-secondary)] focus:ring-[var(--color-text-soft)]",
     sizes: {
       sm: "px-3 py-1.5 text-sm gap-1.5",

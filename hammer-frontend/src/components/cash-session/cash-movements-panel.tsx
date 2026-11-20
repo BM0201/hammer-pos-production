@@ -662,7 +662,7 @@ export function CashMovementsPanel({
               >
                 ← Atrás
               </button>
-              <span className="text-[0.65rem] text-[var(--color-text-soft)]">Esc también vuelve</span>
+              <span className="text-[0.6875rem] text-[var(--color-text-soft)] pointer-coarse:hidden">Esc también vuelve</span>
             </div>
           )}
         </div>
@@ -683,7 +683,7 @@ export function CashMovementsPanel({
                 : null;
             return (
               <div key={m.id} className="flex items-start gap-3 px-4 py-3">
-                <span className={`mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[0.65rem] font-semibold ${TYPE_COLOR[m.type] ?? TYPE_COLOR.CORRECTION}`}>
+                <span className={`mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[0.6875rem] font-semibold ${TYPE_COLOR[m.type] ?? TYPE_COLOR.CORRECTION}`}>
                   {TYPE_LABELS[m.type] ?? m.type}
                 </span>
                 <div className="min-w-0 flex-1">
@@ -693,7 +693,7 @@ export function CashMovementsPanel({
                   </div>
                   {categoryLine && <p className="mt-0.5 truncate text-xs text-[var(--color-text-muted)]">{m.reason}</p>}
                   {m.notes && <p className="mt-0.5 truncate text-xs text-[var(--color-text-muted)]">{m.notes}</p>}
-                  <p className="mt-0.5 text-[0.65rem] text-[var(--color-text-soft)]">
+                  <p className="mt-0.5 text-[0.6875rem] text-[var(--color-text-soft)]">
                     {m.createdBy?.fullName ?? m.createdBy?.username ?? "Sistema"} ·{" "}
                     {new Date(m.createdAt).toLocaleString("es-NI", { hour12: true, hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short" })}
                     {(m.operatingExpense || m.cashPurchase) && (hasReceipt ? " · ✓ con recibo" : " · sin recibo")}

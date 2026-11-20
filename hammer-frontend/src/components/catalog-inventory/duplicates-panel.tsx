@@ -471,7 +471,7 @@ export function MergeWizard({ pair, onClose, onDone }: { pair: Pick<DuplicatePai
                 <>
                   <Check className="h-10 w-10 mx-auto mb-3 text-[var(--color-success-600)]" />
                   <p className="text-sm font-semibold text-[var(--color-text)]">Unificado correctamente.</p>
-                  <Link href={`/app/master/catalog-inventory/products/${survivor.id}` as Route} className="mt-2 inline-block text-sm text-[var(--color-info-600)] hover:underline">
+                  <Link href={`/app/master/catalog-inventory/products/${survivor.id}` as Route} className="mt-2 inline-block text-sm text-[var(--color-info-700)] hover:underline">
                     Ver {survivor.name}
                   </Link>
                 </>

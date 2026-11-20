@@ -9,6 +9,7 @@ import { getActiveBranchId } from "@/lib/client/active-branch";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { components } from "@/styles/design-system";
 import toast from "react-hot-toast";
 import { money, fmtDayMonth, fmtTimeShort, maskAccountNumber } from "@/lib/format";
 
@@ -197,7 +198,7 @@ export default function CashDestinationPage() {
             <Wallet className="mx-auto mb-2 h-6 w-6 text-[var(--color-text-soft)]" aria-hidden="true" />
             <p className="text-sm font-semibold text-[var(--color-text)]">No hay caja abierta</p>
             <p className="mt-1 text-xs text-[var(--color-text-muted)]">Este módulo depende de una sesión de caja abierta.</p>
-            <Link href="/app/branch/cash" className="mt-3 inline-block text-xs font-semibold text-[var(--color-pay)] hover:underline">
+            <Link href="/app/branch/cash" className={`${components.button.base} ${components.button.secondary} ${components.button.sizes.sm} mt-4`}>
               Ir a Caja
             </Link>
           </div>

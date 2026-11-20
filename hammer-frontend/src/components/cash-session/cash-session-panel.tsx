@@ -536,7 +536,7 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
       {activeSession && (
         <div className="flex items-center gap-3 pt-1">
           <div className="flex-1 border-t border-[var(--color-border)]" />
-          <span className="text-[0.625rem] font-bold uppercase tracking-widest text-[var(--color-text-soft)]">Fin de turno</span>
+          <span className="text-[0.6875rem] font-bold uppercase tracking-widest text-[var(--color-text-soft)]">Fin de turno</span>
           <div className="flex-1 border-t border-[var(--color-border)]" />
         </div>
       )}

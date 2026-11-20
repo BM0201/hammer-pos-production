@@ -416,7 +416,7 @@ function LineItem({
           data-testid={`payment-composer-amount-${line.method}`}
         />
         {removable && (
-          <button type="button" onClick={onRemove} className="shrink-0 rounded p-1 text-[var(--color-text-soft)] hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)]" aria-label="Quitar">
+          <button type="button" onClick={onRemove} className="shrink-0 rounded p-1 pointer-coarse:p-3 text-[var(--color-text-soft)] hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)]" aria-label="Quitar">
             <X className="h-3.5 w-3.5" />
           </button>
         )}
@@ -445,7 +445,7 @@ function LineItem({
 
               <div className="mb-2.5 grid grid-cols-4 gap-1.5">
                 {quickAmounts.map((amt, i) => (
-                  <button key={amt} onClick={() => onChange({ receivedRaw: String(amt) })} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-pay)] hover:text-[var(--color-pay)] transition-colors" data-testid="payment-composer-quick-amount">
+                  <button key={amt} onClick={() => onChange({ receivedRaw: String(amt) })} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] pointer-coarse:py-3 pointer-coarse:text-sm hover:border-[var(--color-pay)] hover:text-[var(--color-pay)] transition-colors" data-testid="payment-composer-quick-amount">
                     {i === 0 ? "Exacto" : `C$${amt}`}
                   </button>
                 ))}
@@ -472,7 +472,7 @@ function LineItem({
                     onChange={(e) => onChange({ receivedRaw: e.target.value })}
                     autoFocus
                   />
-                  <button type="button" onClick={() => setShowKeypad(true)} className="shrink-0 rounded-lg border border-[var(--color-border)] px-2.5 py-2 text-xs font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]">
+                  <button type="button" onClick={() => setShowKeypad(true)} className="shrink-0 rounded-lg border border-[var(--color-border)] px-2.5 py-2 text-xs font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)] pointer-coarse:py-3">
                     Mostrar teclado
                   </button>
                 </div>
@@ -541,7 +541,7 @@ function CurrencyChip({ currency }: { currency: string }) {
   return (
     <span
       className={[
-        "inline-flex items-center rounded-full px-2 py-0.5 text-[0.625rem] font-bold uppercase tracking-wide",
+        "inline-flex items-center rounded-full px-2 py-0.5 text-[0.6875rem] font-bold uppercase tracking-wide",
         isUsd ? "bg-[var(--color-success-50)] text-[var(--color-success-700)]" : "bg-[var(--color-info-50)] text-[var(--color-info-700)]",
       ].join(" ")}
     >
@@ -585,7 +585,7 @@ function AccountPickerStep({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-none items-center gap-2.5 pb-3">
-        <button type="button" onClick={onDone} className="rounded-lg p-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]" aria-label="Volver" data-testid="payment-composer-account-back">
+        <button type="button" onClick={onDone} className="rounded-lg p-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)] pointer-coarse:p-3" aria-label="Volver" data-testid="payment-composer-account-back">
           <ChevronLeft className="h-4.5 w-4.5" />
         </button>
         <div>
