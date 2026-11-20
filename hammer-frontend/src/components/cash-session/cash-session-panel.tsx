@@ -9,7 +9,9 @@ import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { CashMovementsPanel } from "./cash-movements-panel";
 import { CashDestinationDeclarationModal } from "./cash-destination-declaration-modal";
 import { GastosLocalesPanel } from "./gastos-locales-panel";
-import { CashCount } from "./cash-count";
+import { CashCount, countDifference, type CashCountResult } from "./cash-count";
+import { usePosCashContext } from "@/components/pos/hooks/use-pos-cash-context";
+import { closeReminderPhase } from "@/components/pos/components/cash-close-reminder";
 
 type CashBox = {
   id: string;
@@ -25,7 +27,13 @@ type ActiveSession = {
   openedBy?: { username: string; fullName: string };
   /** GET .../active?withExpected=1: lo que debe haber en la gaveta y de dónde sale. */
   expected?: { openingAmount: number; cashPayments: number; movementsNet: number; expectedCash: number };
+  /** Desde 20 min antes del cierre y mientras se cuenta: la API no manda el esperado (conteo a ciegas). */
+  blindCount?: boolean;
 };
+
+type CloseResult = { counted: number; expected: number; difference: number; sales: number; cashFund: number; opening: number | null };
+type LastCashFund = { amount: number; note: string | null; declaredAt: string };
+type Declaration = { cashSessionId: string; countedAmount: number; cashFund?: { amount: number; note: string } | null };
 
 type AutoClosedSession = {
   id: string;
@@ -134,8 +142,24 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   // Pedir el cierre no tiene marcha atrás: el primer toque solo pregunta.
   const [confirmingClose, setConfirmingClose] = useState(false);
-  // Se abre justo después de cerrar; "Después" queda disponible y nunca bloquea el cierre, que ya ocurrió.
-  const [declaration, setDeclaration] = useState<{ cashSessionId: string; countedAmount: number } | null>(null);
+  // Hora del cierre automático de hoy (la trae el contexto de la caja) y la hora del último refresco.
+  const posContext = usePosCashContext(branchId).posContext;
+  const closeAt = posContext?.cashAutoCloseAt ?? null;
+  const countFrom = posContext?.cashCountFrom ?? null;
+  const [now, setNow] = useState(() => Date.now());
+  // Desde el aviso previo al cierre ("Contar ahora") se llega con ?cerrar=1: abre la confirmación una vez.
+  const [wantsClose, setWantsClose] = useState(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("cerrar") !== "1") return;
+    setWantsClose(true);
+    window.history.replaceState(null, "", window.location.pathname);
+  }, []);
+  // Se abre justo después de cerrar y no se puede saltar; si se recarga, vuelve (GET after-close).
+  const [declaration, setDeclaration] = useState<Declaration | null>(null);
+  // Sencillo contado en el último cierre: con eso se abre la caja.
+  const [lastCashFund, setLastCashFund] = useState<LastCashFund | null>(null);
+  // Tras cerrar: lo contado contra lo que debía haber. Recién aquí se ve la diferencia.
+  const [closeResult, setCloseResult] = useState<CloseResult | null>(null);
 
   const selectedCashBox = cashBoxes.find((box) => box.id === selectedCashBoxId) ?? null;
 
@@ -174,8 +198,23 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
       const { message, code } = extractApiError(activeJson);
       setNotice({ tone: "error", text: mapSessionMessage(message, code) });
     } else {
-      setSession((unwrapApiData(activeJson) as ActiveSession | null) ?? null);
+      const active = (unwrapApiData(activeJson) as ActiveSession | null) ?? null;
+      setSession(active);
       setSessionLoaded(true);
+      setNow(Date.now());
+      // Caja cerrada: destino pendiente de hoy (se recargó a mitad) y el sencillo para abrir.
+      if (!active) {
+        const res = await apiFetch(`/api/cashier/cash-sessions/after-close?branchId=${branchId}`).catch(() => null);
+        const afterClose = res?.ok
+          ? (unwrapApiData(await res.json()) as { pendingDeclaration: Declaration | null; lastCashFund: LastCashFund | null } | null)
+          : null;
+        const pending = afterClose?.pendingDeclaration;
+        if (pending) setDeclaration((current) => current ?? pending);
+        const fund = afterClose?.lastCashFund ?? null;
+        setLastCashFund(fund);
+        // Propone abrir con el sencillo de ayer, sin pisar lo que la persona ya escribió.
+        if (fund && fund.amount > 0) setOpeningAmount((current) => (current === "0" || current === "" ? fund.amount.toFixed(2) : current));
+      }
     }
     if (pendingRes.ok) setPendingAutoClosed((unwrapApiData(await pendingRes.json()) as AutoClosedSession[] | null) ?? []);
   }, [branchId, selectedCashBoxId]);
@@ -208,6 +247,7 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
     setNotice(null);
     const result = await post("/api/cashier/cash-sessions/open", { branchId, physicalCashBoxId: selectedCashBoxId, openingAmount: Number(openingAmount) || 0 });
     if (result.ok) {
+      setCloseResult(null);
       setNotice({ tone: "success", text: "Caja abierta. Ya puedes cobrar." });
       await refresh().catch(() => undefined);
     } else {
@@ -227,7 +267,8 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
     setBusyAction(null);
   }
 
-  async function closeSession(counted: number) {
+  async function closeSession(count: CashCountResult) {
+    const counted = count.total;
     if (session?.status !== "RECONCILING" || busyAction) return;
     setBusyAction("close");
     setNotice(null);
@@ -238,16 +279,15 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
       setBusyAction(null);
       return;
     }
-    const data = unwrapApiData(result.json) as { status?: string; warning?: { code: string; difference: number } } | null;
+    const data = unwrapApiData(result.json) as { status?: string; expectedCash?: number; openingAmount?: number | string } | null;
     if (data?.status === "AUTO_CLOSED_PENDING_REVIEW") {
       setNotice({ tone: "info", text: "La caja quedó pendiente de revisión por Master." });
     } else {
-      setDeclaration({ cashSessionId: sessionId, countedAmount: counted });
-      setNotice(
-        data?.warning?.code === "CASH_DIFFERENCE_RECORDED"
-          ? { tone: "info", text: `Caja cerrada con una diferencia de ${money(Math.abs(data.warning.difference))}. Master la revisará en Día Operativo 360.` }
-          : { tone: "success", text: "Caja cerrada. Cuadró." },
-      );
+      setDeclaration({ cashSessionId: sessionId, countedAmount: counted, cashFund: { amount: count.cashFund, note: count.cashFundNote } });
+      const expectedCash = Number(data?.expectedCash ?? counted);
+      const opening = data?.openingAmount != null ? Number(data.openingAmount) : null;
+      setCloseResult({ counted, expected: expectedCash, difference: countDifference(counted, expectedCash), sales: count.sales, cashFund: count.cashFund, opening });
+      setOpeningAmount(count.cashFund > 0 ? count.cashFund.toFixed(2) : "0");
     }
     await refresh().catch(() => undefined);
     setBusyAction(null);
@@ -278,6 +318,11 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
   const status = session?.status ?? "CLOSED";
   const pill = STATUS_PILL[status];
   const expected = session?.expected ?? null;
+  const closePhase = closeAt && countFrom ? closeReminderPhase(now, Date.parse(countFrom), Date.parse(closeAt)) : "none";
+  if (wantsClose && status === "OPEN") {
+    setWantsClose(false);
+    setConfirmingClose(true);
+  }
   const boxName = selectedCashBox ? (selectedCashBox.description || selectedCashBox.code) : "Caja";
 
   return (
@@ -316,9 +361,15 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
           <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_18rem] md:items-end">
             <div className="min-w-0 space-y-2">
               <p className="text-sm text-[var(--color-text-muted)]">Debe haber en la gaveta</p>
-              <p className="text-3xl font-bold tabular-nums text-[var(--color-text)] sm:text-4xl" data-testid="cash-expected">
-                {expected ? money(expected.expectedCash) : "—"}
-              </p>
+              {session.blindCount ? (
+                <p className="text-lg font-semibold text-[var(--color-text)]" data-testid="cash-expected-hidden">
+                  No disponible hasta el conteo del cierre
+                </p>
+              ) : (
+                <p className="text-3xl font-bold tabular-nums text-[var(--color-text)] sm:text-4xl" data-testid="cash-expected">
+                  {expected ? money(expected.expectedCash) : "—"}
+                </p>
+              )}
               {expected ? (
                 <p className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-[var(--color-text-secondary)]">
                   <span>Apertura <strong className="tabular-nums">{money(expected.openingAmount)}</strong></span>
@@ -331,6 +382,13 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
                       </strong>
                     </span>
                   ) : null}
+                </p>
+              ) : null}
+              {closePhase !== "none" && closeAt ? (
+                <p className="rounded-xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-sm font-medium text-[var(--color-warning-700)]" data-testid="cash-close-soon">
+                  {closePhase === "soon"
+                    ? `Antes de las ${fmtTimeShort(closeAt)}, cuando la caja se cierra sola: cuenta la gaveta billete por billete y luego decide el destino del dinero.`
+                    : `Pasó la hora de cierre (${fmtTimeShort(closeAt)}). Cuenta la gaveta y cierra antes de que el sistema la cierre sin destino.`}
                 </p>
               ) : null}
               <p className="text-xs text-[var(--color-text-muted)]">
@@ -378,14 +436,20 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
           <div className="space-y-3">
             <div>
               <p className="text-base font-semibold text-[var(--color-text)]">Cuenta el efectivo de la gaveta</p>
-              <p className="text-sm text-[var(--color-text-muted)]">Cuenta todo lo que hay, billetes y monedas. La caja no cobra hasta que confirmes.</p>
+              <p className="text-sm text-[var(--color-text-muted)]">Anota cuántos billetes y monedas hay de cada uno. La caja no cobra hasta que confirmes.</p>
             </div>
-            <CashCount key={session.id} expected={expected?.expectedCash ?? null} busy={busyAction === "close"} onConfirm={(counted) => void closeSession(counted)} />
+            <CashCount key={session.id} busy={busyAction === "close"} onConfirm={(count) => void closeSession(count)} />
           </div>
         ) : (
+          <div className="space-y-4">
+          {closeResult ? <CloseResultCard result={closeResult} /> : null}
           <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
             <label className="block">
-              <span className="mb-1 block text-sm text-[var(--color-text-muted)]">La caja está cerrada. ¿Con cuánto efectivo empieza la gaveta?</span>
+              <span className="mb-1 block text-sm text-[var(--color-text-muted)]">
+                {lastCashFund && Number(openingAmount) === lastCashFund.amount
+                  ? "La caja está cerrada. Abre con el sencillo que quedó en el último cierre:"
+                  : "La caja está cerrada. ¿Con cuánto sencillo empieza la gaveta?"}
+              </span>
               <input
                 className="hm-input rounded-xl text-lg font-semibold tabular-nums"
                 type="number"
@@ -397,6 +461,11 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
                 disabled={Boolean(busyAction) || pendingAutoClosed.length > 0}
                 aria-label="Monto de apertura (C$)"
               />
+              {lastCashFund?.note && Number(openingAmount) === lastCashFund.amount ? (
+                <span className="mt-1 block text-xs text-[var(--color-text-soft)]" data-testid="cash-open-fund-note">
+                  {lastCashFund.note.replace(/^Sencillo:\s*/, "")}. Si no coincide al contarlo, anota lo que hay.
+                </span>
+              ) : null}
             </label>
             <button
               type="button"
@@ -407,6 +476,7 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
             >
               {busyAction === "open" ? "Abriendo…" : "Abrir caja"}
             </button>
+          </div>
           </div>
         )}
 
@@ -432,10 +502,44 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
           cashSessionId={declaration.cashSessionId}
           branchId={branchId}
           countedAmount={declaration.countedAmount}
-          onClose={() => setDeclaration(null)}
-          onSaved={() => setDeclaration(null)}
+          cashFund={declaration.cashFund}
+          onSaved={() => { setDeclaration(null); void refresh().catch(() => undefined); }}
         />
       )}
+    </div>
+  );
+}
+
+/** Lo contado contra lo que debía haber: se ve recién después de cerrar. */
+function CloseResultCard({ result }: { result: CloseResult }) {
+  const { counted, expected, difference, sales, cashFund, opening } = result;
+  const tone = difference === 0 ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-700)]";
+  return (
+    <div className="space-y-2" data-testid="cash-close-result">
+      <p className="text-sm font-semibold text-[var(--color-text)]">Caja cerrada</p>
+      <dl className="grid grid-cols-3 gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-center">
+        <div>
+          <dt className="text-xs text-[var(--color-text-muted)]">Contaste</dt>
+          <dd className="text-sm font-semibold tabular-nums text-[var(--color-text)]">{money(counted)}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-[var(--color-text-muted)]">Debía haber</dt>
+          <dd className="text-sm font-semibold tabular-nums text-[var(--color-text)]">{money(expected)}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-[var(--color-text-muted)]">Diferencia</dt>
+          <dd className={`text-sm font-bold tabular-nums ${tone}`}>
+            {difference === 0 ? "Cuadró" : `${difference > 0 ? "Sobran" : "Faltan"} ${money(Math.abs(difference))}`}
+          </dd>
+        </div>
+      </dl>
+      <p className="text-xs text-[var(--color-text-muted)]" data-testid="cash-close-split">
+        Venta {money(sales)} + sencillo {money(cashFund)}
+        {opening !== null ? `. El sencillo abrió con ${money(opening)}${cashFund !== opening ? ` y cierra con ${money(cashFund)} (${cashFund > opening ? "+" : "−"}${money(Math.abs(countDifference(cashFund, opening)))})` : " y cierra igual"}` : ""}.
+      </p>
+      {difference !== 0 ? (
+        <p className="text-xs text-[var(--color-text-muted)]">La diferencia quedó registrada; Master la revisa en Día Operativo 360.</p>
+      ) : null}
     </div>
   );
 }

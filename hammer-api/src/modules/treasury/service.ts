@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { Prisma, PrismaClient, BrainDecisionCategory, BrainDecisionSeverity, type RetainedCashLocation, type TreasuryAccountType, type TreasuryEntryType, type TreasuryCounterpartyType, type CurrencyCode, type ExpenseCategory, type RoleCode } from "@prisma/client";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
-import { decomposeRetainedAmount, computeExposureAlert, type ExposureAlertThreshold } from "@/modules/treasury/decomposition";
+import { decomposeRetainedAmount, computeExposureAlert, declaredCashFund, type ExposureAlertThreshold } from "@/modules/treasury/decomposition";
 import { computeOutstandingAwaitingDeposit, countBusinessDaysBetween } from "@/modules/treasury/exposure";
 import { getAccumulatedRetainedTx } from "@/modules/treasury/cash-monitor";
 import { logAuditEvent } from "@/modules/audit/service";
@@ -1824,6 +1824,8 @@ type DeclareCashDestinationInput = {
   depositBankAccountId?: string | null;
   retainAmount: number;
   awaitingDepositLocation: RetainedCashLocation;
+  /** Sencillo contado que se queda en la gaveta; es la apertura de mañana. */
+  cashFundAmount?: number | null;
   notes?: string | null;
 };
 
@@ -1905,7 +1907,10 @@ export async function declareCashDestinationTx(tx: Prisma.TransactionClient, inp
     }
 
     const branch = await tx.branch.findUniqueOrThrow({ where: { id: input.branchId }, select: { cashFundAmount: true } });
-    const decomposition = decomposeRetainedAmount(input.retainAmount, branch.cashFundAmount ? Number(branch.cashFundAmount) : null);
+    const decomposition = decomposeRetainedAmount(
+      input.retainAmount,
+      declaredCashFund(input.cashFundAmount, branch.cashFundAmount ? Number(branch.cashFundAmount) : null),
+    );
 
     const data = {
       branchId: input.branchId,

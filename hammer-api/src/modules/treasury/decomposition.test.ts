@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { decomposeRetainedAmount, computeExposureAlert } from "./decomposition";
+import { decomposeRetainedAmount, computeExposureAlert, declaredCashFund } from "./decomposition";
+
+describe("declaredCashFund", () => {
+  it("sin declarar usa el fondo configurado", () => {
+    assert.equal(declaredCashFund(undefined, 400), 400);
+    assert.equal(declaredCashFund(null, null), null);
+  });
+  it("declarado vale lo contado, por encima o por debajo del fondo", () => {
+    assert.equal(declaredCashFund(250, 400), 250);
+    assert.equal(declaredCashFund(678, 400), 678);
+    assert.equal(declaredCashFund(300, null), 300);
+  });
+  it("nunca negativo", () => {
+    assert.equal(declaredCashFund(-5, 400), 0);
+  });
+});
 
 describe("decomposeRetainedAmount", () => {
   it("Test 9 del doc: Retener C$215,000 con fondo C$15,000 -> esperando depósito 200,000", () => {

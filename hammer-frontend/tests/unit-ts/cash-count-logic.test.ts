@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { countDifference, sumDenominations } from "@/components/cash-session/cash-count";
+import { countDifference, describeDenominations, sumDenominations } from "@/components/cash-session/cash-count";
 
 describe("sumDenominations", () => {
   it("suma cantidad × valor e ignora vacíos, negativos y basura", () => {
@@ -23,5 +23,14 @@ describe("countDifference", () => {
     assert.equal(countDifference(0.3, 0.1 + 0.2), 0);
     assert.equal(countDifference(18500, 18450.5), 49.5);
     assert.equal(countDifference(18400, 18450.5), -50.5);
+  });
+});
+
+describe("describeDenominations", () => {
+  it("lista solo lo contado, de mayor a menor", () => {
+    assert.equal(describeDenominations({ "1": "20", "50": "5", "10": "20", "5": "" }), "5 × C$50, 20 × C$10, 20 × C$1");
+  });
+  it("monedas de centavo con ¢", () => {
+    assert.equal(describeDenominations({ "0.5": "4" }), "4 × 50¢");
   });
 });

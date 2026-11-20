@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, X, HandCoins, Landmark, Vault, Clock } from "lucide-react";
+import { Check, Coins, HandCoins, Landmark, Vault, Clock } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { fmtDate, formatBankAccountOption } from "@/lib/format";
+import { fmtDate, formatBankAccountOption, money } from "@/lib/format";
 import toast from "react-hot-toast";
 
 type Person = { id: string; fullName: string; username: string };
@@ -30,45 +30,37 @@ export function initialDeclarationFromPostponements(countedAmount: number, postp
   return { retainAmount: round2(Math.min(postponedTotal, countedAmount)), postponedTotal };
 }
 
-/**
- * Espejo puro de decomposeRetainedAmount (hammer-api/src/modules/treasury/decomposition.ts)
- * — sin paquete compartido entre hammer-api y hammer-frontend, se duplica a
- * mano con la misma firma (convención del repo). Solo para mostrar el
- * desglose EN VIVO mientras se teclea "Retener"; el backend vuelve a
- * calcularlo al guardar, esto no decide nada por sí solo.
- */
-function decomposeRetainedAmount(retainAmount: number, cashFundAmount: number | null): { cashFundPortion: number; awaitingDepositPortion: number } {
-  const fund = cashFundAmount ?? 0;
-  const cashFundPortion = Math.round(Math.min(retainAmount, Math.max(0, fund)) * 100) / 100;
-  const awaitingDepositPortion = Math.round((retainAmount - cashFundPortion) * 100) / 100;
-  return { cashFundPortion, awaitingDepositPortion };
+/** Sencillo propuesto: el fondo de la sucursal, sin pasar de lo contado. */
+export function initialCashFund(countedAmount: number, cashFundAmount: number | null): number {
+  return Math.round(Math.min(Math.max(0, cashFundAmount ?? 0), Math.max(0, countedAmount)) * 100) / 100;
 }
 
 /**
- * correccion-destino-y-pantalla-cobro.md §1: los tres destinos son la
- * misma pregunta ("¿qué pasa con este efectivo antes de terminar el
- * día?"). No hay motivo que capturar — lo único obligatorio es quién lo
- * recibe cuando sale. Se abre justo después de cerrar la caja.
+ * Se abre al cerrar la caja y no se puede saltar: cada córdoba contado
+ * queda asignado — sencillo en la gaveta, resguardado, quién lo lleva o
+ * depósito. Si se recarga la página, Caja lo vuelve a pedir
+ * (GET pending-declaration).
  */
 export function CashDestinationDeclarationModal({
-  cashSessionId, branchId, countedAmount, onClose, onSaved,
+  cashSessionId, branchId, countedAmount, cashFund, onSaved,
 }: {
   cashSessionId: string;
   branchId: string;
   countedAmount: number;
-  onClose: () => void;
+  /** Sencillo contado por billetes al cerrar: queda fijo. Sin él (se recargó la página), se anota a mano. */
+  cashFund?: { amount: number; note: string } | null;
   onSaved: () => void;
 }) {
   const [people, setPeople] = useState<Person[]>([]);
   const [bankAccounts, setBankAccounts] = useState<BankAccountOption[]>([]);
-  const [cashFundAmount, setCashFundAmount] = useState<number | null>(null);
+  const [fundAmount, setFundAmount] = useState(cashFund ? cashFund.amount.toFixed(2) : "");
   const [handOverAmount, setHandOverAmount] = useState("");
   const [handOverUserId, setHandOverUserId] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
   const [depositCarrierUserId, setDepositCarrierUserId] = useState("");
   const [depositBankAccountId, setDepositBankAccountId] = useState("");
-  const [retainAmount, setRetainAmount] = useState(countedAmount.toFixed(2));
-  const [awaitingDepositLocation, setAwaitingDepositLocation] = useState<"DRAWER" | "SAFE">("DRAWER");
+  const [safeAmount, setSafeAmount] = useState(countedAmount.toFixed(2));
+  const [safeLocation, setSafeLocation] = useState<"DRAWER" | "SAFE">("SAFE");
   const [saving, setSaving] = useState(false);
   const [postponements, setPostponements] = useState<Postponement[]>([]);
 
@@ -82,30 +74,29 @@ export function CashDestinationDeclarationModal({
     ]).then(([peopleRaw, accountsRaw, branchesRaw, destinationRaw]) => {
       if (peopleRaw) setPeople((unwrapApiData(peopleRaw) as Person[] | null) ?? []);
       if (accountsRaw) setBankAccounts((unwrapApiData(accountsRaw) as BankAccountOption[] | null) ?? []);
-      if (branchesRaw) {
-        const branches = (unwrapApiData(branchesRaw) as Array<{ id: string; cashFundAmount: number | null }> | null) ?? [];
-        setCashFundAmount(branches.find((b) => b.id === branchId)?.cashFundAmount ?? null);
-      }
-      if (destinationRaw) {
-        const summary = unwrapApiData(destinationRaw) as { postponements: Postponement[] } | null;
-        if (!summary?.postponements) return;
-        setPostponements(summary.postponements);
-        const prefill = initialDeclarationFromPostponements(countedAmount, summary.postponements);
-        if (summary.postponements.length > 0) setRetainAmount(prefill.retainAmount.toFixed(2));
-      }
+      const branches = branchesRaw ? ((unwrapApiData(branchesRaw) as Array<{ id: string; cashFundAmount: number | null }> | null) ?? []) : [];
+      // Sin conteo de sencillo (se recargó), se propone el fondo de la sucursal.
+      const sencillo = cashFund ? cashFund.amount : initialCashFund(countedAmount, branches.find((b) => b.id === branchId)?.cashFundAmount ?? null);
+      if (!cashFund && sencillo > 0) setFundAmount(sencillo.toFixed(2));
+      const summary = destinationRaw ? (unwrapApiData(destinationRaw) as { postponements?: Postponement[] } | null) : null;
+      const list = summary?.postponements ?? [];
+      setPostponements(list);
+      // Con posposiciones, lo retenido arranca en lo ya declarado; si no, todo lo que no es sencillo.
+      const retain = list.length > 0 ? initialDeclarationFromPostponements(countedAmount, list).retainAmount : countedAmount;
+      setSafeAmount(Math.max(0, retain - sencillo).toFixed(2));
     }).catch(() => {});
-    // countedAmount no debe re-disparar el fetch — solo se usa para el prefill
-    // inicial, que corre una sola vez al abrir el modal.
+    // countedAmount solo se usa para el prefill inicial, que corre una sola vez al abrir el modal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branchId, cashSessionId]);
 
+  const fund = Number(fundAmount) || 0;
   const handOver = Number(handOverAmount) || 0;
   const deposit = Number(depositAmount) || 0;
-  const retain = Number(retainAmount) || 0;
-  const total = Math.round((handOver + deposit + retain) * 100) / 100;
+  const safe = Number(safeAmount) || 0;
+  const retain = Math.round((fund + safe) * 100) / 100;
+  const total = Math.round((fund + handOver + deposit + safe) * 100) / 100;
   const missing = Math.round((countedAmount - total) * 100) / 100;
   const exactMatch = Math.abs(missing) < 0.005;
-  const retainSplit = decomposeRetainedAmount(retain, cashFundAmount);
 
   // prompt-tesoreria-depositos.md Fase 2 (Bug 2) — el endpoint devuelve
   // cualquier tipo de cuenta activa de la sucursal (CUSTODY/SAFE/SETTLEMENT
@@ -116,17 +107,14 @@ export function CashDestinationDeclarationModal({
 
   const needsHandOverPerson = handOver > 0 && !handOverUserId;
   const needsDepositCarrier = deposit > 0 && !depositCarrierUserId;
-  // Cuenta destino obligatoria cuando hay entre cuáles elegir — mismo
-  // criterio que el selector de cobro por transferencia: sin ninguna cuenta
-  // cargada no se puede pedir un dato que no existe
+  // Cuenta destino obligatoria cuando hay entre cuáles elegir
   // (prompt-pantallas-recorrido-dinero.md §3).
   const needsDepositAccount = deposit > 0 && nioOptions.length > 0 && !depositBankAccountId;
   const canConfirm = !saving && exactMatch && !needsHandOverPerson && !needsDepositCarrier && !needsDepositAccount;
 
   const postponedTotal = initialDeclarationFromPostponements(countedAmount, postponements).postponedTotal;
   const exceedsCounted = postponedTotal > countedAmount + 0.005;
-  // Informativo, no bloquea: el cajero puede cambiar los montos a mano —
-  // esto solo le avisa que está tocando algo que ya había declarado antes.
+  // Informativo, no bloquea: solo avisa que está cambiando algo que ya había declarado antes.
   const belowPostponed = postponedTotal > 0 && retain < postponedTotal - 0.005;
 
   async function submit() {
@@ -145,42 +133,40 @@ export function CashDestinationDeclarationModal({
           depositCarrierUserId: deposit > 0 ? depositCarrierUserId : null,
           depositBankAccountId: deposit > 0 ? (depositBankAccountId || null) : null,
           retainAmount: retain,
-          awaitingDepositLocation,
+          cashFundAmount: fund,
+          awaitingDepositLocation: safe > 0 ? safeLocation : "DRAWER",
+          notes: cashFund?.note ? `Sencillo: ${cashFund.note}` : null,
         }),
       });
       const raw = await res.json();
-      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo registrar la declaración.");
-      toast.success("Destino del efectivo registrado. ✓");
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo registrar el destino.");
+      toast.success("Destino del efectivo registrado.");
       onSaved();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo registrar la declaración.");
+      toast.error(error instanceof Error ? error.message : "No se pudo registrar el destino.");
     } finally {
       setSaving(false);
     }
   }
 
-  // Al tocar cualquier monto, "Retener" absorbe el resto automáticamente —
-  // el caso más común (todo se queda en la sucursal) no exige tocar nada.
-  function onHandOverChange(value: string) {
-    setHandOverAmount(value);
-    const nextRetain = Math.max(0, countedAmount - (Number(value) || 0) - deposit);
-    setRetainAmount(nextRetain.toFixed(2));
-  }
-  function onDepositChange(value: string) {
-    setDepositAmount(value);
-    const nextRetain = Math.max(0, countedAmount - handOver - (Number(value) || 0));
-    setRetainAmount(nextRetain.toFixed(2));
+  // Al tocar cualquier monto, lo resguardado absorbe el resto: el caso común no exige tocar nada.
+  function rebalance(next: { fund?: string; handOver?: string; deposit?: string }) {
+    const f = Number(next.fund ?? fundAmount) || 0;
+    const h = Number(next.handOver ?? handOverAmount) || 0;
+    const d = Number(next.deposit ?? depositAmount) || 0;
+    setSafeAmount(Math.max(0, Math.round((countedAmount - f - h - d) * 100) / 100).toFixed(2));
   }
 
+  const row = "rounded-lg border border-[var(--color-border)] p-3";
+  const rowTitle = "mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text)]";
+  const hint = "mt-1 text-[0.6875rem]";
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md space-y-4 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-semibold">¿Qué pasa con este efectivo?</h3>
-            <p className="text-xs text-[var(--color-text-muted)]">Contado al cierre: C$ {countedAmount.toFixed(2)}</p>
-          </div>
-          <Button type="button" variant="ghost" size="sm" onClick={onClose} icon={<X className="h-4 w-4" />}>Después</Button>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="cash-destination-title">
+      <div className="max-h-[100dvh] w-full max-w-md space-y-4 overflow-y-auto rounded-t-2xl bg-[var(--color-surface)] p-5 shadow-2xl sm:max-h-[calc(100dvh-2rem)] sm:rounded-xl" data-testid="cash-destination-declaration">
+        <div>
+          <h3 id="cash-destination-title" className="text-base font-semibold text-[var(--color-text)]">¿Dónde queda el dinero?</h3>
+          <p className="text-sm text-[var(--color-text-muted)]">Contaste {money(countedAmount)}. El sencillo se queda; asigna el resto antes de seguir.</p>
         </div>
 
         {postponements.length > 0 && (
@@ -189,53 +175,95 @@ export function CashDestinationDeclarationModal({
             <div className="space-y-1">
               {postponements.length === 1 ? (
                 <span>
-                  Ya declaraste que C$ {postponements[0].amount.toFixed(2)} se queda hasta el {fmtDate(postponements[0].postponedUntil)}
+                  Ya declaraste que {money(postponements[0].amount)} se queda hasta el {fmtDate(postponements[0].postponedUntil)}
                   {postponements[0].reason ? ` — ${postponements[0].reason}` : ""}.
                 </span>
               ) : (
                 <>
-                  <span>Ya declaraste C$ {postponedTotal.toFixed(2)} pospuestos en {postponements.length} veces durante esta sesión:</span>
+                  <span>Ya declaraste {money(postponedTotal)} pospuestos en {postponements.length} veces durante esta sesión:</span>
                   <ul className="ml-4 list-disc space-y-0.5">
                     {postponements.map((p) => (
                       <li key={p.id}>
-                        C$ {p.amount.toFixed(2)} hasta el {fmtDate(p.postponedUntil)}{p.reason ? ` — ${p.reason}` : ""}
+                        {money(p.amount)} hasta el {fmtDate(p.postponedUntil)}{p.reason ? ` — ${p.reason}` : ""}
                       </li>
                     ))}
                   </ul>
                 </>
               )}
               {exceedsCounted && (
-                <p className="font-semibold">Lo pospuesto (C$ {postponedTotal.toFixed(2)}) supera lo contado ahora (C$ {countedAmount.toFixed(2)}).</p>
+                <p className="font-semibold">Lo pospuesto ({money(postponedTotal)}) supera lo contado ahora ({money(countedAmount)}).</p>
               )}
             </div>
           </div>
         )}
 
         <div className="space-y-3">
-          <div className="rounded-lg border border-[var(--color-border)] p-3">
-            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text)]">
-              <HandCoins className="h-3.5 w-3.5" /> Entrega en persona
+          <div className={row} data-testid="cash-destination-fund">
+            <label htmlFor="dest-fund" className={rowTitle}>
+              <Coins className="h-3.5 w-3.5" aria-hidden="true" /> Sencillo en la gaveta
+            </label>
+            {cashFund ? (
+              <>
+                <p className="text-lg font-semibold tabular-nums text-[var(--color-text)]">{money(cashFund.amount)}</p>
+                <p className={`${hint} text-[var(--color-text-soft)]`}>
+                  {cashFund.note ? `${cashFund.note}. ` : ""}Se queda en la gaveta para abrir mañana.
+                </p>
+              </>
+            ) : (
+              <>
+                <Input id="dest-fund" type="number" inputMode="decimal" min="0" step="0.01" value={fundAmount}
+                  onChange={(e) => { setFundAmount(e.target.value); rebalance({ fund: e.target.value }); }} placeholder="0.00" />
+                <p className={`${hint} text-[var(--color-text-soft)]`}>Se queda en la gaveta para abrir mañana.</p>
+              </>
+            )}
+          </div>
+
+          <div className={row}>
+            <label htmlFor="dest-safe" className={rowTitle}>
+              <Vault className="h-3.5 w-3.5" aria-hidden="true" /> Resguardado
+            </label>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <Input id="dest-safe" type="number" inputMode="decimal" min="0" step="0.01" value={safeAmount} onChange={(e) => setSafeAmount(e.target.value)} placeholder="0.00" />
+              {safe > 0 && (
+                <select className="hm-input" value={safeLocation} onChange={(e) => setSafeLocation(e.target.value as "DRAWER" | "SAFE")} aria-label="Dónde queda resguardado">
+                  <option value="SAFE">Caja fuerte</option>
+                  <option value="DRAWER">Gaveta</option>
+                </select>
+              )}
             </div>
-            <div className="flex gap-2">
-              <Input type="number" min="0" step="0.01" value={handOverAmount} onChange={(e) => onHandOverChange(e.target.value)} placeholder="0.00" className="w-28" />
+            {belowPostponed && (
+              <p className={`${hint} text-[var(--color-warning-700)]`}>
+                Esto es menos de lo que ya declaraste pospuesto ({money(postponedTotal)}): estás cambiando lo que dijiste antes.
+              </p>
+            )}
+          </div>
+
+          <div className={row}>
+            <label htmlFor="dest-handover" className={rowTitle}>
+              <HandCoins className="h-3.5 w-3.5" aria-hidden="true" /> Lo lleva una persona
+            </label>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <Input id="dest-handover" type="number" inputMode="decimal" min="0" step="0.01" value={handOverAmount}
+                onChange={(e) => { setHandOverAmount(e.target.value); rebalance({ handOver: e.target.value }); }} placeholder="0.00" />
               {handOver > 0 && (
-                <select className="hm-input flex-1" value={handOverUserId} onChange={(e) => setHandOverUserId(e.target.value)}>
-                  <option value="">¿Quién lo recibe?</option>
+                <select className="hm-input" value={handOverUserId} onChange={(e) => setHandOverUserId(e.target.value)} aria-label="Quién lo lleva">
+                  <option value="">¿Quién lo lleva?</option>
                   {people.map((p) => <option key={p.id} value={p.id}>{p.fullName}</option>)}
                 </select>
               )}
             </div>
-            {needsHandOverPerson && <p className="mt-1 text-[0.6875rem] text-[var(--color-danger-600)]">Falta quién recibe.</p>}
+            {needsHandOverPerson && <p className={`${hint} text-[var(--color-danger-600)]`}>Falta quién lo lleva.</p>}
           </div>
 
-          <div className="rounded-lg border border-[var(--color-border)] p-3">
-            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text)]">
-              <Landmark className="h-3.5 w-3.5" /> Depositar
-            </div>
-            <div className="flex gap-2">
-              <Input type="number" min="0" step="0.01" value={depositAmount} onChange={(e) => onDepositChange(e.target.value)} placeholder="0.00" className="w-28" />
+          <div className={row}>
+            <label htmlFor="dest-deposit" className={rowTitle}>
+              <Landmark className="h-3.5 w-3.5" aria-hidden="true" /> Depositar
+            </label>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <Input id="dest-deposit" type="number" inputMode="decimal" min="0" step="0.01" value={depositAmount}
+                onChange={(e) => { setDepositAmount(e.target.value); rebalance({ deposit: e.target.value }); }} placeholder="0.00" />
               {deposit > 0 && (
-                <select className="hm-input flex-1" value={depositCarrierUserId} onChange={(e) => setDepositCarrierUserId(e.target.value)}>
+                <select className="hm-input" value={depositCarrierUserId} onChange={(e) => setDepositCarrierUserId(e.target.value)} aria-label="Quién lleva el depósito">
                   <option value="">¿Quién lo lleva?</option>
                   {people.map((p) => <option key={p.id} value={p.id}>{p.fullName}</option>)}
                 </select>
@@ -243,7 +271,7 @@ export function CashDestinationDeclarationModal({
             </div>
             {deposit > 0 && bankOptions.length > 0 && (
               <>
-                <select className="hm-input mt-2 w-full" value={depositBankAccountId} onChange={(e) => setDepositBankAccountId(e.target.value)}>
+                <select className="hm-input mt-2 w-full" value={depositBankAccountId} onChange={(e) => setDepositBankAccountId(e.target.value)} aria-label="Cuenta destino">
                   <option value="">Cuenta destino…</option>
                   {bankOptions.map((a) => (
                     <option key={a.id} value={a.id} disabled={a.currencyCode !== "NIO"}>
@@ -251,50 +279,22 @@ export function CashDestinationDeclarationModal({
                     </option>
                   ))}
                 </select>
-                <p className="mt-1 text-[0.6875rem] text-[var(--color-text-soft)]">Se acreditará en C$ (córdobas).</p>
+                <p className={`${hint} text-[var(--color-text-soft)]`}>Se acreditará en C$ (córdobas).</p>
               </>
             )}
-            {needsDepositCarrier && <p className="mt-1 text-[0.6875rem] text-[var(--color-danger-600)]">Falta quién lo lleva.</p>}
-            {needsDepositAccount && <p className="mt-1 text-[0.6875rem] text-[var(--color-danger-600)]">Falta la cuenta destino.</p>}
-          </div>
-
-          <div className="rounded-lg border border-[var(--color-border)] p-3">
-            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text)]">
-              <Vault className="h-3.5 w-3.5" /> Retener
-            </div>
-            <div className="flex gap-2">
-              <Input type="number" min="0" step="0.01" value={retainAmount} onChange={(e) => setRetainAmount(e.target.value)} placeholder="0.00" className="w-28" />
-              {retain > 0 && (
-                <select className="hm-input flex-1" value={awaitingDepositLocation} onChange={(e) => setAwaitingDepositLocation(e.target.value as "DRAWER" | "SAFE")}>
-                  <option value="DRAWER">En la gaveta</option>
-                  <option value="SAFE">En la caja fuerte</option>
-                </select>
-              )}
-            </div>
-            {retain > 0 && (
-              <div className="mt-2 space-y-0.5 border-t border-[var(--color-border)] pt-2 text-[0.6875rem] text-[var(--color-text-muted)]">
-                <div className="flex justify-between">
-                  <span>├─ Fondo de caja{cashFundAmount === null ? " (sin configurar)" : ""}</span>
-                  <span className="tabular-nums">C$ {retainSplit.cashFundPortion.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between font-semibold text-[var(--color-text)]">
-                  <span>└─ Esperando depósito</span>
-                  <span className="tabular-nums">C$ {retainSplit.awaitingDepositPortion.toFixed(2)}</span>
-                </div>
-              </div>
-            )}
-            {belowPostponed && (
-              <p className="mt-1.5 text-[0.6875rem] text-[var(--color-warning-700)]">
-                Esto es menos de lo que ya declaraste pospuesto (C$ {postponedTotal.toFixed(2)}) — estás cambiando lo que dijiste antes.
-              </p>
-            )}
+            {needsDepositCarrier && <p className={`${hint} text-[var(--color-danger-600)]`}>Falta quién lo lleva.</p>}
+            {needsDepositAccount && <p className={`${hint} text-[var(--color-danger-600)]`}>Falta la cuenta destino.</p>}
           </div>
         </div>
 
-        <div className={["flex items-center justify-between rounded-xl px-4 py-2.5 text-sm font-semibold",
-          exactMatch ? "border border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]" : "border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] text-[var(--color-danger-600)]"].join(" ")}>
-          <span>Declarado C$ {total.toFixed(2)}</span>
-          <span>{missing > 0 ? `Falta C$ ${missing.toFixed(2)}` : missing < 0 ? `Sobra C$ ${Math.abs(missing).toFixed(2)}` : "Exacto"}</span>
+        <div
+          className={["flex items-center justify-between rounded-xl px-4 py-2.5 text-sm font-semibold",
+            exactMatch ? "border border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]" : "border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] text-[var(--color-danger-600)]"].join(" ")}
+          aria-live="polite"
+          data-testid="cash-destination-balance"
+        >
+          <span>Asignado {money(total)}</span>
+          <span>{missing > 0 ? `Falta ${money(missing)}` : missing < 0 ? `Sobra ${money(Math.abs(missing))}` : "Exacto"}</span>
         </div>
 
         <Button variant="success" className="w-full" onClick={() => void submit()} disabled={!canConfirm} loading={saving} icon={<Check className="h-4 w-4" />}>

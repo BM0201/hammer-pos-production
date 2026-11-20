@@ -24,6 +24,7 @@ import { PosSummaryCards } from "./components/pos-summary-cards";
 import { DeviceBattery } from "./components/device-battery";
 import { PosRealtimeSummaryShare, usePosRealtimeSummary } from "./hooks/use-pos-realtime-summary";
 import { PosCashContextShare, usePosCashContext } from "./hooks/use-pos-cash-context";
+import { CashCloseReminder } from "./components/cash-close-reminder";
 import { useAuthHeartbeat } from "@/hooks/use-auth-heartbeat";
 import { LogoutButton } from "@/components/navigation/logout-button";
 import type { SessionPayload } from "@/types/auth";
@@ -453,6 +454,9 @@ export function PosShell({ session, children }: { session: ShellSession; childre
             </PosCashContextShare.Provider>
           </PosRealtimeSummaryShare.Provider>
         </main>
+        {cashContext.posContext?.permissions?.canCloseCash ? (
+          <CashCloseReminder closeAt={cashContext.posContext.cashAutoCloseAt ?? null} countFrom={cashContext.posContext.cashCountFrom ?? null} cashSessionId={activeCashSessionId} />
+        ) : null}
       </div>
     </div>
   );

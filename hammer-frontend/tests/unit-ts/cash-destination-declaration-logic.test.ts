@@ -9,7 +9,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { initialDeclarationFromPostponements } from "@/components/cash-session/cash-destination-declaration-modal";
+import { initialCashFund, initialDeclarationFromPostponements } from "@/components/cash-session/cash-destination-declaration-modal";
 
 describe("initialDeclarationFromPostponements", () => {
   it("sin posposiciones: retiene todo lo contado, como siempre", () => {
@@ -40,5 +40,15 @@ describe("initialDeclarationFromPostponements", () => {
     const result = initialDeclarationFromPostponements(1000, [{ amount: 120 }, { amount: 80.5 }, { amount: 40 }]);
     assert.equal(result.postponedTotal, 240.5);
     assert.equal(result.retainAmount, 240.5);
+  });
+});
+
+describe("initialCashFund", () => {
+  it("propone el fondo de la sucursal como sencillo", () => {
+    assert.equal(initialCashFund(18450, 400), 400);
+  });
+  it("nunca más de lo contado, y 0 sin fondo configurado", () => {
+    assert.equal(initialCashFund(250, 400), 250);
+    assert.equal(initialCashFund(18450, null), 0);
   });
 });

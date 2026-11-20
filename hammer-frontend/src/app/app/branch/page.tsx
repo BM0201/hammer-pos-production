@@ -123,14 +123,21 @@ function CashSection({ sessions }: { sessions: NonNullable<DayView["cashSessions
                   <span className="text-xs text-[var(--color-text-secondary)]">Efectivo que debe haber en gaveta</span>
                   <span className="text-lg font-bold tabular-nums text-[var(--color-text)]">{money(s.expectedCash)}</span>
                 </div>
+              ) : open ? (
+                // La API lo esconde desde 20 min antes del cierre: conteo a ciegas.
+                <p className="mt-2 text-sm font-medium text-[var(--color-warning-700)]">Hora del conteo de cierre: cuenta la gaveta.</p>
               ) : null}
             </li>
           );
         })}
       </ul>
-      <Link href="/app/branch/cash" className={`${linkButton} w-full`}>
-        {sessions.every((s) => s.status === "OPEN") ? "Ir a Caja" : "Revisar en Caja"}
-      </Link>
+      {sessions.some((s) => s.status === "OPEN" && s.expectedCash === null) ? (
+        <Link href={"/app/branch/cash?cerrar=1" as Route} className={`${linkButton} w-full`}>Contar la gaveta</Link>
+      ) : (
+        <Link href="/app/branch/cash" className={`${linkButton} w-full`}>
+          {sessions.every((s) => s.status === "OPEN") ? "Ir a Caja" : "Revisar en Caja"}
+        </Link>
+      )}
     </Section>
   );
 }

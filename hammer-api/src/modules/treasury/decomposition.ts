@@ -30,6 +30,17 @@ export function decomposeRetainedAmount(retainAmount: number, cashFundAmount: nu
   return { cashFundPortion: round2(cashFundPortion), awaitingDepositPortion };
 }
 
+/**
+ * Sencillo contado al cerrar (se queda en la gaveta y es la apertura del día
+ * siguiente). Sin tope en el fondo configurado: cambia cada día, y lo que se
+ * declare queda a la vista como apertura de mañana. Sin declarar, el fondo
+ * configurado (comportamiento de siempre).
+ */
+export function declaredCashFund(declared: number | null | undefined, configured: number | null | undefined): number | null {
+  if (declared == null) return configured ?? null;
+  return Math.max(0, declared);
+}
+
 function round2(value: number) {
   return Math.round(value * 100) / 100;
 }

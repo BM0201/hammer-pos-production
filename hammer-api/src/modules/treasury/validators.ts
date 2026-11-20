@@ -108,6 +108,8 @@ export const declareCashDestinationSchema = z.object({
   depositBankAccountId: z.string().cuid().optional().nullable(),
   retainAmount: z.coerce.number().min(0),
   awaitingDepositLocation: z.enum(["DRAWER", "SAFE"]).default("DRAWER"),
+  /** Sencillo contado que se queda en la gaveta (parte de retainAmount); es la apertura de mañana. */
+  cashFundAmount: z.coerce.number().min(0).optional().nullable(),
   notes: z.string().max(500).optional().nullable(),
 });
 

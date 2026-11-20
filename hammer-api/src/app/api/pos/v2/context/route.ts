@@ -8,6 +8,8 @@ import { CAPABILITIES } from "@/modules/rbac/policies";
 import { canInBranch, requireBranchCapability } from "@/modules/rbac/guards";
 import { businessDateFromNow } from "@/modules/operations/service";
 import { z } from "zod";
+import { getCashAutoCloseConfig } from "@/modules/cash-session/auto-close-config";
+import { getBlindCountStart, getCashAutoCloseInstant } from "@/modules/cash-session/auto-close-service";
 
 const querySchema = z.object({
   branchId: z.string().cuid(),
@@ -111,13 +113,21 @@ export async function GET(request: Request) {
       }
     }
 
+    // Para avisar en la caja antes del cierre automático (pedir conteo y destino a tiempo).
+    const autoCloseConfig = hasOpenCashSession ? await getCashAutoCloseConfig() : null;
+    const cashAutoCloseAt = autoCloseConfig ? getCashAutoCloseInstant(new Date(), autoCloseConfig) : null;
+    const cashCountFrom = autoCloseConfig ? getBlindCountStart(new Date(), autoCloseConfig) : null;
+
     return ok({
       workflow,
+      cashAutoCloseAt: cashAutoCloseAt?.toISOString() ?? null,
+      cashCountFrom: cashCountFrom?.toISOString() ?? null,
       permissions: {
         canSendToCashier: canInBranch(session, branchId, CAPABILITIES.POS_SEND_TO_CASHIER),
         canCollectHere,
         canCollectByRole: canCollectHere,
         canUseCashSession: canInBranch(session, branchId, CAPABILITIES.CASH_SESSION_USE),
+        canCloseCash: canInBranch(session, branchId, CAPABILITIES.CASH_SESSION_OPERATE),
       },
       cashBoxes,
       assignedSessions,

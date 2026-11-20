@@ -3,6 +3,8 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { isMaster } from "@/modules/rbac/guards";
 import { getActiveCashSessionSchema } from "@/modules/cash-session/validators";
 import { calculateExpectedCashForSessionTx, getActiveCashSession, logCashSessionDenied } from "@/modules/cash-session/service";
+import { getCashAutoCloseConfig } from "@/modules/cash-session/auto-close-config";
+import { isBlindCountTime } from "@/modules/cash-session/auto-close-service";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { ok, fail } from "@/lib/api/response";
@@ -63,13 +65,17 @@ export async function GET(request: Request) {
       canOperate = Boolean(op);
     }
 
+    // Conteo a ciegas: contando, o desde 20 min antes del cierre, la sucursal no ve cuánto debe haber.
+    const blindCount = data.status === "RECONCILING" || isBlindCountTime(new Date(), await getCashAutoCloseConfig());
     // Solo la pantalla Caja lo pide: son 3 consultas más y otras pantallas consultan esta ruta seguido.
-    const expected = searchParams.get("withExpected") === "1"
+    const expected = !blindCount && searchParams.get("withExpected") === "1"
       ? await calculateExpectedCashForSessionTx(prisma as unknown as Prisma.TransactionClient, data.id, data.openingAmount)
       : undefined;
 
     return ok({
       ...data,
+      expectedCashAmount: blindCount ? null : data.expectedCashAmount,
+      blindCount,
       canOperate,
       expected: expected && {
         openingAmount: expected.openingAmount,

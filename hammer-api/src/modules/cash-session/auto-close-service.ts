@@ -14,6 +14,7 @@ import {
   type CashAutoCloseConfig,
 } from "@/modules/cash-session/auto-close-config";
 import { makeDecisionFingerprint } from "@/modules/brain/scoring";
+import { getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 
 const DEFAULT_TIMEZONE = "America/Managua";
 const AUTO_CLOSE_REASON = "Cierre automatico por horario operativo.";
@@ -105,6 +106,37 @@ export function getCashAutoCloseDeadline(
     expired: currentMinutes >= deadlineMinutes,
     rule: weekday === "saturday" ? "SATURDAY" : weekday === "sunday" ? "SUNDAY" : "WEEKDAY",
   };
+}
+
+/**
+ * Momento exacto del cierre automático de hoy, o null si hoy no cierra solo.
+ * La caja lo usa para avisar antes de la hora y pedir el conteo a tiempo.
+ * shortcut: arma la hora en Managua (UTC-6 fijo) e ignora config.timezone; si alguna sucursal opera en otra zona, convertir con esa zona.
+ */
+export function getCashAutoCloseInstant(now: Date, config: CashAutoCloseConfig = DEFAULT_CASH_AUTO_CLOSE_CONFIG): Date | null {
+  const deadline = getCashAutoCloseDeadline({ id: "today" }, now, config);
+  if (!deadline.closeTime) return null;
+  const [hour, minute] = deadline.closeTime.split(":").map(Number);
+  return new Date(getOperationalWindowForManaguaDate(now).start.getTime() + (hour * 60 + minute) * 60_000);
+}
+
+/** Minutos antes del cierre automático en que la caja avisa y el esperado se esconde. */
+export const CASH_COUNT_LEAD_MINUTES = 20;
+
+/**
+ * Desde cuándo se cuenta a ciegas: 20 min antes del cierre de hoy. Desde ahí la
+ * sucursal ya no ve cuánto debe haber en la gaveta (para que el conteo no se
+ * acomode a la cifra); la diferencia se ve al cerrar. null si hoy no cierra solo.
+ */
+export function getBlindCountStart(now: Date, config: CashAutoCloseConfig = DEFAULT_CASH_AUTO_CLOSE_CONFIG): Date | null {
+  const closeAt = getCashAutoCloseInstant(now, config);
+  return closeAt ? new Date(closeAt.getTime() - CASH_COUNT_LEAD_MINUTES * 60_000) : null;
+}
+
+/** true si a esta hora la sucursal no debe ver el efectivo esperado. */
+export function isBlindCountTime(now: Date, config: CashAutoCloseConfig = DEFAULT_CASH_AUTO_CLOSE_CONFIG): boolean {
+  const start = getBlindCountStart(now, config);
+  return start !== null && now.getTime() >= start.getTime();
 }
 
 function decimal(value: number) {

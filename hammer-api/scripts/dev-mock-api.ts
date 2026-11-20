@@ -116,8 +116,8 @@ function mockTripPreview(trip: MockTrip) {
 /* ── Estado en memoria ──────────────────────────────────────────────────────── */
 
 const branches = [
-  { id: "br-central", code: "CEN", name: "Central" },
-  { id: "br-demo", code: "DEMO", name: "Demo antigüedad" },
+  { id: "br-central", code: "CEN", name: "Central", cashFundAmount: 400 },
+  { id: "br-demo", code: "DEMO", name: "Demo antigüedad", cashFundAmount: 400 },
 ];
 
 /* ── Centro de decisiones: una decisión de cada forma de sugerencia ── */
@@ -545,9 +545,13 @@ function send(res: http.ServerResponse, status: number, body: unknown, extraHead
 }
 const ok = (res: http.ServerResponse, data: unknown) => send(res, 200, { ok: true, data });
 
-type MockCash = { id: string; status: "OPEN" | "RECONCILING" | "CLOSED"; opening: number; cashPayments: number; openedAt: string };
+type MockCash = { id: string; status: "OPEN" | "RECONCILING" | "CLOSED"; opening: number; cashPayments: number; openedAt: string; counted?: number; declared?: boolean };
 const mockCashOpenedAt = (() => { const d = new Date(); d.setHours(7, 32, 0, 0); return d.toISOString(); })();
+const mockCashCloseAt = new Date(Date.now() + 20 * 60_000).toISOString();
+// El conteo a ciegas arranca 20 min antes del cierre: en el mock, desde que arranca.
+const mockCashCountFrom = new Date(Date.now() - 60_000).toISOString();
 const mockCash = new Map<string, MockCash>([["br-central", { id: "cs-1", status: "OPEN", opening: 2000, cashPayments: 17650.5, openedAt: mockCashOpenedAt }]]);
+let mockLastCashFund: { amount: number; note: string | null; declaredAt: string } | null = { amount: 2000, note: "Sencillo: 40 × C$20, 60 × C$10, 80 × C$5, 200 × C$1", declaredAt: mockCashOpenedAt };
 const mockCashMovements: Array<{ id: string; sessionId: string; type: string; amount: number; reason: string; createdAt: string; expense?: { category: string; conceptId: null; concept: null; receiptNumber: null; receiptPhotoUrl: string | null } }> = [
   { id: "cm-1", sessionId: "cs-1", type: "EXPENSE_OUT", amount: 850, reason: "Almuerzo del personal", createdAt: mockCashOpenedAt, expense: { category: "FOOD", conceptId: null, concept: null, receiptNumber: null, receiptPhotoUrl: null } },
   { id: "cm-2", sessionId: "cs-1", type: "CASH_OUT", amount: 350, reason: "Retiro de efectivo (cambio a otra caja)", createdAt: mockCashOpenedAt },
@@ -603,15 +607,34 @@ const server = http.createServer(async (req, res) => {
     if (!cash || cash.status === "CLOSED") return ok(res, null);
     const movementsNet = -mockCashMovements.filter((m) => m.sessionId === cash.id).reduce((t, m) => t + m.amount, 0);
     const expectedCash = cash.opening + cash.cashPayments + movementsNet;
+    const blindCount = cash.status === "RECONCILING" || Date.now() >= Date.parse(mockCashCountFrom);
     return ok(res, {
       id: cash.id, status: cash.status, openingAmount: String(cash.opening), openedAt: cash.openedAt,
-      expectedCashAmount: String(expectedCash), openedBy: { username: "maria", fullName: "María López" }, canOperate: true,
-      ...(url.searchParams.get("withExpected") === "1"
+      expectedCashAmount: blindCount ? null : String(expectedCash), openedBy: { username: "maria", fullName: "María López" }, canOperate: true, blindCount,
+      ...(!blindCount && url.searchParams.get("withExpected") === "1"
         ? { expected: { openingAmount: cash.opening, cashPayments: cash.cashPayments, movementsNet, expectedCash } }
         : {}),
     });
   }
   if (path === "/api/branch/cash/sessions/auto-closed-pending") return ok(res, []);
+  // Contexto de la caja: el cierre automático cae 20 min después de arrancar el mock, para ver el aviso previo.
+  if (path === "/api/pos/v2/context") {
+    const branchId = url.searchParams.get("branchId") ?? "";
+    const cash = mockCash.get(branchId);
+    const open = cash?.status === "OPEN";
+    return ok(res, {
+      workflow: { enableCashier: true, enableDispatch: true, paymentWorkflowMode: "HYBRID", dispatchWorkflowMode: "ENABLED" },
+      permissions: { canSendToCashier: true, canCollectHere: true, canCollectByRole: true, canUseCashSession: true, canCloseCash: true },
+      cashAutoCloseAt: open ? mockCashCloseAt : null,
+      cashCountFrom: open ? mockCashCountFrom : null,
+      cashBoxes: [{ id: `cb-${branchId}`, code: "CAJA-01" }],
+      assignedSessions: open ? [{ id: cash.id, physicalCashBox: { code: "CAJA-01", description: "Caja principal" } }] : [],
+      hasOpenCashSession: open,
+      activeCashSessionId: open ? cash.id : null,
+      cashSessionProblem: open ? null : cash?.status === "RECONCILING" ? "CASH_SESSION_RECONCILING" : "NO_OPEN_CASH_SESSION",
+      operatorUserId: "u-master",
+    });
+  }
   if (path === "/api/cashier/cash-sessions/open" && method === "POST") {
     const body = await readJson(req);
     const branchId = String(body.branchId ?? "");
@@ -629,9 +652,34 @@ const server = http.createServer(async (req, res) => {
     const cash = [...mockCash.values()].find((c) => c.id === body.cashSessionId);
     if (!cash) return send(res, 400, { ok: false, error: { code: "CASH_SESSION_NOT_RECONCILING", message: "No está en conciliación" } });
     const net = -mockCashMovements.filter((m) => m.sessionId === cash.id).reduce((t, m) => t + m.amount, 0);
-    const difference = Math.round((Number(body.closingAmount ?? 0) - (cash.opening + cash.cashPayments + net)) * 100) / 100;
+    const expectedCash = cash.opening + cash.cashPayments + net;
+    const countedCash = Number(body.closingAmount ?? 0);
+    const difference = Math.round((countedCash - expectedCash) * 100) / 100;
     cash.status = "CLOSED";
-    return ok(res, { status: "CLOSED", ...(difference !== 0 ? { warning: { code: "CASH_DIFFERENCE_RECORDED", difference, threshold: 0 } } : {}) });
+    cash.counted = countedCash;
+    return ok(res, { status: "CLOSED", openingAmount: cash.opening, expectedCash, countedCash, difference, ...(difference !== 0 ? { warning: { code: "CASH_DIFFERENCE_RECORDED", difference, threshold: 0 } } : {}) });
+  }
+  // Destino del efectivo al cerrar: obligatorio; si se recarga sin declarar, Caja lo vuelve a pedir.
+  // El sencillo declarado es con lo que se propone abrir la próxima vez.
+  if (path === "/api/cashier/cash-sessions/after-close") {
+    const cash = mockCash.get(url.searchParams.get("branchId") ?? "");
+    return ok(res, {
+      pendingDeclaration: cash?.status === "CLOSED" && !cash.declared ? { cashSessionId: cash.id, countedAmount: cash.counted ?? 0 } : null,
+      lastCashFund: mockLastCashFund,
+    });
+  }
+  const declMatch = path.match(/^\/api\/cashier\/cash-sessions\/([^/]+)\/(destination-declaration|cash-destination)$/);
+  if (declMatch && declMatch[2] === "cash-destination") return ok(res, { postponements: [], movements: [] });
+  if (declMatch && method === "POST") {
+    const body = await readJson(req);
+    console.log("[mock] destino declarado", JSON.stringify(body));
+    const cash = [...mockCash.values()].find((c) => c.id === declMatch[1]);
+    if (cash) cash.declared = true;
+    mockLastCashFund = { amount: Number(body.cashFundAmount ?? 0), note: (body.notes as string | null) ?? null, declaredAt: new Date().toISOString() };
+    return ok(res, { id: `decl-${declMatch[1]}` });
+  }
+  if (/^\/api\/branches\/[^/]+\/members$/.test(path)) {
+    return ok(res, [{ id: "u-maria", fullName: "María López", username: "maria" }, { id: "u-jose", fullName: "José Pérez", username: "jose" }]);
   }
   if (path === "/api/cashier/v2/cash-movements" && method === "GET") {
     const sessionId = url.searchParams.get("cashSessionId");
@@ -652,7 +700,7 @@ const server = http.createServer(async (req, res) => {
     }
     return ok(res, {
       branchId: branch.id, branchName: branch.name, businessDate: new Date().toISOString().slice(0, 10),
-      cashSessions: [{ id: "cs-1", status: "OPEN", openedAt: at(7, 32), boxCode: "CAJA-01", boxName: "Caja principal", openedByName: "María López", expectedCash: 18450.5 }],
+      cashSessions: [{ id: "cs-1", status: "OPEN", openedAt: at(7, 32), boxCode: "CAJA-01", boxName: "Caja principal", openedByName: "María López", expectedCash: Date.now() >= Date.parse(mockCashCountFrom) ? null : 18450.5 }],
       sales: {
         paidTotal: 48230.75, paidCount: 23, averageTicket: 2096.99,
         byMethod: [{ method: "CASH", amount: 30120.75, count: 16 }, { method: "CARD", amount: 11410, count: 5 }, { method: "TRANSFER", amount: 6700, count: 2 }],

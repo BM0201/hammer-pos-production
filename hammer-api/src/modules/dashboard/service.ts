@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { getBranchSalesRealtimeSummary, getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import { calculateExpectedCashForSessionTx } from "@/modules/cash-session/service";
+import { getCashAutoCloseConfig } from "@/modules/cash-session/auto-close-config";
+import { isBlindCountTime } from "@/modules/cash-session/auto-close-service";
 import { buildPendingList, PACE_WINDOW_DAYS, rankSoldStock, type PendingKey } from "@/modules/dashboard/my-day";
 
 const ACTIVE_CASH_STATUSES = ["OPEN", "RECONCILING", "AUTO_CLOSED_PENDING_REVIEW"] as const;
@@ -69,6 +71,9 @@ export async function getBranchDayView(branchId: string, userId: string, access:
     }),
   ]);
 
+  // Conteo a ciegas desde 20 min antes del cierre: no se muestra cuánto debe haber.
+  const blindCount = access.cash && isBlindCountTime(new Date(), await getCashAutoCloseConfig());
+
   return {
     branchId,
     branchName: sales.branchName,
@@ -82,9 +87,9 @@ export async function getBranchDayView(branchId: string, userId: string, access:
         boxCode: s.physicalCashBox.code,
         boxName: s.physicalCashBox.description,
         openedByName: s.openedBy.fullName || s.openedBy.username,
-        // Solo con la caja abierta: en conciliación o auto-cerrada el conteo manda.
+        // Solo con la caja abierta y antes del conteo a ciegas; contando o auto-cerrada, el conteo manda.
         expectedCash:
-          s.status === "OPEN"
+          s.status === "OPEN" && !blindCount
             ? (await calculateExpectedCashForSessionTx(prisma as unknown as Prisma.TransactionClient, s.id, s.openingAmount)).expectedCash
             : null,
       })),

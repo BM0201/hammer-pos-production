@@ -94,6 +94,8 @@ export default function CashDestinationPage() {
   const [loading, setLoading] = useState(true);
   const [activeSheet, setActiveSheet] = useState<SheetKind | null>(null);
   const [selfFullName, setSelfFullName] = useState("");
+  // Hora del conteo de cierre: no se muestra cuánto hay hasta que la gaveta se cuente.
+  const [blindCount, setBlindCount] = useState(false);
 
   const selfUserId = sessionState.status === "authenticated" ? sessionState.session.userId : "";
 
@@ -120,7 +122,7 @@ export default function CashDestinationPage() {
       const activeRes = await apiFetch(`/api/cashier/cash-sessions/active?branchId=${branchId}`);
       const activeRaw = await activeRes.json();
       if (!activeRes.ok) throw new Error(activeRaw?.error?.message ?? "No se pudo verificar la caja.");
-      const active = unwrapApiData(activeRaw) as { id: string; status: string } | null;
+      const active = unwrapApiData(activeRaw) as { id: string; status: string; blindCount?: boolean } | null;
 
       if (!active || active.status !== "OPEN") {
         setCashSessionId(null);
@@ -128,6 +130,11 @@ export default function CashDestinationPage() {
         return;
       }
       setCashSessionId(active.id);
+      setBlindCount(Boolean(active.blindCount));
+      if (active.blindCount) {
+        setSummary(null);
+        return;
+      }
 
       const [summaryRes, accountsRes] = await Promise.all([
         apiFetch(`/api/cashier/cash-sessions/${active.id}/cash-destination`),
@@ -192,6 +199,19 @@ export default function CashDestinationPage() {
 
       {loading ? (
         <p className="py-8 text-center text-sm text-[var(--color-text-muted)] animate-pulse">Cargando…</p>
+      ) : cashSessionId && blindCount ? (
+        <Card className="p-4" data-testid="cash-destination-count-first">
+          <div className="py-8 text-center">
+            <Clock className="mx-auto mb-2 h-6 w-6 text-[var(--color-warning-600)]" aria-hidden="true" />
+            <p className="text-sm font-semibold text-[var(--color-text)]">Primero cuenta la gaveta</p>
+            <p className="mx-auto mt-1 max-w-sm text-xs text-[var(--color-text-muted)]">
+              Es hora del conteo de cierre. Cuenta billete por billete y cierra la caja; después decides el destino del dinero.
+            </p>
+            <Link href="/app/branch/cash?cerrar=1" className={`${components.button.base} ${components.button.primary} ${components.button.sizes.sm} mt-4`}>
+              Contar la gaveta
+            </Link>
+          </div>
+        </Card>
       ) : !cashSessionId || !summary ? (
         <Card className="p-4">
           <div className="py-8 text-center">

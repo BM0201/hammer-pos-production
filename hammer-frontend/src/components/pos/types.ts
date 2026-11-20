@@ -109,7 +109,12 @@ export type PosV2Context = {
     canCollectHere: boolean;
     canCollectByRole: boolean;
     canUseCashSession: boolean;
+    canCloseCash?: boolean;
   };
+  /** Cierre automático de hoy (ISO) si el usuario tiene una caja abierta; null si hoy no cierra solo. */
+  cashAutoCloseAt?: string | null;
+  /** Desde cuándo se avisa y se cuenta a ciegas (20 min antes del cierre). */
+  cashCountFrom?: string | null;
   assignedSessions: Array<{ id: string; physicalCashBox?: { code: string; description?: string | null } }>;
   hasOpenCashSession: boolean;
   activeCashSessionId: string | null;

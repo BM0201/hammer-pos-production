@@ -5,7 +5,7 @@ import {
   normalizeCashAutoCloseConfig,
   omitUndefinedFields,
 } from "@/modules/cash-session/auto-close-config";
-import { getCashAutoCloseDeadline } from "@/modules/cash-session/auto-close-service";
+import { getCashAutoCloseDeadline, getCashAutoCloseInstant, isBlindCountTime } from "@/modules/cash-session/auto-close-service";
 
 test("auto-close config: default weekday close time is 17:30", () => {
   assert.equal(DEFAULT_CASH_AUTO_CLOSE_CONFIG.weekdayCloseTime, "17:30");
@@ -66,4 +66,23 @@ test("bug reproducido y corregido: actualizar solo el horario ya no resetea 'ena
   const fixedMerge = normalizeCashAutoCloseConfig({ ...current, ...omitUndefinedFields(partialUpdateAsObjectLiteral) });
   assert.equal(fixedMerge.enabled, true, "con el fix: se conserva explícitamente, no por coincidencia del default");
   assert.equal(fixedMerge.weekdayCloseTime, "18:00");
+});
+
+test("auto-close instant: hora exacta de hoy en Managua, null si hoy no cierra solo", () => {
+  // Viernes 10:00 Managua → cierra 17:30 Managua = 23:30Z
+  assert.equal(getCashAutoCloseInstant(new Date("2026-11-20T16:00:00Z"))?.toISOString(), "2026-11-20T23:30:00.000Z");
+  // Sábado 15:00 Managua → cierra 16:00 Managua = 22:00Z
+  assert.equal(getCashAutoCloseInstant(new Date("2026-11-21T21:00:00Z"))?.toISOString(), "2026-11-21T22:00:00.000Z");
+  // Viernes 23:00 Managua (sábado 05:00Z) sigue siendo viernes en Managua
+  assert.equal(getCashAutoCloseInstant(new Date("2026-11-21T05:00:00Z"))?.toISOString(), "2026-11-20T23:30:00.000Z");
+  // Domingo: no cierra solo
+  assert.equal(getCashAutoCloseInstant(new Date("2026-11-22T16:00:00Z")), null);
+});
+
+test("conteo a ciegas: desde 20 min antes del cierre, nunca en día sin cierre automático", () => {
+  // Viernes, cierre 17:30 Managua = 23:30Z
+  assert.equal(isBlindCountTime(new Date("2026-11-20T23:09:00Z")), false);
+  assert.equal(isBlindCountTime(new Date("2026-11-20T23:10:00Z")), true);
+  assert.equal(isBlindCountTime(new Date("2026-11-20T23:45:00Z")), true);
+  assert.equal(isBlindCountTime(new Date("2026-11-22T23:20:00Z")), false); // domingo
 });
