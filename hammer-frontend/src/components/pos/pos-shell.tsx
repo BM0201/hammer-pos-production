@@ -21,6 +21,7 @@ import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { applyUserTheme, ThemeToggle } from "@/components/ui/theme-toggle";
 import { PosSummaryCards } from "./components/pos-summary-cards";
+import { DeviceBattery } from "./components/device-battery";
 import { PosRealtimeSummaryShare, usePosRealtimeSummary } from "./hooks/use-pos-realtime-summary";
 import { PosCashContextShare, usePosCashContext } from "./hooks/use-pos-cash-context";
 import { useAuthHeartbeat } from "@/hooks/use-auth-heartbeat";
@@ -441,6 +442,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
               cashSessionProblem={cashSessionProblem}
             />
           </div>
+          <DeviceBattery />
         </header>
 
         {/* Page content */}
