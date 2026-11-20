@@ -583,6 +583,41 @@ const server = http.createServer(async (req, res) => {
     return ok(res, branches);
   }
 
+  // "Mi día" de la caja: Central con día movido, Demo con caja cerrada y nada pendiente.
+  if (path === "/api/branch/dashboard") {
+    const branch = branches.find((b) => b.id === url.searchParams.get("branchId")) ?? branches[0];
+    const at = (h: number, m: number) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.toISOString(); };
+    if (branch.id !== "br-central") {
+      return ok(res, {
+        branchId: branch.id, branchName: branch.name, businessDate: new Date().toISOString().slice(0, 10),
+        cashSessions: [], sales: { paidTotal: 0, paidCount: 0, averageTicket: 0, byMethod: [], cancelledCount: 0, cancelledTotal: 0, pendingPaymentTotal: 0 },
+        pending: [], recentSales: [], lowStock: [],
+      });
+    }
+    return ok(res, {
+      branchId: branch.id, branchName: branch.name, businessDate: new Date().toISOString().slice(0, 10),
+      cashSessions: [{ id: "cs-1", status: "OPEN", openedAt: at(7, 32), boxCode: "CAJA-01", boxName: "Caja principal", openedByName: "María López", expectedCash: 18450.5 }],
+      sales: {
+        paidTotal: 48230.75, paidCount: 23, averageTicket: 2096.99,
+        byMethod: [{ method: "CASH", amount: 30120.75, count: 16 }, { method: "CARD", amount: 11410, count: 5 }, { method: "TRANSFER", amount: 6700, count: 2 }],
+        cancelledCount: 1, cancelledTotal: 850, pendingPaymentTotal: 3200,
+      },
+      pending: [{ key: "payments", count: 2 }, { key: "myDrafts", count: 1 }, { key: "dispatches", count: 3 }],
+      recentSales: [
+        { paymentId: "pay-1", orderId: "o-1", orderNumber: "MGA-000231", amount: 1250, method: "CASH", paidAt: at(14, 5) },
+        { paymentId: "pay-2", orderId: "o-2", orderNumber: "MGA-000230", amount: 8900, method: "CARD", paidAt: at(13, 48) },
+        { paymentId: "pay-3", orderId: "o-3", orderNumber: "MGA-000229", amount: 430.5, method: "CASH", paidAt: at(13, 12) },
+        { paymentId: "pay-4", orderId: "o-4", orderNumber: "MGA-000228", amount: 6700, method: "TRANSFER", paidAt: at(12, 40) },
+        { paymentId: "pay-5", orderId: "o-5", orderNumber: "MGA-000227", amount: 2100, method: "CASH", paidAt: at(11, 55) },
+      ],
+      lowStock: [
+        { productId: "p-varilla", name: "VARILLA DE HIERRO 3/8 STD", unit: "VARILLA", onHand: 4, threshold: 20, soldToday: 36 },
+        { productId: "p-pintura", name: "PINTURA DE ACEITE BLANCA", unit: "UN", onHand: 0, threshold: 5, soldToday: 3 },
+        { productId: "p-plywood", name: 'PLYWOOD DE 3/16"', unit: "UNIDAD", onHand: 2, threshold: 5, soldToday: 2 },
+      ],
+    });
+  }
+
   // ── Catálogo e Inventario (lo mínimo para previsualizar la Lista y su panel de edición) ──
   if (path === "/api/master/branches") return ok(res, branches.map((b) => ({ ...b, isActive: true })));
   if (path === "/api/master/inventory/config/primary-branch") return ok(res, { branchId: branches[0]?.id ?? null });

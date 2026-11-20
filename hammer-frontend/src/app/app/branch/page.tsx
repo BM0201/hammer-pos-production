@@ -1,409 +1,343 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
-import { KpiCard } from "@/components/dashboard/kpi-card";
-import { RoleSummary } from "@/components/dashboard/role-summary";
+import type { Route } from "next";
 import {
-  Store,
-  ArrowRight,
-  ShoppingCart,
+  AlertTriangle,
+  CheckCircle2,
+  ChevronRight,
+  ClipboardCheck,
   CreditCard,
-  Truck,
+  PackageX,
+  Receipt,
   ShieldCheck,
-  ClipboardList,
-  BarChart3,
-  PackageCheck,
+  ShoppingCart,
+  Truck,
+  Wallet,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
-import { money, fmtDateTimeShort } from "@/lib/format";
+import { money, fmtTimeShort } from "@/lib/format";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { useSession } from "@/lib/client/session";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
-import type { SessionPayload } from "@/types/auth";
+import { components } from "@/styles/design-system";
 
-/** "02:30:05 p. m." — usada en las 3 variantes de rol de abajo (SALES,
- * etc.), duplicada 3 veces antes de extraerla. */
-function fmtTimeWithSeconds(iso: string): string {
-  return new Date(iso).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+/* "Mi día" de la caja — GET /api/branch/dashboard (getBranchDayView). Cada
+ * sección llega solo si el usuario tiene permiso para lo que muestra. */
+
+type PendingKey = "payments" | "myDrafts" | "dispatches" | "transports" | "approvals";
+
+type DayView = {
+  branchName: string;
+  businessDate: string;
+  cashSessions: Array<{
+    id: string;
+    status: "OPEN" | "RECONCILING" | "AUTO_CLOSED_PENDING_REVIEW";
+    openedAt: string;
+    boxCode: string;
+    boxName: string | null;
+    openedByName: string;
+    expectedCash: number | null;
+  }> | null;
+  sales: {
+    paidTotal: number;
+    paidCount: number;
+    averageTicket: number;
+    byMethod: Array<{ method: string; amount: number; count: number }>;
+    cancelledCount: number;
+    cancelledTotal: number;
+  };
+  pending: Array<{ key: PendingKey; count: number }>;
+  recentSales: Array<{ paymentId: string; orderNumber: string; amount: number; method: string; paidAt: string }>;
+  lowStock: Array<{ productId: string; name: string; unit: string; onHand: number; threshold: number; soldToday: number }>;
+};
+
+const PENDING: Record<PendingKey, { label: (n: number) => string; href: string; icon: ReactNode }> = {
+  payments: { label: (n) => (n === 1 ? "Orden por cobrar" : "Órdenes por cobrar"), href: "/app/branch/cashier/payments", icon: <CreditCard className="h-5 w-5" /> },
+  myDrafts: { label: (n) => (n === 1 ? "Venta tuya sin terminar" : "Ventas tuyas sin terminar"), href: "/app/branch/sales/orders", icon: <ShoppingCart className="h-5 w-5" /> },
+  dispatches: { label: (n) => (n === 1 ? "Despacho pendiente" : "Despachos pendientes"), href: "/app/branch/warehouse/dispatch", icon: <Truck className="h-5 w-5" /> },
+  transports: { label: (n) => (n === 1 ? "Transporte por entregar" : "Transportes por entregar"), href: "/app/branch/warehouse/dispatch", icon: <Truck className="h-5 w-5" /> },
+  approvals: { label: (n) => (n === 1 ? "Aprobación por revisar" : "Aprobaciones por revisar"), href: "/app/branch/approvals", icon: <ShieldCheck className="h-5 w-5" /> },
+};
+
+const METHOD_LABEL: Record<string, string> = {
+  CASH: "Efectivo",
+  CARD: "Tarjeta",
+  TRANSFER: "Transferencia",
+  CREDIT: "Crédito",
+  MIXED: "Mixto",
+};
+
+const linkButton = `${components.button.base} ${components.button.secondary} ${components.button.sizes.sm}`;
+
+function Section({ title, icon, action, children, className = "" }: { title: string; icon: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <Card className={`flex flex-col gap-3 ${className}`}>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+          <span className="text-[var(--color-text-muted)]" aria-hidden>{icon}</span>
+          {title}
+        </h2>
+        {action}
+      </div>
+      {children}
+    </Card>
+  );
 }
 
-type QuickLink = { href: string; label: string; icon: ReactNode };
-
-type BranchSession = Pick<
-  SessionPayload,
-  "roleCode" | "globalRoles" | "branchMemberships"
->;
-
-type SalesSummary = {
-  draftsOpen: number;
-  sentToPayment: number;
-  salesToday: number;
-};
-
-type CashierSummary = {
-  activeSessionCount: number;
-  pendingPayments: number;
-  lastPayment: { amount: number; paidAt: string; orderNumber: string } | null;
-};
-
-type WarehouseSummary = {
-  pendingDispatches: number;
-  recentDispatches: number;
-  overrideRequests: number;
-};
-
-type BranchAdminSummary = {
-  salesToday: number;
-  pendingPaymentTotal?: number;
-  paidSalesCount?: number;
-  pendingPayments: number;
-  pendingDispatches: number;
-  pendingApprovals: number;
-  criticalInventory: number;
-  pendingTransports: number;
-  alerts: string[];
-};
-
-type PendingTransport = {
-  id: string;
-  customerName: string;
-  status: string;
-  saleOrderNumber: string;
-  price: number;
-  reference: string | null;
-  scheduledPaymentTime: string | null;
-};
-
-type BranchDashboardResponse =
-  | { kind: "SALES"; summary: SalesSummary }
-  | { kind: "CASHIER"; summary: CashierSummary }
-  | { kind: "WAREHOUSE"; summary: WarehouseSummary }
-  | { kind: "BRANCH_ADMIN"; summary: BranchAdminSummary; pendingTransports: PendingTransport[] };
-
-function buildBranchAdminQuickLinks(session: BranchSession): QuickLink[] {
-  const links: QuickLink[] = [];
-
-  if (canInAnyAssignedBranch(session, CAPABILITIES.SALES_VIEW)) {
-    links.push({
-      href: "/app/branch/sales/orders",
-      label: "Punto de venta",
-      icon: <ShoppingCart className="h-5 w-5" />,
-    });
+function CashSection({ sessions }: { sessions: NonNullable<DayView["cashSessions"]> }) {
+  if (sessions.length === 0) {
+    return (
+      <Section title="Caja" icon={<Wallet className="h-4 w-4" />}>
+        <p className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
+          <span className="h-2.5 w-2.5 rounded-full bg-[var(--color-text-soft)]" aria-hidden />
+          No hay caja abierta.
+        </p>
+        <Link href="/app/branch/cash" className={`${components.button.base} ${components.button.primary} ${components.button.sizes.md} w-full`}>
+          Abrir caja
+        </Link>
+      </Section>
+    );
   }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW)) {
-    links.push({
-      href: "/app/branch/cashier/payments",
-      label: "Caja y cobros",
-      icon: <CreditCard className="h-5 w-5" />,
-    });
-  }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.DISPATCH_VIEW)) {
-    links.push({
-      href: "/app/branch/warehouse/dispatch",
-      label: "Despacho",
-      icon: <Truck className="h-5 w-5" />,
-    });
-  }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.APPROVAL_REQUEST_REVIEW)) {
-    links.push({
-      href: "/app/branch/approvals",
-      label: "Aprobaciones",
-      icon: <ShieldCheck className="h-5 w-5" />,
-    });
-  }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.AUDIT_VIEW)) {
-    links.push({
-      href: "/app/branch/audit",
-      label: "Supervisión y bitácora",
-      icon: <ClipboardList className="h-5 w-5" />,
-    });
-  }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.REPORTS_EXPORT)) {
-    links.push({
-      href: "/app/branch/reports",
-      label: "Reportes",
-      icon: <BarChart3 className="h-5 w-5" />,
-    });
-  }
-
-  return links;
+  return (
+    <Section title="Caja" icon={<Wallet className="h-4 w-4" />}>
+      <ul className="flex flex-col gap-3">
+        {sessions.map((s) => {
+          const open = s.status === "OPEN";
+          return (
+            <li key={s.id} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
+              <p className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+                <span className={`h-2.5 w-2.5 rounded-full ${open ? "bg-[var(--color-pay)]" : "bg-[var(--color-warning-500)]"}`} aria-hidden />
+                {open ? "Abierta" : s.status === "RECONCILING" ? "En conciliación" : "Cierre automático por revisar"}
+                <span className="font-normal text-[var(--color-text-muted)]">· {s.boxName || s.boxCode}</span>
+              </p>
+              <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                Desde las {fmtTimeShort(s.openedAt)} · {s.openedByName}
+              </p>
+              {s.expectedCash !== null ? (
+                <div className="mt-2 flex items-baseline justify-between gap-2">
+                  <span className="text-xs text-[var(--color-text-secondary)]">Efectivo que debe haber en gaveta</span>
+                  <span className="text-lg font-bold tabular-nums text-[var(--color-text)]">{money(s.expectedCash)}</span>
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      <Link href="/app/branch/cash" className={`${linkButton} w-full`}>
+        {sessions.every((s) => s.status === "OPEN") ? "Ir a Caja" : "Revisar en Caja"}
+      </Link>
+    </Section>
+  );
 }
 
-function resolveRoleVariant(session: BranchSession): "SALES" | "CASHIER" | "WAREHOUSE" | "BRANCH_ADMIN" | "MASTER" {
-  if (session.roleCode === "MASTER" || session.globalRoles.includes("MASTER")) return "MASTER";
-
-  const hasSales = canInAnyAssignedBranch(session, CAPABILITIES.SALES_VIEW);
-  const hasCash = canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW);
-  const hasDispatch = canInAnyAssignedBranch(session, CAPABILITIES.DISPATCH_VIEW);
-
-  if (hasSales && !hasCash && !hasDispatch) return "SALES";
-  if (hasCash && !hasSales && !hasDispatch) return "CASHIER";
-  if (hasDispatch && !hasSales && !hasCash) return "WAREHOUSE";
-
-  return "BRANCH_ADMIN";
+function PendingSection({ pending }: { pending: DayView["pending"] }) {
+  return (
+    <Section title="Lo que falta" icon={<ClipboardCheck className="h-4 w-4" />}>
+      {pending.length === 0 ? (
+        <p className="flex items-center gap-2 rounded-xl bg-[var(--color-success-50)] px-3 py-3 text-sm font-medium text-[var(--color-success-700)]">
+          <CheckCircle2 className="h-5 w-5 shrink-0" aria-hidden />
+          Todo al día. No hay nada pendiente.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {pending.map((p) => {
+            const cfg = PENDING[p.key];
+            return (
+              <li key={p.key}>
+                <Link
+                  href={cfg.href as Route}
+                  className="flex min-h-[52px] items-center gap-3 rounded-xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-[var(--color-warning-700)] transition-colors hover:border-[var(--color-warning-500)] active:scale-[0.99]"
+                >
+                  <span aria-hidden>{cfg.icon}</span>
+                  <span className="text-xl font-bold tabular-nums">{p.count}</span>
+                  <span className="flex-1 text-sm font-medium">{cfg.label(p.count)}</span>
+                  <ChevronRight className="h-5 w-5 shrink-0" aria-hidden />
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Section>
+  );
 }
 
-export default function BranchPage() {
+function SalesSection({ sales }: { sales: DayView["sales"] }) {
+  const max = Math.max(1, ...sales.byMethod.map((m) => m.amount));
+  return (
+    <Section title="Ventas de hoy" icon={<Receipt className="h-4 w-4" />}>
+      <div>
+        <p className="text-3xl font-bold tabular-nums text-[var(--color-text)]">{money(sales.paidTotal)}</p>
+        <p className="mt-0.5 text-sm text-[var(--color-text-muted)]">
+          {sales.paidCount === 1 ? "1 venta cobrada" : `${sales.paidCount} ventas cobradas`}
+          {sales.paidCount > 0 ? ` · promedio ${money(sales.averageTicket)}` : ""}
+        </p>
+      </div>
+      {sales.byMethod.length > 0 ? (
+        <ul className="flex flex-col gap-2.5">
+          {sales.byMethod.map((m) => (
+            <li key={m.method}>
+              <div className="flex items-baseline justify-between gap-2 text-sm">
+                <span className="text-[var(--color-text-secondary)]">
+                  {METHOD_LABEL[m.method] ?? m.method}
+                  <span className="ml-1.5 text-xs text-[var(--color-text-muted)]">({m.count})</span>
+                </span>
+                <span className="font-semibold tabular-nums text-[var(--color-text)]">{money(m.amount)}</span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-alt)]" aria-hidden>
+                <div className="h-full rounded-full bg-[var(--color-pay)]" style={{ width: `${(m.amount / max) * 100}%` }} />
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {sales.cancelledCount > 0 ? (
+        <p className="flex items-center gap-1.5 text-xs text-[var(--color-danger-600)]">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          {sales.cancelledCount === 1 ? "1 venta anulada" : `${sales.cancelledCount} ventas anuladas`} ({money(sales.cancelledTotal)})
+        </p>
+      ) : null}
+    </Section>
+  );
+}
+
+function RecentSalesSection({ recent }: { recent: DayView["recentSales"] }) {
+  return (
+    <Section title="Últimos cobros" icon={<Receipt className="h-4 w-4" />}>
+      {recent.length === 0 ? (
+        <p className="text-sm text-[var(--color-text-muted)]">Todavía no hay cobros hoy.</p>
+      ) : (
+        <ul className="divide-y divide-[var(--color-border)]">
+          {recent.map((s) => (
+            <li key={s.paymentId} className="flex items-center gap-3 py-2.5">
+              <span className="w-[4.75rem] shrink-0 text-xs tabular-nums text-[var(--color-text-muted)]">{fmtTimeShort(s.paidAt)}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-[var(--color-text)]">{s.orderNumber}</span>
+                <span className="text-xs text-[var(--color-text-muted)]">{METHOD_LABEL[s.method] ?? s.method}</span>
+              </span>
+              <span className="text-sm font-semibold tabular-nums text-[var(--color-text)]">{money(s.amount)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+function LowStockSection({ items }: { items: DayView["lowStock"] }) {
+  return (
+    <Section title="Se está agotando" icon={<PackageX className="h-4 w-4" />}>
+      <p className="-mt-1 text-xs text-[var(--color-text-muted)]">Lo que se vendió hoy y quedó en su mínimo o debajo.</p>
+      {items.length === 0 ? (
+        <p className="text-sm text-[var(--color-text-secondary)]">Nada de lo vendido hoy está bajo su mínimo.</p>
+      ) : (
+        <ul className="divide-y divide-[var(--color-border)]">
+          {items.map((p) => (
+            <li key={p.productId} className="flex items-center gap-3 py-2.5">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-[var(--color-text)]">{p.name}</span>
+                <span className="text-xs text-[var(--color-text-muted)]">
+                  Vendidos hoy {p.soldToday} · mínimo {p.threshold}
+                </span>
+              </span>
+              <span
+                className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold tabular-nums ${
+                  p.onHand <= 0
+                    ? "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]"
+                    : "bg-[var(--color-warning-50)] text-[var(--color-warning-700)]"
+                }`}
+              >
+                {p.onHand <= 0 ? "Agotado" : `Quedan ${p.onHand} ${p.unit}`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+export default function BranchDayPage() {
   const sessionState = useSession();
-  const [data, setData] = useState<BranchDashboardResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<DayView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const requestIdRef = useRef(0);
 
-  const variant = useMemo(() => {
-    if (sessionState.status !== "authenticated") return null;
-    return resolveRoleVariant(sessionState.session);
-  }, [sessionState]);
+  const branchId = sessionState.status === "authenticated"
+    ? getActiveBranchId(sessionState.session.branchIds, sessionState.session.primaryBranchId)
+    : "";
 
-  const loadDashboard = useCallback(async () => {
-    if (sessionState.status !== "authenticated" || !variant || variant === "MASTER") {
-      if (variant === "MASTER") setLoading(false);
-      return;
-    }
-
+  const load = useCallback(async () => {
+    if (!branchId) return;
     const requestId = ++requestIdRef.current;
     try {
-      const response = await apiFetch("/api/branch/dashboard");
+      const response = await apiFetch(`/api/branch/dashboard?branchId=${encodeURIComponent(branchId)}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = await response.json() as ApiResponse<BranchDashboardResponse> | BranchDashboardResponse;
+      const payload = (await response.json()) as ApiResponse<DayView> | DayView;
       if (requestId !== requestIdRef.current) return;
-      setData(unwrapApiData<BranchDashboardResponse>(payload));
+      setData(unwrapApiData<DayView>(payload));
       setUpdatedAt(new Date().toISOString());
       setError(null);
     } catch (e) {
-      if (requestId === requestIdRef.current) setError(e instanceof Error ? e.message : "Failed to load dashboard");
-    } finally {
-      if (requestId === requestIdRef.current) setLoading(false);
+      if (requestId === requestIdRef.current) setError(e instanceof Error ? e.message : "Error");
     }
-  }, [sessionState, variant]);
+  }, [branchId]);
 
   useOperationalPolling({
-    task: loadDashboard,
+    task: load,
     intervalMs: 30_000,
-    enabled: sessionState.status === "authenticated" && Boolean(variant) && variant !== "MASTER",
-    deps: [loadDashboard],
+    enabled: Boolean(branchId),
+    deps: [load],
     onError: () => undefined,
   });
 
-  if (sessionState.status === "loading") {
-    return <p className="text-[var(--color-text-muted)] animate-pulse">Cargando…</p>;
+  if (sessionState.status === "loading" || (!data && !error && branchId)) {
+    return <p className="animate-pulse text-[var(--color-text-muted)]">Cargando tu día…</p>;
   }
   if (sessionState.status !== "authenticated") {
     return <p className="text-[var(--color-danger-600)]">Sesión no válida.</p>;
   }
-
-  const session = sessionState.session;
-  const primaryBranchId = getActiveBranchId(session.branchIds, session.primaryBranchId);
-
-  /* ── MASTER users get redirected ── */
-  if (variant === "MASTER") {
+  if (!branchId) {
+    return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
+  }
+  if (!data) {
     return (
-      <section className="min-h-[50vh] flex items-center justify-center">
-        <Card className="p-8 text-center max-w-md animate-scale-in">
-          <div className="mx-auto w-14 h-14 rounded-2xl bg-[var(--color-master-50)] flex items-center justify-center mb-4">
-            <Store className="h-7 w-7 text-[var(--color-master-600)]" />
-          </div>
-          <h1 className="text-lg font-bold text-[var(--color-text)]">Panel de Sucursal</h1>
-          <p className="mt-2 text-sm text-[var(--color-text-muted)]">
-            Los usuarios MASTER operan desde el Centro de Comando.
-          </p>
-          <Link href="/app/master" className="mt-5 inline-flex">
-            <Button variant="primary" icon={<ArrowRight className="h-4 w-4" />}>
-              Ir al Centro de Comando
-            </Button>
-          </Link>
-        </Card>
-      </section>
+      <Card className="text-center">
+        <p className="text-sm text-[var(--color-danger-600)]">No se pudo cargar tu día ({error}).</p>
+        <button type="button" onClick={() => void load()} className={`${linkButton} mt-3`}>
+          Reintentar
+        </button>
+      </Card>
     );
   }
-
-  if (loading) {
-    return <p className="text-[var(--color-text-muted)] animate-pulse">Cargando dashboard…</p>;
-  }
-  if (error || !data) {
-    return <p className="text-[var(--color-danger-600)]">No se pudo cargar el dashboard: {error}</p>;
-  }
-
-  /* ── SALES-only ── */
-  if (data.kind === "SALES") {
-    if (!primaryBranchId) {
-      return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
-    }
-    const summary = data.summary;
-    return (
-      <>
-      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {fmtTimeWithSeconds(updatedAt)}</p> : null}
-      <RoleSummary
-        title="Punto de Venta"
-        subtitle="Tu actividad comercial del día."
-        roleAccent="SALES"
-        kpis={(
-          <>
-            <KpiCard label="Borradores abiertos" value={summary.draftsOpen} tone={summary.draftsOpen > 0 ? "alert" : "ok"} roleAccent="SALES" />
-            <KpiCard label="Enviadas a cobro" value={summary.sentToPayment} tone={summary.sentToPayment > 0 ? "alert" : "default"} roleAccent="SALES" />
-            <KpiCard label="Ventas del día" value={money(summary.salesToday)} tone={summary.salesToday > 0 ? "ok" : "default"} roleAccent="SALES" />
-          </>
-        )}
-        quickLinks={[
-          {
-            href: "/app/branch/sales/orders",
-            label: "Abrir punto de venta",
-            icon: <ShoppingCart className="h-5 w-5" />,
-          },
-        ]}
-      />
-      </>
-    );
-  }
-
-  /* ── CASHIER-only ── */
-  if (data.kind === "CASHIER") {
-    if (!primaryBranchId) {
-      return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
-    }
-    const summary = data.summary;
-    return (
-      <>
-      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {fmtTimeWithSeconds(updatedAt)}</p> : null}
-      <RoleSummary
-        title="Caja & Cobros"
-        subtitle="Operación de cobro y estado de sesión de caja."
-        roleAccent="CASHIER"
-        kpis={(
-          <>
-            <KpiCard label="Sesiones activas" value={summary.activeSessionCount} tone={summary.activeSessionCount > 0 ? "ok" : "alert"} roleAccent="CASHIER" />
-            <KpiCard label="Órdenes por cobrar" value={summary.pendingPayments} tone={summary.pendingPayments > 0 ? "alert" : "ok"} roleAccent="CASHIER" />
-            <KpiCard
-              label="Último cobro"
-              value={summary.lastPayment ? money(summary.lastPayment.amount) : "—"}
-              helper={summary.lastPayment ? `${summary.lastPayment.orderNumber}` : "Sin cobros recientes"}
-              roleAccent="CASHIER"
-            />
-          </>
-        )}
-        quickLinks={[
-          {
-            href: "/app/branch/cashier/payments",
-            label: "Abrir caja y cobros",
-            icon: <CreditCard className="h-5 w-5" />,
-          },
-        ]}
-      />
-      </>
-    );
-  }
-
-  /* ── WAREHOUSE-only ── */
-  if (data.kind === "WAREHOUSE") {
-    if (!primaryBranchId) {
-      return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
-    }
-    const summary = data.summary;
-    const alerts = summary.overrideRequests > 0
-      ? [`Hay ${summary.overrideRequests} excepciones de despacho pendientes.`]
-      : [];
-
-    const warehouseQuickLinks: QuickLink[] = [
-      {
-        href: "/app/branch/warehouse/dispatch",
-        label: "Despacho y entregas",
-        icon: <Truck className="h-5 w-5" />,
-      },
-    ];
-
-    if (canInAnyAssignedBranch(session, CAPABILITIES.APPROVAL_REQUEST_CREATE)) {
-      warehouseQuickLinks.push({
-        href: "/app/branch/approvals",
-        label: "Excepciones y solicitudes",
-        icon: <ShieldCheck className="h-5 w-5" />,
-      });
-    }
-
-    return (
-      <RoleSummary
-        title="Bodega & Despacho"
-        subtitle="Estado operativo de entregas y excepciones."
-        roleAccent="WAREHOUSE"
-        alerts={alerts}
-        kpis={(
-          <>
-            <KpiCard label="Pendientes de despacho" value={summary.pendingDispatches} tone={summary.pendingDispatches > 0 ? "alert" : "ok"} roleAccent="WAREHOUSE" />
-            <KpiCard label="Despachos hoy" value={summary.recentDispatches} tone="ok" roleAccent="WAREHOUSE" />
-            <KpiCard label="Excepciones pendientes" value={summary.overrideRequests} tone={summary.overrideRequests > 0 ? "alert" : "ok"} roleAccent="WAREHOUSE" />
-          </>
-        )}
-        quickLinks={warehouseQuickLinks}
-      />
-    );
-  }
-
-  /* ── BRANCH_ADMIN ── */
-  const summary = data.summary;
-  const pendingTransports = data.pendingTransports;
 
   return (
-    <>
-      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {fmtTimeWithSeconds(updatedAt)}</p> : null}
-      <RoleSummary
-        title="Supervisión de Sucursal"
-        subtitle="Resumen operativo para administración local."
-        roleAccent="BRANCH_ADMIN"
-        showHeaderAccent={false}
-        alerts={summary.alerts}
-        kpis={(
-          <>
-            <KpiCard label="Ventas del día" value={money(summary.salesToday)} tone={summary.salesToday > 0 ? "ok" : "default"} roleAccent="BRANCH_ADMIN" />
-            <KpiCard label="Cobros pendientes" value={summary.pendingPayments} tone={summary.pendingPayments > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
-            <KpiCard label="Despachos pendientes" value={summary.pendingDispatches} tone={summary.pendingDispatches > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
-            <KpiCard label="Aprobaciones pendientes" value={summary.pendingApprovals} tone={summary.pendingApprovals > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
-            <KpiCard label="Inventario crítico" value={summary.criticalInventory} tone={summary.criticalInventory > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
-            <KpiCard label="Transportes en tránsito" value={summary.pendingTransports} tone={summary.pendingTransports > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
-          </>
-        )}
-        quickLinks={buildBranchAdminQuickLinks(session)}
-      />
+    <section className="flex flex-col gap-4 overflow-y-auto pb-4" data-testid="branch-my-day">
+      <header className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
+        <div>
+          <h1 className="text-2xl font-bold text-[var(--color-text)]">Mi día</h1>
+          <p className="text-sm text-[var(--color-text-muted)]">
+            {data.branchName} · {new Date(`${data.businessDate}T12:00:00`).toLocaleDateString("es-NI", { weekday: "long", day: "numeric", month: "long" })}
+          </p>
+        </div>
+        {updatedAt ? (
+          <p className="text-xs text-[var(--color-text-muted)]" aria-live="polite">
+            {error ? "Sin conexión · " : ""}Actualizado {fmtTimeShort(updatedAt)}
+          </p>
+        ) : null}
+      </header>
 
-      {/* ── Servicios en Tránsito ── */}
-      {pendingTransports.length > 0 && (
-        <section className="mt-6 animate-fade-in-up">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--color-branch_admin-50,var(--color-surface-alt))]">
-              <PackageCheck className="h-4 w-4 text-[var(--color-branch_admin-600,var(--color-text-muted))]" />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold text-[var(--color-text)]">Servicios en tránsito</h2>
-              <p className="text-xs text-[var(--color-text-muted)]">{pendingTransports.length} transporte(s) pendiente(s) de entrega</p>
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {pendingTransports.map((t) => (
-              <Card key={t.id} className="p-4 space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-[var(--color-text)]">{t.customerName}</span>
-                  <span className={`text-[0.65rem] font-semibold uppercase px-2 py-0.5 rounded-full ${
-                    t.status === "IN_TRANSIT"
-                      ? "bg-[var(--color-warning-50)] text-[var(--color-warning-700)]"
-                      : "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]"
-                  }`}>
-                    {t.status === "IN_TRANSIT" ? "En tránsito" : "Pendiente"}
-                  </span>
-                </div>
-                <p className="text-xs text-[var(--color-text-muted)]">Orden: {t.saleOrderNumber}</p>
-                <p className="text-xs text-[var(--color-text-muted)]">Precio transporte: <strong>C${Number(t.price).toFixed(2)}</strong></p>
-                {t.reference && <p className="text-xs text-[var(--color-text-muted)]">Ref: {t.reference}</p>}
-                {t.scheduledPaymentTime && (
-                  <p className="text-xs text-[var(--color-text-muted)]">Pago prog.: {fmtDateTimeShort(t.scheduledPaymentTime)}</p>
-                )}
-              </Card>
-            ))}
-          </div>
-        </section>
-      )}
-    </>
+      <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {data.cashSessions ? <CashSection sessions={data.cashSessions} /> : null}
+        <PendingSection pending={data.pending} />
+        <SalesSection sales={data.sales} />
+        <RecentSalesSection recent={data.recentSales} />
+        <LowStockSection items={data.lowStock} />
+      </div>
+    </section>
   );
 }

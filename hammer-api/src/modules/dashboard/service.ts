@@ -1,152 +1,155 @@
-import { ApprovalStatus, PaymentStatus, SaleOrderStatus, TransportServiceStatus } from "@prisma/client";
+import { ApprovalStatus, PaymentStatus, Prisma, SaleOrderStatus, TransportServiceStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getBranchSalesRealtimeSummary, getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
+import { calculateExpectedCashForSessionTx } from "@/modules/cash-session/service";
+import { buildPendingList, lowStockThreshold, pickLowStock, type PendingKey } from "@/modules/dashboard/my-day";
 
-function toNumber(value: { toNumber: () => number } | null | undefined): number {
-  return value ? value.toNumber() : 0;
+const ACTIVE_CASH_STATUSES = ["OPEN", "RECONCILING", "AUTO_CLOSED_PENDING_REVIEW"] as const;
+
+/** Qué secciones de "Mi día" puede ver el usuario en esta sucursal (lo decide la ruta con canInBranch). */
+export type DayViewAccess = Record<PendingKey, boolean> & { cash: boolean };
+
+/**
+ * "Mi día" de la caja: estado de caja, lo que falta, ventas de hoy y lo que
+ * se está agotando de lo vendido hoy. Reemplaza los 4 resúmenes por rol que
+ * repetían la barra de arriba. El día es el día operativo de Managua, el
+ * mismo que usa la barra (getBranchSalesRealtimeSummary).
+ */
+export async function getBranchDayView(branchId: string, userId: string, access: DayViewAccess) {
+  const window = getOperationalWindowForManaguaDate();
+  const todayOrders = { branchId, status: { not: SaleOrderStatus.CANCELLED }, createdAt: { gte: window.start, lt: window.end } };
+
+  const [sales, cashSessions, payments, myDrafts, dispatches, transports, approvals, recentPayments, soldToday] = await Promise.all([
+    getBranchSalesRealtimeSummary(branchId),
+    access.cash
+      ? prisma.cashSession.findMany({
+          where: { physicalCashBox: { branchId }, status: { in: [...ACTIVE_CASH_STATUSES] } },
+          select: {
+            id: true,
+            status: true,
+            openedAt: true,
+            openingAmount: true,
+            physicalCashBox: { select: { code: true, description: true } },
+            openedBy: { select: { fullName: true, username: true } },
+          },
+          orderBy: { openedAt: "asc" },
+        })
+      : Promise.resolve([]),
+    access.payments ? prisma.saleOrder.count({ where: { branchId, status: SaleOrderStatus.PENDING_PAYMENT } }) : 0,
+    // Con líneas: un borrador vacío no es una venta sin terminar.
+    access.myDrafts
+      ? prisma.saleOrder.count({ where: { branchId, createdByUserId: userId, status: SaleOrderStatus.DRAFT, lines: { some: {} } } })
+      : 0,
+    access.dispatches ? prisma.saleOrder.count({ where: { branchId, status: SaleOrderStatus.DISPATCH_PENDING } }) : 0,
+    access.transports
+      ? prisma.transportService.count({
+          where: { branchId, status: { in: [TransportServiceStatus.PENDING, TransportServiceStatus.IN_TRANSIT] } },
+        })
+      : 0,
+    access.approvals
+      ? prisma.approvalRequest.count({
+          where: { branchId, status: { in: [ApprovalStatus.REQUESTED, ApprovalStatus.UNDER_REVIEW] } },
+        })
+      : 0,
+    prisma.payment.findMany({
+      where: {
+        status: PaymentStatus.POSTED,
+        paidAt: { gte: window.start, lt: window.end },
+        saleOrder: { branchId, status: { not: SaleOrderStatus.CANCELLED } },
+      },
+      select: { id: true, amount: true, method: true, paidAt: true, saleOrder: { select: { id: true, orderNumber: true } } },
+      orderBy: { paidAt: "desc" },
+      take: 8,
+    }),
+    prisma.saleOrderLine.groupBy({
+      by: ["productId"],
+      where: { saleOrder: todayOrders },
+      _sum: { quantity: true },
+    }),
+  ]);
+
+  return {
+    branchId,
+    branchName: sales.branchName,
+    businessDate: sales.businessDate,
+    // null = sin permiso de caja (no se muestra la sección); [] = caja cerrada.
+    cashSessions: !access.cash ? null : await Promise.all(
+      cashSessions.map(async (s) => ({
+        id: s.id,
+        status: s.status,
+        openedAt: s.openedAt,
+        boxCode: s.physicalCashBox.code,
+        boxName: s.physicalCashBox.description,
+        openedByName: s.openedBy.fullName || s.openedBy.username,
+        // Solo con la caja abierta: en conciliación o auto-cerrada el conteo manda.
+        expectedCash:
+          s.status === "OPEN"
+            ? (await calculateExpectedCashForSessionTx(prisma as unknown as Prisma.TransactionClient, s.id, s.openingAmount)).expectedCash
+            : null,
+      })),
+    ),
+    sales: {
+      paidTotal: sales.paidSalesTotal,
+      paidCount: sales.paidSalesCount,
+      averageTicket: sales.paidSalesCount > 0 ? sales.paidSalesTotal / sales.paidSalesCount : 0,
+      byMethod: sales.paymentsByMethod,
+      cancelledCount: sales.cancelledSalesCount,
+      cancelledTotal: sales.cancelledSalesTotal,
+      pendingPaymentTotal: sales.pendingPaymentTotal,
+    },
+    pending: buildPendingList({ payments, myDrafts, dispatches, transports, approvals }, access),
+    recentSales: recentPayments.map((p) => ({
+      paymentId: p.id,
+      orderId: p.saleOrder.id,
+      orderNumber: p.saleOrder.orderNumber,
+      amount: Number(p.amount),
+      method: p.method,
+      paidAt: p.paidAt,
+    })),
+    lowStock: await listLowStockSoldToday(branchId, soldToday),
+  };
 }
 
 /**
- * prompt-inventario-critico-fusion.md — aislado en su propia función, con
- * un `db` inyectable (mismo patrón que findSafeAccountForBranch en
- * treasury/service.ts), para poder probar el filtro con un fake en
- * memoria sin tocar el resto de getBranchAdminDashboardSummary (KPIs de
- * ventas/cobros/despachos/aprobaciones/transportes, sin cambios).
- *
- * Sin este filtro, cada miembro DERIVADO (no canónico) de una fusión
- * activa cuenta como "crítico" porque su balance propio vive en 0 por
- * diseño (el stock real está en el canónico) — doble conteo + ruido
- * falso. excludeDerivedStockGroupMembers() (catalog/service.ts) es el
- * filtro ÚNICO ya establecido para esto ("alertas de reposición", su
- * propio doc comment) — reusado, no reinventado a mano acá (ver
- * diagnóstico: un filtro literal a mano que solo mire isCanonical, sin
- * isActive de la membresía/grupo, esconde productos hoy canónicos con
- * basura de fusiones viejas ya disueltas).
+ * Lo vendido hoy que quedó en su punto de reorden (o mínimo, o 5) o debajo.
+ * Antes "Inventario crítico" contaba todo lo que tuviera ≤ 5 en la sucursal
+ * (212 en Managua), incluido lo que nunca se volvió a pedir, y no decía cuál.
  */
-export async function countCriticalInventory(branchIds: string[], db: typeof prisma = prisma): Promise<number> {
-  return db.inventoryBalance.count({
-    where: {
-      branchId: { in: branchIds },
-      quantityOnHand: { lte: 5 },
-      product: { isActive: true, ...excludeDerivedStockGroupMembers() },
-    },
-  });
-}
+async function listLowStockSoldToday(
+  branchId: string,
+  soldToday: Array<{ productId: string; _sum: { quantity: Prisma.Decimal | null } }>,
+) {
+  if (soldToday.length === 0) return [];
+  const soldById = new Map(soldToday.map((s) => [s.productId, Number(s._sum.quantity ?? 0)]));
+  const productIds = [...soldById.keys()];
 
-export async function getBranchAdminDashboardSummary(branchIds: string[]) {
-  const [salesSummaries, pendingPayments, pendingDispatches, pendingApprovals, criticalInventory, pendingTransports] = await Promise.all([
-    Promise.all(branchIds.map((branchId) => getBranchSalesRealtimeSummary(branchId))),
-    prisma.saleOrder.count({
-      where: { branchId: { in: branchIds }, status: SaleOrderStatus.PENDING_PAYMENT },
+  // shortcut: un derivado de fusión no aparece (su stock vive en el canónico, que no tiene ventas propias); si hace falta, mapear derivado → canónico.
+  const [balances, settings] = await Promise.all([
+    prisma.inventoryBalance.findMany({
+      where: { branchId, productId: { in: productIds }, product: { isActive: true, ...excludeDerivedStockGroupMembers() } },
+      select: { productId: true, quantityOnHand: true, product: { select: { name: true, unit: true } } },
     }),
-    prisma.saleOrder.count({
-      where: { branchId: { in: branchIds }, status: SaleOrderStatus.DISPATCH_PENDING },
-    }),
-    prisma.approvalRequest.count({
-      where: { branchId: { in: branchIds }, status: { in: [ApprovalStatus.REQUESTED, ApprovalStatus.UNDER_REVIEW] } },
-    }),
-    countCriticalInventory(branchIds),
-    prisma.transportService.count({
-      where: {
-        branchId: { in: branchIds },
-        status: { in: [TransportServiceStatus.PENDING, TransportServiceStatus.IN_TRANSIT] },
-      },
+    prisma.branchProductSetting.findMany({
+      where: { branchId, productId: { in: productIds } },
+      select: { productId: true, reorderPoint: true, minStock: true },
     }),
   ]);
+  const settingById = new Map(
+    settings.map((s) => [
+      s.productId,
+      { reorderPoint: s.reorderPoint === null ? null : Number(s.reorderPoint), minStock: s.minStock === null ? null : Number(s.minStock) },
+    ]),
+  );
 
-  const alerts: string[] = [];
-  if (pendingApprovals > 0) alerts.push(`Tienes ${pendingApprovals} aprobaciones pendientes en tus sucursales.`);
-  if (pendingPayments > 0) alerts.push(`Hay ${pendingPayments} órdenes pendientes de cobro.`);
-  if (pendingDispatches > 0) alerts.push(`Hay ${pendingDispatches} órdenes pendientes de despacho.`);
-  if (pendingTransports > 0) alerts.push(`Hay ${pendingTransports} servicios de transporte pendientes de entrega.`);
-  if (criticalInventory > 0) alerts.push(`Hay ${criticalInventory} balances con inventario crítico (≤ 5).`);
-
-  return {
-    salesToday: salesSummaries.reduce((acc, summary) => acc + summary.paidSalesTotal, 0),
-    pendingPaymentTotal: salesSummaries.reduce((acc, summary) => acc + summary.pendingPaymentTotal, 0),
-    paidSalesCount: salesSummaries.reduce((acc, summary) => acc + summary.paidSalesCount, 0),
-    pendingPayments,
-    pendingDispatches,
-    pendingApprovals,
-    criticalInventory,
-    pendingTransports,
-    alerts,
-  };
-}
-
-export async function getSalesDashboardSummary(branchId: string, userId: string) {
-  const { start, end } = getOperationalWindowForManaguaDate();
-
-  const [draftsOpen, sentToPayment, salesToday] = await Promise.all([
-    prisma.saleOrder.count({ where: { branchId, createdByUserId: userId, status: SaleOrderStatus.DRAFT } }),
-    prisma.saleOrder.count({ where: { branchId, createdByUserId: userId, status: SaleOrderStatus.PENDING_PAYMENT } }),
-    prisma.payment.aggregate({
-      where: {
-        status: PaymentStatus.POSTED,
-        paidAt: { gte: start, lt: end },
-        saleOrder: { branchId, createdByUserId: userId, status: { not: SaleOrderStatus.CANCELLED } },
-      },
-      _sum: { amount: true },
-      _count: { _all: true },
-    }),
-  ]);
-
-  return {
-    draftsOpen,
-    sentToPayment,
-    salesToday: toNumber(salesToday._sum.amount),
-    paidSalesCount: salesToday._count._all,
-  };
-}
-
-export async function getCashierDashboardSummary(branchId: string) {
-  const [activeSessionCount, pendingPayments, lastPayment] = await Promise.all([
-    prisma.cashSession.count({
-      where: {
-        physicalCashBox: { branchId },
-        status: { in: ["OPEN", "RECONCILING"] },
-      },
-    }),
-    prisma.saleOrder.count({ where: { branchId, status: SaleOrderStatus.PENDING_PAYMENT } }),
-    prisma.payment.findFirst({
-      where: { status: PaymentStatus.POSTED, saleOrder: { branchId, status: { not: SaleOrderStatus.CANCELLED } } },
-      orderBy: { paidAt: "desc" },
-      include: { saleOrder: { select: { orderNumber: true } } },
-    }),
-  ]);
-
-  return {
-    activeSessionCount,
-    pendingPayments,
-    lastPayment: lastPayment
-      ? {
-          amount: toNumber(lastPayment.amount),
-          paidAt: lastPayment.paidAt,
-          orderNumber: lastPayment.saleOrder.orderNumber,
-        }
-      : null,
-  };
-}
-
-export async function getWarehouseDashboardSummary(branchId: string) {
-  const { start } = getOperationalWindowForManaguaDate(); // día Managua, no medianoche UTC del servidor
-
-  const [pendingDispatches, recentDispatches, overrideRequests] = await Promise.all([
-    prisma.saleOrder.count({ where: { branchId, status: SaleOrderStatus.DISPATCH_PENDING } }),
-    prisma.dispatchTicket.count({ where: { branchId, dispatchedAt: { gte: start } } }),
-    prisma.approvalRequest.count({
-      where: {
-        branchId,
-        type: "OPERATION_OVERRIDE",
-        status: { in: [ApprovalStatus.REQUESTED, ApprovalStatus.UNDER_REVIEW] },
-      },
-    }),
-  ]);
-
-  return {
-    pendingDispatches,
-    recentDispatches,
-    overrideRequests,
-  };
+  return pickLowStock(
+    balances.map((b) => ({
+      productId: b.productId,
+      name: b.product.name,
+      unit: b.product.unit,
+      onHand: Number(b.quantityOnHand),
+      threshold: lowStockThreshold(settingById.get(b.productId) ?? null),
+      soldToday: soldById.get(b.productId) ?? 0,
+    })),
+  );
 }

@@ -1,98 +1,52 @@
 import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
-import {
-  getBranchAdminDashboardSummary,
-  getCashierDashboardSummary,
-  getSalesDashboardSummary,
-  getWarehouseDashboardSummary,
-} from "@/modules/dashboard/service";
-import { assertBranchDashboardModuleEnabled, resolveBranchDashboardAccess } from "@/modules/dashboard/access";
+import { getBranchDayView } from "@/modules/dashboard/service";
+import { resolveBranchDashboardAccess } from "@/modules/dashboard/access";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
-import { listPendingTransports } from "@/modules/transport/service";
+import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { toApiErrorResponse } from "@/lib/api/errors";
 import { ok } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
 
 /**
- * GET /api/branch/dashboard[?branchId=...]
+ * GET /api/branch/dashboard[?branchId=...] — "Mi día" de la caja.
  *
- * Returns the branch-level dashboard summary for the authenticated session.
- * The client cannot choose a role. The dashboard view is derived from the
- * authenticated user's actual branch membership/global role.
- * The `branchId` parameter is only a selector and is validated before use.
+ * Una sola vista para todos los roles: cada sección se incluye según lo que
+ * el usuario puede hacer en esa sucursal. `branchId` es solo un selector y se
+ * valida contra las membresías (resolveBranchDashboardAccess).
  */
 export async function GET(req: NextRequest) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
 
-    const url = new URL(req.url);
-    const requestedBranchId = url.searchParams.get("branchId") ?? undefined;
-
-    const access = resolveBranchDashboardAccess({
+    const requestedBranchId = new URL(req.url).searchParams.get("branchId") ?? undefined;
+    const { branchId } = resolveBranchDashboardAccess({
       session,
       requestedBranchId,
       moduleConfig: { enableCashier: true, enableDispatch: true },
     });
 
-    const branch = await prisma.branch.findUnique({
-      where: { id: access.branchId },
-      select: { id: true, isActive: true },
-    });
+    const branch = await prisma.branch.findUnique({ where: { id: branchId }, select: { isActive: true } });
     if (!branch?.isActive) {
       throw new Error("FORBIDDEN_BRANCH");
     }
 
-    const moduleConfig = await getBranchModuleConfig(access.branchId);
-    assertBranchDashboardModuleEnabled(access.kind, moduleConfig);
+    const moduleConfig = await getBranchModuleConfig(branchId);
+    const can = (capability: Parameters<typeof canInBranch>[2]) => canInBranch(session, branchId, capability);
+    const dispatch = moduleConfig.enableDispatch && can(CAPABILITIES.DISPATCH_VIEW);
 
-    switch (access.kind) {
-      case "SALES": {
-        const summary = await getSalesDashboardSummary(access.branchId, session.userId);
-        return ok({ kind: "SALES" as const, summary });
-      }
-      case "CASHIER": {
-        const summary = await getCashierDashboardSummary(access.branchId);
-        return ok({ kind: "CASHIER" as const, summary });
-      }
-      case "WAREHOUSE": {
-        const summary = await getWarehouseDashboardSummary(access.branchId);
-        return ok({ kind: "WAREHOUSE" as const, summary });
-      }
-      case "BRANCH_ADMIN":
-      default: {
-        const adminBranchIds = Array.from(
-          new Set(
-            session.branchMemberships
-              .filter((item) => item.roleCode === "BRANCH_ADMIN")
-              .map((item) => item.branchId),
-          ),
-        );
-        const effectiveBranchIds = requestedBranchId
-          ? [access.branchId]
-          : adminBranchIds.length
-            ? adminBranchIds
-            : [access.branchId];
-        const [summary, pendingTransports] = await Promise.all([
-          getBranchAdminDashboardSummary(effectiveBranchIds),
-          listPendingTransports(effectiveBranchIds),
-        ]);
-        return ok({
-          kind: "BRANCH_ADMIN",
-          summary,
-          pendingTransports: pendingTransports.map((t) => ({
-            id: t.id,
-            customerName: t.customerName,
-            status: t.status,
-            saleOrderNumber: t.saleOrder.orderNumber,
-            price: typeof t.price === "object" && t.price !== null && "toNumber" in t.price ? (t.price as { toNumber: () => number }).toNumber() : t.price,
-            reference: t.reference,
-            scheduledPaymentTime: t.scheduledPaymentTime,
-          })),
-        });
-      }
-    }
+    const view = await getBranchDayView(branchId, session.userId, {
+      cash: moduleConfig.enableCashier && (can(CAPABILITIES.CASH_SESSION_USE) || can(CAPABILITIES.PAYMENT_QUEUE_VIEW)),
+      payments: moduleConfig.enableCashier && can(CAPABILITIES.PAYMENT_QUEUE_VIEW),
+      myDrafts: can(CAPABILITIES.POS_VIEW),
+      dispatches: dispatch,
+      transports: dispatch,
+      approvals: can(CAPABILITIES.APPROVAL_REQUEST_REVIEW),
+    });
+
+    return ok(view);
   } catch (error) {
     return toApiErrorResponse(error);
   }
