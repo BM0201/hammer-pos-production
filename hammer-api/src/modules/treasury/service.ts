@@ -542,6 +542,12 @@ export async function createExchangeRate(input: CreateExchangeRateInput) {
   return rate;
 }
 
+/** Tipo de cambio USD→NIO vigente (el último que fijó Master), o null si nunca se fijó. */
+export async function getLatestUsdToNioRate(): Promise<number | null> {
+  const latest = await prisma.exchangeRate.findFirst({ where: { fromCurrency: "USD", toCurrency: "NIO" }, orderBy: { effectiveAt: "desc" }, select: { rate: true } });
+  return latest ? Number(latest.rate) : null;
+}
+
 /** Histórico de tasas registradas, más recientes primero — para el bloque de Tesorería (§4) y para auditar de dónde salió la tasa vigente. */
 export async function listExchangeRates(input: { fromCurrency?: CurrencyCode; toCurrency?: CurrencyCode; limit?: number } = {}) {
   return prisma.exchangeRate.findMany({

@@ -369,6 +369,8 @@ model Branch {
   /// abrir al día siguiente. Sin configurar, todo lo retenido cuenta como
   /// esperando depósito — conservador y correcto (correccion-destino-y-pantalla-cobro.md §1.1).
   cashFundAmount    Decimal? @db.Decimal(14, 2)
+  /// Cuándo Master fijó el sencillo actual: si es más nuevo que el último cierre declarado, la caja abre con este monto.
+  cashFundSetAt     DateTime?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -622,6 +624,10 @@ model CashSession {
   expectedCashAmount Decimal?
   countedCashAmount  Decimal?
   differenceAmount   Decimal?
+  /// Dólares contados al cierre: van aparte, no suman al contado en córdobas.
+  countedUsdAmount   Decimal?          @db.Decimal(14, 2)
+  /// Tipo de cambio USD→NIO con que se mostró el "equivale a" en el conteo.
+  countedUsdRate     Decimal?          @db.Decimal(14, 4)
   requiresReview     Boolean           @default(false)
   reviewedAt         DateTime?
   reviewNote         String?

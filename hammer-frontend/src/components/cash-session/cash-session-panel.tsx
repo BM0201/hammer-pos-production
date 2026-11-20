@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { fmtDateTime, fmtTimeShort, money } from "@/lib/format";
+import { fmtDateTime, fmtTimeShort, money, usdMoney } from "@/lib/format";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { CashMovementsPanel } from "./cash-movements-panel";
 import { CashDestinationDeclarationModal } from "./cash-destination-declaration-modal";
@@ -27,10 +27,12 @@ type ActiveSession = {
   openedBy?: { username: string; fullName: string };
   /** Desde 20 min antes del cierre y mientras se cuenta: la API no manda el esperado (conteo a ciegas). */
   blindCount?: boolean;
+  /** Tipo de cambio de Tesorería, solo mientras se cuenta: para "US$ X equivale a C$ Y". */
+  usdToNioRate?: number | null;
 };
 
-type CloseResult = { counted: number; expected: number; difference: number; sales: number; cashFund: number; opening: number | null };
-type LastCashFund = { amount: number; note: string | null; declaredAt: string };
+type CloseResult = { counted: number; expected: number; difference: number; sales: number; cashFund: number; opening: number | null; usd: number };
+type LastCashFund = { amount: number; note: string | null; declaredAt: string; setByMaster?: boolean };
 type Declaration = { cashSessionId: string; countedAmount: number; cashFund?: { amount: number; note: string } | null };
 
 type AutoClosedSession = {
@@ -271,7 +273,7 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
     setBusyAction("close");
     setNotice(null);
     const sessionId = session.id;
-    const result = await post("/api/cashier/cash-sessions/close", { cashSessionId: sessionId, closingAmount: counted });
+    const result = await post("/api/cashier/cash-sessions/close", { cashSessionId: sessionId, closingAmount: counted, countedUsdAmount: count.usd > 0 ? count.usd : null });
     if (!result.ok) {
       setNotice({ tone: "error", text: result.text });
       setBusyAction(null);
@@ -284,7 +286,7 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
       setDeclaration({ cashSessionId: sessionId, countedAmount: counted, cashFund: { amount: count.cashFund, note: count.cashFundNote } });
       const expectedCash = Number(data?.expectedCash ?? counted);
       const opening = data?.openingAmount != null ? Number(data.openingAmount) : null;
-      setCloseResult({ counted, expected: expectedCash, difference: countDifference(counted, expectedCash), sales: count.sales, cashFund: count.cashFund, opening });
+      setCloseResult({ counted, expected: expectedCash, difference: countDifference(counted, expectedCash), sales: count.sales, cashFund: count.cashFund, opening, usd: count.usd });
       setOpeningAmount(count.cashFund > 0 ? count.cashFund.toFixed(2) : "0");
     }
     await refresh().catch(() => undefined);
@@ -419,7 +421,7 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
               <p className="text-base font-semibold text-[var(--color-text)]">Cuenta el efectivo de la gaveta</p>
               <p className="text-sm text-[var(--color-text-muted)]">Anota cuántos billetes y monedas hay de cada uno. La caja no cobra hasta que confirmes.</p>
             </div>
-            <CashCount key={session.id} busy={busyAction === "close"} onConfirm={(count) => void closeSession(count)} />
+            <CashCount key={session.id} busy={busyAction === "close"} usdRate={session.usdToNioRate ?? null} onConfirm={(count) => void closeSession(count)} />
           </div>
         ) : (
           <div className="space-y-4">
@@ -428,7 +430,9 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
             <label className="block">
               <span className="mb-1 block text-sm text-[var(--color-text-muted)]">
                 {lastCashFund && Number(openingAmount) === lastCashFund.amount
-                  ? "La caja está cerrada. Abre con el sencillo que quedó en el último cierre:"
+                  ? lastCashFund.setByMaster
+                    ? "La caja está cerrada. Abre con el sencillo que fijó Master:"
+                    : "La caja está cerrada. Abre con el sencillo que quedó en el último cierre:"
                   : "La caja está cerrada. ¿Con cuánto sencillo empieza la gaveta?"}
               </span>
               <input
@@ -492,7 +496,7 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
 
 /** Lo contado contra lo que debía haber: se ve recién después de cerrar. */
 function CloseResultCard({ result }: { result: CloseResult }) {
-  const { counted, expected, difference, sales, cashFund, opening } = result;
+  const { counted, expected, difference, sales, cashFund, opening, usd } = result;
   const tone = difference === 0 ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-700)]";
   return (
     <div className="space-y-2" data-testid="cash-close-result">
@@ -516,6 +520,7 @@ function CloseResultCard({ result }: { result: CloseResult }) {
       <p className="text-xs text-[var(--color-text-muted)]" data-testid="cash-close-split">
         Venta {money(sales)} + sencillo {money(cashFund)}
         {opening !== null ? `. El sencillo abrió con ${money(opening)}${cashFund !== opening ? ` y cierra con ${money(cashFund)} (${cashFund > opening ? "+" : "−"}${money(Math.abs(countDifference(cashFund, opening)))})` : " y cierra igual"}` : ""}.
+        {usd > 0 ? ` Dólares aparte: ${usdMoney(usd)}.` : ""}
       </p>
       {difference !== 0 ? (
         <p className="text-xs text-[var(--color-text-muted)]">La diferencia quedó registrada; Master la revisa en Día Operativo 360.</p>

@@ -6,14 +6,16 @@ import { isMaster } from "@/modules/rbac/guards";
 import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { prisma } from "@/lib/prisma";
 import { getOperationalWindowForNow } from "@/modules/operations/business-date";
+import { pickOpeningCashFund } from "@/modules/cash-session/opening-fund";
 
 /**
  * Lo que la pantalla Caja necesita con la caja cerrada:
  * - pendingDeclaration: caja cerrada hoy a mano y sin destino declarado; se
  *   vuelve a pedir aunque se haya recargado. Las auto-cerradas no entran
  *   (esas las declara la revisión de Master).
- * - lastCashFund: el sencillo contado en el último cierre declarado, para
- *   abrir con él. `note` trae el desglose por billetes y monedas.
+ * - lastCashFund: el sencillo con que se abre: el del último cierre declarado
+ *   (`note` trae el desglose por billetes y monedas), o el que fijó Master si
+ *   lo fijó después de ese cierre (`setByMaster`).
  */
 export async function GET(request: Request) {
   try {
@@ -24,7 +26,7 @@ export async function GET(request: Request) {
     if (!isMaster(session) && !canInBranch(session, branchId, CAPABILITIES.CASH_SESSION_OPERATE)) return fail("FORBIDDEN", "Forbidden", 403);
 
     const { start } = getOperationalWindowForNow();
-    const [pending, lastDeclaration] = await Promise.all([
+    const [pending, lastDeclaration, branch] = await Promise.all([
       prisma.cashSession.findFirst({
         where: {
           status: "CLOSED",
@@ -41,13 +43,11 @@ export async function GET(request: Request) {
         select: { retainCashFundPortion: true, notes: true, createdAt: true },
         orderBy: { createdAt: "desc" },
       }),
+      prisma.branch.findUnique({ where: { id: branchId }, select: { cashFundAmount: true, cashFundSetAt: true } }),
     ]);
-
     return ok({
       pendingDeclaration: pending ? { cashSessionId: pending.id, countedAmount: Number(pending.countedCashAmount ?? 0) } : null,
-      lastCashFund: lastDeclaration
-        ? { amount: Number(lastDeclaration.retainCashFundPortion), note: lastDeclaration.notes, declaredAt: lastDeclaration.createdAt.toISOString() }
-        : null,
+      lastCashFund: pickOpeningCashFund(lastDeclaration, branch),
     });
   } catch (error) {
     return toHttpErrorResponse(error);

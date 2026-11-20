@@ -548,9 +548,17 @@ export function buildCloseDiscrepancySignal(input: {
   };
 }
 
+/** Dólares contados con la tasa vigente de Tesorería (la misma del "equivale a" en pantalla); nada si no se contaron. */
+async function usdCountData(tx: Prisma.TransactionClient, usd: number | null | undefined) {
+  if (!usd || usd <= 0) return {};
+  const rate = await tx.exchangeRate.findFirst({ where: { fromCurrency: "USD", toCurrency: "NIO" }, orderBy: { effectiveAt: "desc" }, select: { rate: true } });
+  return { countedUsdAmount: toDecimal(usd), countedUsdRate: rate?.rate ?? null };
+}
+
 export async function closeCashSession(input: {
   cashSessionId: string;
   closingAmount: number;
+  countedUsdAmount?: number | null;
   notes?: string | null;
   actorUserId: string;
   allowedThreshold?: number;
@@ -676,6 +684,7 @@ export async function closeCashSession(input: {
         expectedCashAmount: toDecimal(expectedCash),
         countedCashAmount: toDecimal(countedCash),
         differenceAmount: toDecimal(difference),
+        ...(await usdCountData(tx, input.countedUsdAmount)),
         requiresReview: false,
         notes: input.notes ?? session.notes,
       },

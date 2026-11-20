@@ -21,6 +21,8 @@ export const requestCloseCashSessionSchema = z.object({
 export const closeCashSessionSchema = z.object({
   cashSessionId: z.string().cuid(),
   closingAmount: nonNegativeMoneySchema,
+  /** Dólares contados: aparte, no suman a closingAmount (córdobas). */
+  countedUsdAmount: nonNegativeMoneySchema.optional().nullable(),
   notes: z.string().max(500).optional().nullable(),
 });
 

@@ -180,7 +180,7 @@ export default function TreasuryPage() {
   async function saveCashFund(branchId: string, value: string) {
     const parsed = value.trim() === "" ? null : Number(value);
     if (parsed !== null && (!Number.isFinite(parsed) || parsed < 0)) {
-      toast.error("El fondo de caja debe ser un número mayor o igual a 0.");
+      toast.error("El sencillo debe ser un número mayor o igual a 0.");
       return;
     }
     try {
@@ -190,11 +190,11 @@ export default function TreasuryPage() {
         body: JSON.stringify({ cashFundAmount: parsed }),
       });
       const raw = await res.json();
-      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo guardar el fondo de caja.");
-      toast.success("Fondo de caja actualizado.");
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo guardar el sencillo.");
+      toast.success("Sencillo actualizado. La caja abre con este monto.");
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo guardar el fondo de caja.");
+      toast.error(error instanceof Error ? error.message : "No se pudo guardar el sencillo.");
     }
   }
 
@@ -432,10 +432,10 @@ export default function TreasuryPage() {
       <Card className="p-4">
         <div className="mb-3 flex items-center gap-2">
           <PiggyBank className="h-4 w-4 text-[var(--color-master-600)]" />
-          <h2 className="text-sm font-semibold text-[var(--color-text)]">Fondo de caja por sucursal</h2>
+          <h2 className="text-sm font-semibold text-[var(--color-text)]">Sencillo actual por sucursal</h2>
         </div>
         <p className="mb-3 text-xs text-[var(--color-text-muted)]">
-          Lo que la sesión de caja debería poder abrir al día siguiente. Sin configurar, todo lo retenido cuenta como esperando depósito.
+          Cuánto sencillo (billetes pequeños y monedas) tiene hoy cada sucursal. Al guardarlo, la caja propone abrir con este monto hasta el próximo cierre contado.
         </p>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {branches.map((branch) => (

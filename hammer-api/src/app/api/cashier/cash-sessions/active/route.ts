@@ -9,6 +9,7 @@ import { toHttpErrorResponse } from "@/lib/http";
 import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { ok, fail } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
+import { getLatestUsdToNioRate } from "@/modules/treasury/service";
 
 export async function GET(request: Request) {
   try {
@@ -73,6 +74,8 @@ export async function GET(request: Request) {
       expectedCashAmount: null,
       blindCount,
       canOperate,
+      // Solo para mostrar "US$ X equivale a C$ Y" en el conteo; los dólares no suman al contado.
+      usdToNioRate: data.status === "RECONCILING" ? await getLatestUsdToNioRate() : null,
     });
   } catch (error) {
     return toHttpErrorResponse(error);

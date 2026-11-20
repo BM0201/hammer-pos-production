@@ -4,7 +4,7 @@ import { Wallet, AlertTriangle, CheckCircle2, Clock, ArrowRight } from "lucide-r
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import type { CashSessionRow } from "@/components/operations/operational-day-summary";
-import { money } from "@/lib/format";
+import { money, numFixed, usdMoney } from "@/lib/format";
 
 function shortTime(iso?: string | null) {
   if (!iso) return "—";
@@ -168,6 +168,15 @@ export function CashSessionStatusList({ sessions, branchId, dayLifecycle }: Prop
                       </span>
                     </div>
                   </div>
+
+                  {session.countedUsdAmount != null && Number(session.countedUsdAmount) > 0 ? (
+                    <p className="border-t border-[var(--color-border)] px-3.5 py-2 text-xs text-[var(--color-text-secondary)]" data-testid="cash-session-usd">
+                      Dólares contados aparte: <strong className="tabular-nums">{usdMoney(session.countedUsdAmount)}</strong>
+                      {session.countedUsdRate != null
+                        ? <> · equivale a <strong className="tabular-nums">{money(Number(session.countedUsdAmount) * Number(session.countedUsdRate))}</strong> (tipo de cambio {numFixed(session.countedUsdRate, 4)})</>
+                        : " · sin tipo de cambio registrado"}
+                    </p>
+                  ) : null}
 
                   {/* Trazabilidad: quién y cómo abrió/cerró esta sesión.
                       Cada día operativo puede tener varias sesiones; esto permite

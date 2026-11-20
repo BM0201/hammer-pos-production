@@ -612,6 +612,7 @@ const server = http.createServer(async (req, res) => {
     return ok(res, {
       id: cash.id, status: cash.status, openingAmount: String(cash.opening), openedAt: cash.openedAt,
       expectedCashAmount: null, openedBy: { username: "maria", fullName: "María López" }, canOperate: true, blindCount,
+      usdToNioRate: cash.status === "RECONCILING" ? 36.6243 : null,
     });
   }
   if (path === "/api/branch/cash/sessions/auto-closed-pending") return ok(res, []);

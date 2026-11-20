@@ -19,6 +19,11 @@ export function money(value: number | string | null | undefined): string {
   return moneyFormatter.format(Number.isFinite(num) ? num : 0);
 }
 
+/** Dólares: "US$45.00" (los dólares de la gaveta se anotan aparte de los córdobas). */
+export function usdMoney(value: number | string | null | undefined): string {
+  return `US$${numFixed(value, 2)}`;
+}
+
 /** Formatea una cantidad numérica con hasta 4 decimales. */
 export function qty(value: number | string | null | undefined): string {
   const num = Number(value ?? 0);
