@@ -3,8 +3,8 @@
  *
  * CashClosure no longer owns operational state. This scheduler is kept only as
  * a compatibility wrapper and delegates to CashSession auto-close:
- * - Monday-Friday 17:20 America/Managua
- * - Saturday 16:00 America/Managua
+ * - Monday-Friday 17:00 America/Managua
+ * - Saturday 15:00 America/Managua
  * - Sunday disabled
  */
 

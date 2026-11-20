@@ -16,9 +16,9 @@ const CASH_AUTO_CLOSE_SETTING_KEY = "cash_auto_close_config";
 export interface CashAutoCloseConfig {
   enabled: boolean;
   timezone: string;
-  /** Monday–Friday closing time, e.g. "17:30" (5:30 PM). */
+  /** Monday–Friday closing time, e.g. "17:00" (5:00 PM). */
   weekdayCloseTime: string | null;
-  /** Saturday closing time, e.g. "16:00". */
+  /** Saturday closing time, e.g. "15:00" (3:00 PM). */
   saturdayCloseTime: string | null;
   /** Sunday closing time. `null` = no auto-close on Sundays. */
   sundayCloseTime: string | null;
@@ -27,8 +27,8 @@ export interface CashAutoCloseConfig {
 export const DEFAULT_CASH_AUTO_CLOSE_CONFIG: CashAutoCloseConfig = {
   enabled: true,
   timezone: "America/Managua",
-  weekdayCloseTime: "17:30",
-  saturdayCloseTime: "16:00",
+  weekdayCloseTime: "17:00",
+  saturdayCloseTime: "15:00",
   sundayCloseTime: null,
 };
 

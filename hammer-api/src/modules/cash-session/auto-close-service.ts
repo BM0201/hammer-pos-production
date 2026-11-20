@@ -63,7 +63,7 @@ function localParts(now: Date, timezone = DEFAULT_TIMEZONE): LocalParts {
  * Resolve the auto-close deadline for "now" given a configuration.
  *
  * The closing time is configurable per day-type (weekday / Saturday / Sunday) and
- * defaults to 17:30 (5:30 PM) on weekdays, 16:00 on Saturdays, disabled on Sundays.
+ * defaults to 17:00 (5:00 PM) on weekdays, 15:00 (3:00 PM) on Saturdays, disabled on Sundays.
  * Pure function (no I/O) — the caller passes the config it loaded once.
  */
 export function getCashAutoCloseDeadline(
