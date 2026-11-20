@@ -2,11 +2,12 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { isMaster } from "@/modules/rbac/guards";
 import { getActiveCashSessionSchema } from "@/modules/cash-session/validators";
-import { getActiveCashSession, logCashSessionDenied } from "@/modules/cash-session/service";
+import { calculateExpectedCashForSessionTx, getActiveCashSession, logCashSessionDenied } from "@/modules/cash-session/service";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { ok, fail } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 
 export async function GET(request: Request) {
   try {
@@ -37,16 +38,6 @@ export async function GET(request: Request) {
       return fail("FORBIDDEN", "Forbidden", 403);
     }
 
-    if (!isMaster(session) && !canOperateCash && !canSubmitDirectSale) {
-      await logCashSessionDenied({
-        actorUserId: session.userId,
-        branchId: parsed.data.branchId,
-        entityId: parsed.data.physicalCashBoxId ?? parsed.data.branchId,
-        reason: "FORBIDDEN_BRANCH",
-      });
-      return fail("FORBIDDEN", "Forbidden", 403);
-    }
-
     const data = await getActiveCashSession(parsed.data);
 
     if (!data) {
@@ -72,7 +63,21 @@ export async function GET(request: Request) {
       canOperate = Boolean(op);
     }
 
-    return ok({ ...data, canOperate });
+    // Solo la pantalla Caja lo pide: son 3 consultas más y otras pantallas consultan esta ruta seguido.
+    const expected = searchParams.get("withExpected") === "1"
+      ? await calculateExpectedCashForSessionTx(prisma as unknown as Prisma.TransactionClient, data.id, data.openingAmount)
+      : undefined;
+
+    return ok({
+      ...data,
+      canOperate,
+      expected: expected && {
+        openingAmount: expected.openingAmount,
+        cashPayments: expected.postedCashPayments,
+        movementsNet: expected.cashMovementsNet,
+        expectedCash: expected.expectedCash,
+      },
+    });
   } catch (error) {
     return toHttpErrorResponse(error);
   }

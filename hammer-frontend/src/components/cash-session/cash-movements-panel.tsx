@@ -6,6 +6,8 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
 import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { CATEGORY_LABELS } from "@/components/expenses/expense-manager.types";
+import { AlertTriangle, Banknote, BrickWall, Bus, CheckCircle2, Landmark, Lightbulb, Package, Pencil, SprayCan, Utensils, Wrench, X, type LucideIcon } from "lucide-react";
+import { money } from "@/lib/format";
 
 /**
  * prompt-caja-gastos-pos-cobro.md Commit 2 — "Salida de dinero de la caja"
@@ -25,23 +27,23 @@ type ExpenseConceptOption = { id: string; name: string };
 
 type ExpenseItemKey = "UTILITIES" | "TAXES" | "TRANSPORT" | "CASUAL_LABOR" | "FOOD" | "SUPPLIES" | "MAINTENANCE" | "OTHER";
 
-type ExpenseItemDef = { key: ExpenseItemKey; emoji: string; examples: string };
+type ExpenseItemDef = { key: ExpenseItemKey; icon: LucideIcon; examples: string };
 
 /** "Gastos del local" — la categoría real (ExpenseCategory) sale de `key`; la etiqueta en español sale de CATEGORY_LABELS (fuente única). */
 const EXPENSE_ITEMS: ExpenseItemDef[] = [
-  { key: "UTILITIES", emoji: "💡", examples: "luz, agua, internet" },
-  { key: "TAXES", emoji: "🏛️", examples: "Alcaldía, basura, DGI" },
-  { key: "TRANSPORT", emoji: "🚌", examples: "pasajes, combustible, taxi" },
-  { key: "CASUAL_LABOR", emoji: "📦", examples: "pago a ayudantes por carga/descarga" },
-  { key: "FOOD", emoji: "🍱", examples: "desayuno, almuerzo, cena" },
-  { key: "SUPPLIES", emoji: "🧹", examples: "bolsas, papel, limpieza" },
-  { key: "MAINTENANCE", emoji: "🔧", examples: "reparaciones del local" },
-  { key: "OTHER", emoji: "✏️", examples: "cualquier otro gasto — descríbelo" },
+  { key: "UTILITIES", icon: Lightbulb, examples: "luz, agua, internet" },
+  { key: "TAXES", icon: Landmark, examples: "Alcaldía, basura, DGI" },
+  { key: "TRANSPORT", icon: Bus, examples: "pasajes, combustible, taxi" },
+  { key: "CASUAL_LABOR", icon: Package, examples: "pago a ayudantes por carga/descarga" },
+  { key: "FOOD", icon: Utensils, examples: "desayuno, almuerzo, cena" },
+  { key: "SUPPLIES", icon: SprayCan, examples: "bolsas, papel, limpieza" },
+  { key: "MAINTENANCE", icon: Wrench, examples: "reparaciones del local" },
+  { key: "OTHER", icon: Pencil, examples: "cualquier otro gasto — descríbelo" },
 ];
 
 /** "No es gasto" — no suma al gasto operativo. */
-const PURCHASE_ITEM = { emoji: "🧱", label: "Compra de mercadería o flete", examples: "arena, bloques, cemento, viaje de material" };
-const CASH_OUT_ITEM = { emoji: "💵", label: "Retiro o envío de dinero", examples: "dinero que se manda a Master o bóveda, antes del cierre" };
+const PURCHASE_ITEM = { icon: BrickWall, label: "Compra de mercadería o flete", examples: "arena, bloques, cemento, viaje de material" };
+const CASH_OUT_ITEM = { icon: Banknote, label: "Retiro o envío de dinero", examples: "dinero que se manda a Master o bóveda, antes del cierre" };
 
 type Selection =
   | { kind: "expense"; item: ExpenseItemDef }
@@ -106,13 +108,15 @@ type DuplicateInfo = { description: string; amount: number; createdAt: string } 
 export function CashMovementsPanel({
   cashSessionId,
   branchId,
-  physicalCashBoxId,
-  cashBoxCode,
+  cashOnHand,
+  onRegistered,
 }: {
   cashSessionId: string;
   branchId: string;
-  physicalCashBoxId?: string | null;
-  cashBoxCode?: string | null;
+  /** Lo que debe haber en la gaveta ahora; null si no se sabe (no bloquea). */
+  cashOnHand: number | null;
+  /** Tras registrar una salida, para que el panel de caja recalcule lo esperado. */
+  onRegistered?: () => void;
 }) {
   const sessionState = useSession();
   const session = sessionState.status === "authenticated" ? sessionState.session : null;
@@ -147,7 +151,6 @@ export function CashMovementsPanel({
   const [lastWarning, setLastWarning] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
-  const [cashOnHand, setCashOnHand] = useState<number | null>(null);
   const [pickFocusIndex, setPickFocusIndex] = useState(0);
 
   const amt = parseFloat(amount);
@@ -197,24 +200,10 @@ export function CashMovementsPanel({
     setMovements((raw?.data ?? raw) as CashMovement[]);
   }, [cashSessionId]);
 
-  const loadCashOnHand = useCallback(async () => {
-    if (!physicalCashBoxId) return;
-    try {
-      const query = new URLSearchParams({ branchId, physicalCashBoxId });
-      const response = await apiFetch(`/api/cashier/cash-sessions/active?${query.toString()}`);
-      if (!response.ok) return;
-      const raw = await response.json();
-      const data = unwrapApiData(raw) as { expectedCashAmount?: string | null } | null;
-      setCashOnHand(data?.expectedCashAmount != null ? Number(data.expectedCashAmount) : null);
-    } catch {
-      setCashOnHand(null);
-    }
-  }, [branchId, physicalCashBoxId]);
-
   useEffect(() => {
     setLoading(true);
-    Promise.all([loadMovements(), loadCashOnHand()]).finally(() => setLoading(false));
-  }, [loadMovements, loadCashOnHand]);
+    loadMovements().finally(() => setLoading(false));
+  }, [loadMovements]);
 
   async function handlePhotoChosen(file: File) {
     setUploadingReceipt(true);
@@ -236,7 +225,7 @@ export function CashMovementsPanel({
 
   function detailIsValid(): string | null {
     if (!amount || isNaN(amt) || amt <= 0) return "Anota el monto (mayor a 0).";
-    if (cashOnHand != null && amt > cashOnHand) return `Supera el efectivo en caja (C$ ${cashOnHand.toFixed(2)}).`;
+    if (cashOnHand != null && amt > cashOnHand) return `Supera el efectivo en caja (${money(cashOnHand)}).`;
     if (isExpense && selection!.item.key === "OTHER" && description.trim().length < 10) {
       return "Describe qué fue el gasto (mínimo 10 caracteres) — no encaja en ninguna categoría.";
     }
@@ -317,10 +306,11 @@ export function CashMovementsPanel({
         window.dispatchEvent(new CustomEvent(GASTOS_LOCAL_REFRESH_EVENT));
       }
       const anotadoEn = selection.kind === "expense" ? `Gastos › ${CATEGORY_LABELS[selection.item.key] ?? selection.item.key}` : selection.kind === "purchase" ? "Compras pagadas con caja (informativo)" : "Retiro de caja";
-      setSuccessMessage(`Anotado en ${anotadoEn}. Caja: C$ ${(cashOnHand != null ? cashOnHand - amt : 0).toFixed(2)}`);
+      setSuccessMessage(`Anotado en ${anotadoEn}.${cashOnHand != null ? ` Quedan ${money(cashOnHand - amt)} en la gaveta.` : ""}`);
       resetForm();
       setOpen(false);
-      await Promise.all([loadMovements(), loadCashOnHand()]);
+      onRegistered?.();
+      await loadMovements();
     } catch {
       setFormError("Error de red. Intenta de nuevo.");
     } finally {
@@ -328,11 +318,13 @@ export function CashMovementsPanel({
     }
   }
 
-  function selectionTitle(sel: Selection): { emoji: string; label: string } {
-    if (sel.kind === "expense") return { emoji: sel.item.emoji, label: CATEGORY_LABELS[sel.item.key] ?? sel.item.key };
-    if (sel.kind === "purchase") return { emoji: PURCHASE_ITEM.emoji, label: PURCHASE_ITEM.label };
-    return { emoji: CASH_OUT_ITEM.emoji, label: CASH_OUT_ITEM.label };
+  function selectionTitle(sel: Selection): { icon: LucideIcon; label: string } {
+    if (sel.kind === "expense") return { icon: sel.item.icon, label: CATEGORY_LABELS[sel.item.key] ?? sel.item.key };
+    if (sel.kind === "purchase") return { icon: PURCHASE_ITEM.icon, label: PURCHASE_ITEM.label };
+    return { icon: CASH_OUT_ITEM.icon, label: CASH_OUT_ITEM.label };
   }
+
+  const SelectedIcon = selection ? selectionTitle(selection).icon : null;
 
   const projectedCash = cashOnHand != null && !isNaN(amt) ? cashOnHand - amt : null;
 
@@ -388,16 +380,16 @@ export function CashMovementsPanel({
 
       {successMessage && (
         <div className="flex items-start gap-2 border-b border-[var(--color-success-200)] bg-[var(--color-success-50)] px-4 py-2.5">
-          <span aria-hidden="true">✅</span>
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-success-700)]" aria-hidden />
           <p className="flex-1 text-xs text-[var(--color-success-700)]">{successMessage}</p>
-          <button type="button" className="text-xs font-bold text-[var(--color-success-700)]" onClick={() => setSuccessMessage("")} aria-label="Cerrar aviso">✕</button>
+          <button type="button" className="text-xs font-bold text-[var(--color-success-700)]" onClick={() => setSuccessMessage("")} aria-label="Cerrar aviso"><X className="h-4 w-4" aria-hidden /></button>
         </div>
       )}
       {lastWarning && (
         <div className="flex items-start gap-2 border-b border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-4 py-2.5">
-          <span aria-hidden="true">⚠️</span>
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning-700)]" aria-hidden />
           <p className="flex-1 text-xs text-[var(--color-warning-700)]">{lastWarning}</p>
-          <button type="button" className="text-xs font-bold text-[var(--color-warning-700)]" onClick={() => setLastWarning("")} aria-label="Cerrar aviso">✕</button>
+          <button type="button" className="text-xs font-bold text-[var(--color-warning-700)]" onClick={() => setLastWarning("")} aria-label="Cerrar aviso"><X className="h-4 w-4" aria-hidden /></button>
         </div>
       )}
 
@@ -432,7 +424,7 @@ export function CashMovementsPanel({
                     onClick={() => pickAt(idx)}
                     className={`flex w-full items-start gap-2.5 rounded-lg border-[1.5px] px-3 py-2 text-left transition-colors ${active ? "border-[var(--color-master-500)] bg-[var(--color-master-50)]" : pickFocusIndex === idx ? "border-[var(--color-info-400)] bg-[var(--color-surface-alt)]" : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-info-400)]"}`}
                   >
-                    <span className="text-lg leading-none" aria-hidden="true">{item.emoji}</span>
+                    <item.icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-text-muted)]" aria-hidden />
                     <span className="min-w-0">
                       <span className="block text-sm font-semibold text-[var(--color-text)]">{CATEGORY_LABELS[item.key] ?? item.key}</span>
                       <span className="block text-[0.7rem] text-[var(--color-text-muted)]">{item.examples}</span>
@@ -454,7 +446,7 @@ export function CashMovementsPanel({
                         onClick={() => pickAt(idx)}
                         className={`flex w-full items-start gap-2.5 rounded-lg border-[1.5px] px-3 py-2 text-left transition-colors ${active ? "border-[var(--color-master-500)] bg-[var(--color-master-50)]" : pickFocusIndex === idx ? "border-[var(--color-info-400)] bg-[var(--color-surface-alt)]" : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-info-400)]"}`}
                       >
-                        <span className="text-lg leading-none" aria-hidden="true">{def.emoji}</span>
+                        <def.icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-text-muted)]" aria-hidden />
                         <span className="min-w-0">
                           <span className="block text-sm font-semibold text-[var(--color-text)]">{def.label}</span>
                           <span className="block text-[0.7rem] text-[var(--color-text-muted)]">{def.examples}</span>
@@ -481,7 +473,7 @@ export function CashMovementsPanel({
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="inline-flex items-center gap-2 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-1.5 text-sm font-semibold text-[var(--color-text)]">
-                      {selectionTitle(selection).emoji} {selectionTitle(selection).label}
+                      {SelectedIcon ? <SelectedIcon className="h-4 w-4 text-[var(--color-text-muted)]" aria-hidden /> : null} {selectionTitle(selection).label}
                     </span>
                     <button type="button" className="text-xs font-semibold text-[var(--color-info-600)] hover:underline" onClick={() => { setSelection(null); setStep("pick"); }}>← Cambiar</button>
                   </div>
@@ -583,7 +575,7 @@ export function CashMovementsPanel({
 
                       {duplicateInfo && (
                         <div className="rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3 text-xs text-[var(--color-warning-700)] space-y-2">
-                          <p>Parecido a uno de hoy: {duplicateInfo.description} (C$ {duplicateInfo.amount.toFixed(2)}). ¿Es otro distinto?</p>
+                          <p>Parecido a uno de hoy: {duplicateInfo.description} ({money(duplicateInfo.amount)}). ¿Es otro distinto?</p>
                           <div className="flex gap-2">
                             <button type="button" className="rounded-lg bg-[var(--color-warning-600)] px-3 py-1.5 font-semibold text-white" onClick={() => { setDuplicateInfo(null); void register(true); }}>Sí, es otro distinto</button>
                             <button type="button" className="rounded-lg border border-[var(--color-warning-300)] px-3 py-1.5 font-semibold" onClick={() => setDuplicateInfo(null)}>Revisar</button>
@@ -597,7 +589,7 @@ export function CashMovementsPanel({
                         </button>
                       ) : (
                         <button type="submit" className="block w-full rounded-lg bg-[var(--color-master-600)] px-4 py-2.5 text-sm font-semibold text-white lg:hidden disabled:opacity-50" disabled={submitting || uploadingReceipt}>
-                          {submitting ? "Registrando…" : `Registrar salida de C$ ${isNaN(amt) ? "0.00" : amt.toFixed(2)}`}
+                          {submitting ? "Registrando…" : `Registrar salida de ${money(isNaN(amt) ? 0 : amt)}`}
                         </button>
                       )}
                     </>
@@ -613,8 +605,8 @@ export function CashMovementsPanel({
                 <p className="text-xs text-[var(--color-text-soft)]">Elegí qué fue para ver el resumen.</p>
               ) : (
                 <div className="space-y-1.5 text-xs text-[var(--color-text)]">
-                  <p className="text-lg font-bold text-[var(--color-danger-600)]">− C$ {isNaN(amt) ? "0.00" : amt.toFixed(2)}</p>
-                  <p className="text-[var(--color-text-muted)]">sale de la caja {cashBoxCode ?? ""}</p>
+                  <p className="text-lg font-bold text-[var(--color-danger-600)]">−{money(isNaN(amt) ? 0 : amt)}</p>
+                  <p className="text-[var(--color-text-muted)]">sale de la gaveta</p>
                   <p><strong>A dónde va:</strong> {isExpense ? `Gastos › ${CATEGORY_LABELS[selection.item.key]}${conceptId ? ` › ${concepts.find((c) => c.id === conceptId)?.name ?? ""}` : ""}` : isPurchase ? "Compra de mercadería/flete (informativo, no gasto)" : "Retiro de caja (no gasto)"}</p>
                   {description && <p><strong>Para qué:</strong> {description}</p>}
                   {payee && <p><strong>Quién recibió:</strong> {payee}</p>}
@@ -625,10 +617,10 @@ export function CashMovementsPanel({
                   <p className="text-[var(--color-text-soft)]">{periodLabel()}</p>
                   <div className="mt-2 rounded-lg bg-[var(--color-surface-alt)] p-2">
                     <p className="font-semibold">
-                      Caja queda en {projectedCash != null ? `C$ ${projectedCash.toFixed(2)}` : "—"}
+                      Caja queda en {projectedCash != null ? money(projectedCash) : "—"}
                     </p>
                     {projectedCash != null && projectedCash < 0 && (
-                      <p className="mt-1 text-[var(--color-danger-600)]">⚠ Supera el efectivo disponible — no se puede confirmar.</p>
+                      <p className="mt-1 text-[var(--color-danger-600)]">Supera el efectivo disponible — no se puede confirmar.</p>
                     )}
                   </div>
 
@@ -639,7 +631,7 @@ export function CashMovementsPanel({
                       disabled={submitting || uploadingReceipt}
                       onClick={() => void register(false)}
                     >
-                      {submitting ? "Registrando…" : `Registrar salida de C$ ${isNaN(amt) ? "0.00" : amt.toFixed(2)}`}
+                      {submitting ? "Registrando…" : `Registrar salida de ${money(isNaN(amt) ? 0 : amt)}`}
                     </button>
                   )}
                   {step === "detail" && (
@@ -689,7 +681,7 @@ export function CashMovementsPanel({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="truncate text-sm font-medium text-[var(--color-text)]" title={m.reason}>{categoryLine ?? m.reason}</span>
-                    <span className="shrink-0 text-sm font-bold text-[var(--color-text)]">C$ {Number(m.amount).toFixed(2)}</span>
+                    <span className="shrink-0 text-sm font-bold text-[var(--color-text)]">{money(m.amount)}</span>
                   </div>
                   {categoryLine && <p className="mt-0.5 truncate text-xs text-[var(--color-text-muted)]">{m.reason}</p>}
                   {m.notes && <p className="mt-0.5 truncate text-xs text-[var(--color-text-muted)]">{m.notes}</p>}

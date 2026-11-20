@@ -80,14 +80,15 @@ export function CashDestinationDeclarationModal({
       // Si falla, el modal se comporta como hoy — esto no debe bloquear el cierre.
       apiFetch(`/api/cashier/cash-sessions/${cashSessionId}/cash-destination`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]).then(([peopleRaw, accountsRaw, branchesRaw, destinationRaw]) => {
-      if (peopleRaw) setPeople(unwrapApiData(peopleRaw) as Person[]);
-      if (accountsRaw) setBankAccounts(unwrapApiData(accountsRaw) as BankAccountOption[]);
+      if (peopleRaw) setPeople((unwrapApiData(peopleRaw) as Person[] | null) ?? []);
+      if (accountsRaw) setBankAccounts((unwrapApiData(accountsRaw) as BankAccountOption[] | null) ?? []);
       if (branchesRaw) {
-        const branches = unwrapApiData(branchesRaw) as Array<{ id: string; cashFundAmount: number | null }>;
+        const branches = (unwrapApiData(branchesRaw) as Array<{ id: string; cashFundAmount: number | null }> | null) ?? [];
         setCashFundAmount(branches.find((b) => b.id === branchId)?.cashFundAmount ?? null);
       }
       if (destinationRaw) {
-        const summary = unwrapApiData(destinationRaw) as { postponements: Postponement[] };
+        const summary = unwrapApiData(destinationRaw) as { postponements: Postponement[] } | null;
+        if (!summary?.postponements) return;
         setPostponements(summary.postponements);
         const prefill = initialDeclarationFromPostponements(countedAmount, summary.postponements);
         if (summary.postponements.length > 0) setRetainAmount(prefill.retainAmount.toFixed(2));

@@ -1,10 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiFetch } from "@/lib/client/api";
-import { fmtDateTime } from "@/lib/format";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
+import { Card } from "@/components/ui/card";
+import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { fmtDateTime, fmtTimeShort, money } from "@/lib/format";
+import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { CashMovementsPanel } from "./cash-movements-panel";
 import { CashDestinationDeclarationModal } from "./cash-destination-declaration-modal";
+import { GastosLocalesPanel } from "./gastos-locales-panel";
+import { CashCount } from "./cash-count";
 
 type CashBox = {
   id: string;
@@ -12,15 +17,21 @@ type CashBox = {
   description: string | null;
 };
 
-type CashSession = {
+type ActiveSession = {
   id: string;
-  status: "OPEN" | "RECONCILING" | "CLOSED" | "AUTO_CLOSED_PENDING_REVIEW";
+  status: "OPEN" | "RECONCILING";
   openingAmount: string;
   openedAt: string;
+  openedBy?: { username: string; fullName: string };
+  /** GET .../active?withExpected=1: lo que debe haber en la gaveta y de dónde sale. */
+  expected?: { openingAmount: number; cashPayments: number; movementsNet: number; expectedCash: number };
+};
+
+type AutoClosedSession = {
+  id: string;
   autoClosedAt?: string | null;
   expectedCashAmount?: string | null;
   physicalCashBox?: CashBox;
-  openedBy?: { username: string; fullName: string };
 };
 
 export type CashSessionState = {
@@ -39,21 +50,21 @@ const SESSION_REASON_MESSAGES: Record<string, string> = {
   CASH_BOX_INACTIVE: "La caja física está inactiva. Un administrador debe activarla antes de abrir sesión.",
   CASH_BOX_BRANCH_MISMATCH: "La caja no pertenece a esta sucursal.",
   CASH_SESSION_NOT_OPEN: "La sesión ya no está abierta.",
-  CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW: "La caja fue cerrada automaticamente por horario y requiere revision. Abre una nueva caja para continuar.",
-  STALE_CASH_SESSION_PENDING_REVIEW: "Existe una caja pendiente de revision de una fecha anterior. Master debe resolverla antes de continuar.",
-  STALE_CASH_SESSION_RECONCILING: "Existe una caja en conciliacion de una fecha anterior. Master debe resolverla antes de continuar.",
+  CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW: "La caja fue cerrada automáticamente por horario y requiere revisión. Abre una nueva caja para continuar.",
+  STALE_CASH_SESSION_PENDING_REVIEW: "Existe una caja pendiente de revisión de una fecha anterior. Master debe resolverla antes de continuar.",
+  STALE_CASH_SESSION_RECONCILING: "Existe una caja en conciliación de una fecha anterior. Master debe resolverla antes de continuar.",
   CASH_SESSION_RECONCILING: "La sesión de caja está en proceso de conciliación. Espera a que se complete antes de abrir una nueva sesión.",
   CASH_SESSION_AFTER_CLOSING_TIME: "La hora de cierre operativo ya pasó. No se puede abrir una nueva sesión de caja hasta mañana.",
-  OPERATIONAL_DAY_NOT_OPEN: "No hay dia operativo abierto para esta sucursal. Un administrador debe abrirlo antes de abrir caja.",
-  OPERATIONAL_DAY_ALREADY_CLOSED: "El dia operativo de hoy ya fue cerrado. No se puede abrir caja hasta que un administrador inicie un nuevo dia operativo.",
-  OPERATIONAL_DAY_STALE: "El dia operativo abierto pertenece a una fecha anterior y debe cerrarse antes de continuar. Contacta al administrador.",
+  OPERATIONAL_DAY_NOT_OPEN: "No hay día operativo abierto para esta sucursal. Un administrador debe abrirlo antes de abrir caja.",
+  OPERATIONAL_DAY_ALREADY_CLOSED: "El día operativo de hoy ya fue cerrado. No se puede abrir caja hasta que un administrador inicie un nuevo día operativo.",
+  OPERATIONAL_DAY_STALE: "El día operativo abierto pertenece a una fecha anterior y debe cerrarse antes de continuar. Contacta al administrador.",
   STALE_OPERATIONAL_DAY_OPEN: "Hay un día operativo anterior que sigue abierto. Un administrador Master debe ejecutar limpieza operativa antes de continuar.",
   OPERATIONAL_DAY_REOPEN_REQUIRED: "El día operativo fue cerrado. Un administrador Master debe reabrirlo para continuar operaciones.",
   NO_ACTIVE_CASH_BOX_FOR_BRANCH: "La sucursal no tiene caja física activa configurada. Contacta al administrador.",
   CASH_SESSION_UNRESOLVED_ORDERS: "No puedes cerrar caja con órdenes pendientes de pago o despacho.",
   STALE_PENDING_PAYMENT_ORDERS: "Hay órdenes con pago pendiente de este día que deben resolverse antes de cerrar la caja.",
   CASH_SESSION_NOT_RECONCILING: "La sesión debe estar en conciliación antes de cerrarla.",
-  CASH_SESSION_NOT_PENDING_AUTO_REVIEW: "La sesion ya no esta pendiente de revision automatica.",
+  CASH_SESSION_NOT_PENDING_AUTO_REVIEW: "La sesión ya no está pendiente de revisión automática.",
   APPROVAL_REQUESTED: "La sesión fue cerrada con diferencia registrada para revisión en Día Operativo 360.",
 };
 
@@ -79,656 +90,342 @@ function mapSessionMessage(message?: string, reason?: string): string {
   return message || "No se pudo completar la operación de caja.";
 }
 
-export function CashSessionPanel({ branchId, onStatusChange }: { branchId: string; onStatusChange?: (state: CashSessionState) => void }) {
-  const [cashBoxes, setCashBoxes] = useState<CashBox[]>([]);
-  const [selectedCashBoxId, setSelectedCashBoxId] = useState("");
-  const [activeSession, setActiveSession] = useState<CashSession | null>(null);
-  const [pendingAutoClosedSessions, setPendingAutoClosedSessions] = useState<CashSession[]>([]);
-  const [openingAmount, setOpeningAmount] = useState("0");
-  const [closingAmount, setClosingAmount] = useState("0");
-  const [reviewAmount, setReviewAmount] = useState("");
-  const [reviewNote, setReviewNote] = useState("");
-  // correccion-destino-y-pantalla-cobro.md §1: se abre justo después de
-  // cerrar — "Después" queda disponible, la declaración nunca bloquea el
-  // cierre en sí, que ya ocurrió.
-  const [declaration, setDeclaration] = useState<{ cashSessionId: string; countedAmount: number } | null>(null);
-  const [reviewingSessionId, setReviewingSessionId] = useState("");
-  const [message, setMessage] = useState("");
-  const [reconcilingSessionId, setReconcilingSessionId] = useState("");
-  const [busyAction, setBusyAction] = useState<"open" | "requestClose" | "close" | "review" | null>(null);
-  const [loadError, setLoadError] = useState(false);
-  // CORRECCIÓN 2 (UX): el formulario de revisión de cierre automático se muestra
-  // colapsado por defecto para que el botón "Abrir sesión" quede siempre visible.
-  const [showReviewForm, setShowReviewForm] = useState(false);
-  // Bug reportado: "Solicitar cierre de sesión" disparaba la llamada real al
-  // primer click, sin confirmación — fácil de tocar sin querer, y sin forma
-  // de deshacerlo después (no existe un "cancelar conciliación"). Ahora el
-  // primer click solo muestra la advertencia; el cierre real recién ocurre
-  // en el segundo click explícito.
-  const [confirmingClose, setConfirmingClose] = useState(false);
-  const isReconciling = Boolean(reconcilingSessionId);
+type Notice = { tone: "info" | "success" | "error"; text: string };
 
-  const canOpen = useMemo(
-    () => !!selectedCashBoxId && !activeSession && !reconcilingSessionId && pendingAutoClosedSessions.length === 0,
-    [selectedCashBoxId, activeSession, reconcilingSessionId, pendingAutoClosedSessions.length],
+const NOTICE_STYLE: Record<Notice["tone"], string> = {
+  info: "border-[var(--color-border)] bg-[var(--color-surface-alt)] text-[var(--color-text-secondary)]",
+  success: "border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]",
+  error: "border-[var(--color-danger-200)] bg-[var(--color-danger-50)] text-[var(--color-danger-700)]",
+};
+
+function NoticeLine({ notice }: { notice: Notice | null }) {
+  if (!notice) return null;
+  const Icon = notice.tone === "success" ? CheckCircle2 : notice.tone === "error" ? AlertTriangle : Info;
+  return (
+    <p role="status" className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-sm ${NOTICE_STYLE[notice.tone]}`}>
+      <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+      <span>{notice.text}</span>
+    </p>
   );
-  const canRequestClose = useMemo(() => activeSession?.status === "OPEN", [activeSession]);
-  const canClose = useMemo(() => isReconciling, [isReconciling]);
-  const selectedCashBox = useMemo(() => cashBoxes.find((box) => box.id === selectedCashBoxId) ?? null, [cashBoxes, selectedCashBoxId]);
+}
 
-  const sessionState = useMemo(() => {
-    if (activeSession) return { label: "ABIERTA", variant: "success" as const };
-    if (isReconciling) return { label: "EN CONCILIACIÓN", variant: "warning" as const };
-    if (pendingAutoClosedSessions.length > 0) return { label: "REVISION PENDIENTE", variant: "warning" as const };
-    return { label: "CERRADA", variant: "neutral" as const };
-  }, [activeSession, isReconciling, pendingAutoClosedSessions.length]);
+const STATUS_PILL = {
+  OPEN: { label: "Abierta", cls: "bg-[var(--color-success-50)] text-[var(--color-success-700)] border-[var(--color-success-200)]", dot: "bg-[var(--color-success-500)]" },
+  RECONCILING: { label: "Contando", cls: "bg-[var(--color-warning-50)] text-[var(--color-warning-700)] border-[var(--color-warning-200)]", dot: "bg-[var(--color-warning-500)]" },
+  CLOSED: { label: "Cerrada", cls: "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] border-[var(--color-border)]", dot: "bg-[var(--color-text-soft)]" },
+} as const;
 
-  const hasSingleBox = cashBoxes.length === 1;
+/**
+ * Pantalla Caja: la hoja de la gaveta del turno. Arriba lo que debe haber
+ * (y de dónde sale), la acción del momento (abrir, cerrar turno, contar) y su
+ * aviso al lado; abajo las salidas de dinero y los gastos de hoy. Se refresca
+ * cada 30 s, así un cobro hecho en otra pantalla se ve sin recargar.
+ */
+export function CashSessionPanel({ branchId }: { branchId: string }) {
+  const [cashBoxes, setCashBoxes] = useState<CashBox[]>([]);
+  const [boxesLoaded, setBoxesLoaded] = useState(false);
+  const [selectedCashBoxId, setSelectedCashBoxId] = useState("");
+  const [session, setSession] = useState<ActiveSession | null>(null);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [pendingAutoClosed, setPendingAutoClosed] = useState<AutoClosedSession[]>([]);
+  const [openingAmount, setOpeningAmount] = useState("0");
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [busyAction, setBusyAction] = useState<"open" | "requestClose" | "close" | "review" | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Pedir el cierre no tiene marcha atrás: el primer toque solo pregunta.
+  const [confirmingClose, setConfirmingClose] = useState(false);
+  // Se abre justo después de cerrar; "Después" queda disponible y nunca bloquea el cierre, que ya ocurrió.
+  const [declaration, setDeclaration] = useState<{ cashSessionId: string; countedAmount: number } | null>(null);
 
-  const publishStatus = useCallback((next: CashSessionState) => {
-    onStatusChange?.(next);
-  }, [onStatusChange]);
+  const selectedCashBox = cashBoxes.find((box) => box.id === selectedCashBoxId) ?? null;
 
-  const loadCashBoxes = useCallback(async () => {
-    const query = new URLSearchParams({ branchId });
-    const response = await fetch(`/api/cashier/cash-boxes?${query.toString()}`);
-    const json = (await response.json()) as unknown;
-
-    if (!response.ok) {
-      const { message, code } = extractApiError(json);
-      if (code === "FORBIDDEN" || code === "FORBIDDEN_ROLE") {
-        setLoadError(true);
-        setMessage("Tu perfil no tiene asignadas cajas físicas. Contacta al administrador.");
-      } else {
-        setMessage(mapSessionMessage(message, code));
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const response = await apiFetch(`/api/cashier/cash-boxes?branchId=${encodeURIComponent(branchId)}`);
+      const json = (await response.json()) as unknown;
+      if (cancelled) return;
+      if (!response.ok) {
+        const { message, code } = extractApiError(json);
+        setLoadError(code === "FORBIDDEN" || code === "FORBIDDEN_ROLE"
+          ? "Tu perfil no tiene asignadas cajas físicas. Contacta al administrador."
+          : mapSessionMessage(message, code));
+        return;
       }
-      return;
-    }
+      const boxes = (unwrapApiData(json) as CashBox[] | null) ?? [];
+      setCashBoxes(boxes);
+      setLoadError(boxes.length === 0 ? "No hay cajas físicas activas en esta sucursal." : null);
+      setSelectedCashBoxId((current) => current || boxes[0]?.id || "");
+    })()
+      .catch(() => { if (!cancelled) setLoadError("No se pudo cargar la lista de cajas."); })
+      .finally(() => { if (!cancelled) setBoxesLoaded(true); });
+    return () => { cancelled = true; };
+  }, [branchId]);
 
-    const boxes = (json as { data?: CashBox[] }).data ?? [];
-    setCashBoxes(boxes);
-    setLoadError(false);
-
-    // Auto-select: if only 1 box, select it automatically
-    if (boxes.length === 1) {
-      setSelectedCashBoxId(boxes[0].id);
-    } else if (!selectedCashBoxId && boxes.length > 0) {
-      setSelectedCashBoxId(boxes[0].id);
+  const refresh = useCallback(async () => {
+    if (!selectedCashBoxId) return;
+    const query = new URLSearchParams({ branchId, physicalCashBoxId: selectedCashBoxId });
+    const [activeRes, pendingRes] = await Promise.all([
+      apiFetch(`/api/cashier/cash-sessions/active?${query}&withExpected=1`),
+      apiFetch(`/api/branch/cash/sessions/auto-closed-pending?${query}`),
+    ]);
+    const activeJson = (await activeRes.json()) as unknown;
+    if (!activeRes.ok) {
+      const { message, code } = extractApiError(activeJson);
+      setNotice({ tone: "error", text: mapSessionMessage(message, code) });
+    } else {
+      setSession((unwrapApiData(activeJson) as ActiveSession | null) ?? null);
+      setSessionLoaded(true);
     }
-
-    if (boxes.length === 0) {
-      setMessage("No hay cajas físicas activas en esta sucursal.");
-    }
+    if (pendingRes.ok) setPendingAutoClosed((unwrapApiData(await pendingRes.json()) as AutoClosedSession[] | null) ?? []);
   }, [branchId, selectedCashBoxId]);
 
-  const loadActiveSession = useCallback(async (cashBoxId: string) => {
-    if (!cashBoxId) {
-      setActiveSession(null);
-      publishStatus({
-        hasOpenSession: false,
-        cashSessionId: null,
-        physicalCashBoxId: cashBoxId || null,
-        status: null,
-      });
-      return;
+  useOperationalPolling({
+    task: refresh,
+    intervalMs: 30_000,
+    enabled: Boolean(selectedCashBoxId),
+    deps: [refresh],
+    onError: () => undefined,
+  });
+
+  async function post(url: string, body: unknown): Promise<{ ok: true; json: unknown } | { ok: false; text: string }> {
+    try {
+      const response = await apiFetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const json = (await response.json()) as unknown;
+      if (!response.ok) {
+        const { message, code } = extractApiError(json);
+        return { ok: false, text: mapSessionMessage(message, code) };
+      }
+      return { ok: true, json };
+    } catch (error) {
+      return { ok: false, text: error instanceof TypeError ? "Error de red. Verifica tu conexión." : "No se pudo completar la operación de caja." };
     }
+  }
 
-    const query = new URLSearchParams({ branchId, physicalCashBoxId: cashBoxId });
-    const response = await fetch(`/api/cashier/cash-sessions/active?${query.toString()}`);
-    const json = (await response.json()) as unknown;
-
-    if (!response.ok) {
-      const { message, code } = extractApiError(json);
-      setMessage(mapSessionMessage(message, code));
-      return;
-    }
-
-    const typedJson = json as { data?: CashSession | null };
-    if (typedJson.data?.status === "RECONCILING") {
-      setActiveSession(null);
-      setReconcilingSessionId(typedJson.data.id);
-      publishStatus({
-        hasOpenSession: false,
-        cashSessionId: typedJson.data.id,
-        physicalCashBoxId: cashBoxId,
-        status: "RECONCILING",
-      });
-      return;
-    }
-
-    setReconcilingSessionId("");
-    setActiveSession(typedJson.data ?? null);
-    publishStatus({
-      hasOpenSession: Boolean(typedJson.data),
-      cashSessionId: typedJson.data?.id ?? null,
-      physicalCashBoxId: cashBoxId,
-      status: (typedJson.data?.status as CashSessionState["status"]) ?? null,
-    });
-  }, [branchId, publishStatus]);
-
-  const loadPendingAutoClosed = useCallback(async (cashBoxId: string) => {
-    if (!cashBoxId) {
-      setPendingAutoClosedSessions([]);
-      return;
-    }
-
-    const query = new URLSearchParams({ branchId, physicalCashBoxId: cashBoxId });
-    const response = await fetch(`/api/branch/cash/sessions/auto-closed-pending?${query.toString()}`);
-    const json = (await response.json()) as { data: CashSession[]; message?: string; reason?: string };
-    if (!response.ok) return;
-
-    const rows = json.data ?? [];
-    setPendingAutoClosedSessions(rows);
-    if (rows.length > 0 && !activeSession && !reconcilingSessionId) {
-      publishStatus({
-        hasOpenSession: false,
-        cashSessionId: rows[0].id,
-        physicalCashBoxId: cashBoxId,
-        status: "AUTO_CLOSED_PENDING_REVIEW",
-      });
-    }
-    if (rows.length > 0 && !reviewingSessionId) {
-      setReviewingSessionId(rows[0].id);
-      setReviewAmount(rows[0].expectedCashAmount ? Number(rows[0].expectedCashAmount).toFixed(2) : "");
-    }
-  }, [activeSession, branchId, publishStatus, reconcilingSessionId, reviewingSessionId]);
-
-  useEffect(() => {
-    loadCashBoxes().catch(() => setMessage("No se pudo cargar la lista de cajas."));
-  }, [loadCashBoxes]);
-
-  useEffect(() => {
-    loadActiveSession(selectedCashBoxId).catch(() => setMessage("No se pudo consultar la sesión activa."));
-  }, [loadActiveSession, selectedCashBoxId]);
-
-  useEffect(() => {
-    loadPendingAutoClosed(selectedCashBoxId).catch(() => undefined);
-  }, [loadPendingAutoClosed, selectedCashBoxId]);
-
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setMessage("");
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  async function doOpenSession() {
+  async function openSession() {
     if (!selectedCashBoxId || busyAction) return;
     setBusyAction("open");
-    setMessage("Abriendo sesión...");
-    try {
-      const response = await apiFetch("/api/cashier/cash-sessions/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ branchId, physicalCashBoxId: selectedCashBoxId, openingAmount: Number(openingAmount) }),
-      });
-      const json = (await response.json()) as unknown;
-
-      if (!response.ok) {
-        const { message, code } = extractApiError(json);
-        setMessage(mapSessionMessage(message, code));
-        return;
-      }
-
-      setReconcilingSessionId("");
-      setMessage("Sesión abierta correctamente. Ya puedes cobrar. ✓");
-      await loadActiveSession(selectedCashBoxId);
-    } catch (error) {
-      console.error("[CashSession][openSession]", error);
-      setMessage(error instanceof TypeError ? "Error de red. Verifica tu conexión." : "No se pudo abrir la sesión.");
-    } finally {
-      setBusyAction(null);
+    setNotice(null);
+    const result = await post("/api/cashier/cash-sessions/open", { branchId, physicalCashBoxId: selectedCashBoxId, openingAmount: Number(openingAmount) || 0 });
+    if (result.ok) {
+      setNotice({ tone: "success", text: "Caja abierta. Ya puedes cobrar." });
+      await refresh().catch(() => undefined);
+    } else {
+      setNotice({ tone: "error", text: result.text });
     }
+    setBusyAction(null);
   }
 
-  async function requestCloseSession() {
-    if (!activeSession || busyAction) return;
+  async function requestClose() {
+    if (session?.status !== "OPEN" || busyAction) return;
     setBusyAction("requestClose");
-    setMessage("Solicitando cierre para conciliación...");
-    try {
-      const response = await apiFetch("/api/cashier/cash-sessions/close-request", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cashSessionId: activeSession.id }),
-      });
-      const json = (await response.json()) as unknown;
-
-      if (!response.ok) {
-        const { message, code } = extractApiError(json);
-        setMessage(mapSessionMessage(message, code));
-        return;
-      }
-
-      setMessage("Sesión en conciliación. Ingresa monto final para cerrar.");
-      setReconcilingSessionId(activeSession.id);
-      setActiveSession(null);
-      setConfirmingClose(false);
-      publishStatus({
-        hasOpenSession: false,
-        cashSessionId: activeSession.id,
-        physicalCashBoxId: selectedCashBoxId || null,
-        status: "RECONCILING",
-      });
-    } catch (error) {
-      console.error("[CashSession][requestCloseSession]", error);
-      setMessage(error instanceof TypeError ? "Error de red. Verifica tu conexión." : "No se pudo solicitar el cierre.");
-    } finally {
-      setBusyAction(null);
-    }
+    setNotice(null);
+    const result = await post("/api/cashier/cash-sessions/close-request", { cashSessionId: session.id });
+    setConfirmingClose(false);
+    if (result.ok) await refresh().catch(() => undefined);
+    else setNotice({ tone: "error", text: result.text });
+    setBusyAction(null);
   }
 
-  async function closeSession() {
-    if (!reconcilingSessionId || busyAction) return;
+  async function closeSession(counted: number) {
+    if (session?.status !== "RECONCILING" || busyAction) return;
     setBusyAction("close");
-    setMessage("Cerrando sesión...");
-    try {
-      const response = await apiFetch("/api/cashier/cash-sessions/close", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cashSessionId: reconcilingSessionId, closingAmount: Number(closingAmount) }),
-      });
-      const json = (await response.json()) as unknown;
-
-      if (!response.ok) {
-        const { message, code } = extractApiError(json);
-        setMessage(mapSessionMessage(message, code));
-        return;
-      }
-
-      const typedCloseJson = json as {
-        data?: {
-          status?: string;
-          warning?: { code: string; difference: number; threshold: number };
-        };
-        status?: string;
-      };
-      const responseData = typedCloseJson.data;
-      const status = responseData?.status ?? typedCloseJson.status;
-      const warning = responseData?.warning;
-
-      if (status === "AUTO_CLOSED_PENDING_REVIEW") {
-        setMessage("La caja quedo pendiente de revision por Master.");
-        return;
-      }
-
-      setDeclaration({ cashSessionId: reconcilingSessionId, countedAmount: Number(closingAmount) });
-      setActiveSession(null);
-      setReconcilingSessionId("");
-      publishStatus({
-        hasOpenSession: false,
-        cashSessionId: null,
-        physicalCashBoxId: selectedCashBoxId || null,
-        status: "CLOSED",
-      });
-
-      if (warning?.code === "CASH_DIFFERENCE_RECORDED") {
-        const diffFormatted = Math.abs(warning.difference).toFixed(2);
-        setMessage(`Sesión cerrada con diferencia registrada: C$ ${diffFormatted}. Master la revisará en Día Operativo 360. ✓`);
-      } else {
-        setMessage("Sesión cerrada correctamente. ✓");
-      }
-    } catch (error) {
-      console.error("[CashSession][closeSession]", error);
-      setMessage(error instanceof TypeError ? "Error de red. Verifica tu conexión." : "No se pudo cerrar la sesión.");
-    } finally {
+    setNotice(null);
+    const sessionId = session.id;
+    const result = await post("/api/cashier/cash-sessions/close", { cashSessionId: sessionId, closingAmount: counted });
+    if (!result.ok) {
+      setNotice({ tone: "error", text: result.text });
       setBusyAction(null);
-    }
-  }
-
-  async function reviewAutoClosedSession() {
-    if (!reviewingSessionId || busyAction) return;
-    if (!reviewNote.trim()) {
-      setMessage("La nota de revision es obligatoria.");
       return;
     }
-    setBusyAction("review");
-    setMessage("Registrando revision de cierre automatico...");
-    try {
-      const response = await apiFetch(`/api/branch/cash/sessions/${reviewingSessionId}/review-auto-close`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ countedCashAmount: Number(reviewAmount), note: reviewNote.trim() }),
-      });
-      const json = (await response.json()) as unknown;
-
-      if (!response.ok) {
-        const { message, code } = extractApiError(json);
-        setMessage(mapSessionMessage(message, code));
-        return;
-      }
-
-      setMessage("Revision registrada. La sesion quedo cerrada.");
-      setReviewAmount("");
-      setReviewNote("");
-      setReviewingSessionId("");
-      await loadPendingAutoClosed(selectedCashBoxId);
-      await loadActiveSession(selectedCashBoxId);
-    } catch (error) {
-      console.error("[CashSession][reviewAutoClosedSession]", error);
-      setMessage(error instanceof TypeError ? "Error de red. Verifica tu conexion." : "No se pudo revisar el cierre automatico.");
-    } finally {
-      setBusyAction(null);
+    const data = unwrapApiData(result.json) as { status?: string; warning?: { code: string; difference: number } } | null;
+    if (data?.status === "AUTO_CLOSED_PENDING_REVIEW") {
+      setNotice({ tone: "info", text: "La caja quedó pendiente de revisión por Master." });
+    } else {
+      setDeclaration({ cashSessionId: sessionId, countedAmount: counted });
+      setNotice(
+        data?.warning?.code === "CASH_DIFFERENCE_RECORDED"
+          ? { tone: "info", text: `Caja cerrada con una diferencia de ${money(Math.abs(data.warning.difference))}. Master la revisará en Día Operativo 360.` }
+          : { tone: "success", text: "Caja cerrada. Cuadró." },
+      );
     }
+    await refresh().catch(() => undefined);
+    setBusyAction(null);
   }
 
-  const stateColors = {
-    success: { bg: "bg-[var(--color-success-50)]", border: "border-[var(--color-success-200)]", text: "text-[var(--color-success-700)]", dot: "bg-[var(--color-success-500)]" },
-    warning: { bg: "bg-[var(--color-warning-50)]", border: "border-[var(--color-warning-200)]", text: "text-[var(--color-warning-700)]", dot: "bg-[var(--color-warning-500)]" },
-    neutral: { bg: "bg-[var(--color-surface-alt)]", border: "border-[var(--color-border)]", text: "text-[var(--color-text-muted)]", dot: "bg-[var(--color-text-soft)]" },
-  };
-
-  const sc = stateColors[sessionState.variant];
-  const reviewingSession = pendingAutoClosedSessions.find((session) => session.id === reviewingSessionId) ?? pendingAutoClosedSessions[0] ?? null;
-  const expectedForReview = Number(reviewingSession?.expectedCashAmount ?? 0);
-  const countedForReview = Number(reviewAmount || 0);
-  const reviewDifference = Number.isFinite(countedForReview) ? countedForReview - expectedForReview : 0;
+  async function reviewAutoClosed(sessionId: string, countedCashAmount: number, note: string) {
+    if (busyAction) return false;
+    setBusyAction("review");
+    setNotice(null);
+    const result = await post(`/api/branch/cash/sessions/${sessionId}/review-auto-close`, { countedCashAmount, note });
+    setNotice(result.ok ? { tone: "success", text: "Revisión registrada. La sesión quedó cerrada." } : { tone: "error", text: result.text });
+    if (result.ok) await refresh().catch(() => undefined);
+    setBusyAction(null);
+    return result.ok;
+  }
 
   if (loadError) {
     return (
-      <section className="rounded-2xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-5" data-testid="cash-session-panel">
-        <p className="text-sm text-[var(--color-warning-700)]">{message}</p>
-      </section>
+      <div className="rounded-xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-5" data-testid="cash-session-panel">
+        <p className="text-sm text-[var(--color-warning-700)]">{loadError}</p>
+      </div>
     );
   }
+  if (!boxesLoaded || (selectedCashBoxId && !sessionLoaded)) {
+    return <p className="animate-pulse text-sm text-[var(--color-text-muted)]">Cargando la caja…</p>;
+  }
+
+  const status = session?.status ?? "CLOSED";
+  const pill = STATUS_PILL[status];
+  const expected = session?.expected ?? null;
+  const boxName = selectedCashBox ? (selectedCashBox.description || selectedCashBox.code) : "Caja";
 
   return (
-    <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5 space-y-4 shadow-[var(--shadow-card)]" data-testid="cash-session-panel">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-bold text-[var(--color-text)]">Control de sesión de caja</h2>
-        <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[0.6875rem] font-semibold ${sc.bg} ${sc.text} border ${sc.border}`}>
-          <span className={`h-1.5 w-1.5 rounded-full ${sc.dot}`} />
-          {sessionState.label}
-        </span>
-      </div>
+    <div className="space-y-4" data-testid="cash-session-panel">
+      {pendingAutoClosed.length > 0 && (
+        <AutoCloseReview sessions={pendingAutoClosed} busy={busyAction === "review"} onSubmit={reviewAutoClosed} />
+      )}
 
-      {/* Cash box info — auto-selected if single box, otherwise show selector */}
-      {hasSingleBox ? (
-        <div className={`rounded-xl p-3 text-sm ${sc.bg} border ${sc.border}`}>
-          <div className="font-medium text-[var(--color-text)]">
-            Caja: <strong>{selectedCashBox?.code ?? "—"}</strong>
-            {selectedCashBox?.description ? ` — ${selectedCashBox.description}` : ""}
-          </div>
-          <div className="text-xs text-[var(--color-text-muted)] mt-0.5">Asignada automáticamente</div>
+      <Card className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {cashBoxes.length > 1 ? (
+            <select
+              className="hm-input max-w-xs rounded-xl"
+              value={selectedCashBoxId}
+              onChange={(event) => { setSelectedCashBoxId(event.target.value); setSessionLoaded(false); setNotice(null); setConfirmingClose(false); }}
+              disabled={Boolean(busyAction)}
+              aria-label="Caja física"
+            >
+              {cashBoxes.map((box) => (
+                <option key={box.id} value={box.id}>{box.description || box.code} · {box.code}</option>
+              ))}
+            </select>
+          ) : (
+            <p className="text-sm font-semibold text-[var(--color-text)]">
+              {boxName}
+              {selectedCashBox?.description ? <span className="ml-1.5 font-normal text-[var(--color-text-muted)]">· {selectedCashBox.code}</span> : null}
+            </p>
+          )}
+          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${pill.cls}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${pill.dot}`} aria-hidden />
+            {pill.label}
+          </span>
         </div>
-      ) : cashBoxes.length > 1 ? (
-        <label className="grid gap-1.5 text-sm">
-          <span className="font-medium text-[var(--color-text-secondary)]">Selecciona caja física</span>
-          <select
-            className="hm-input rounded-xl"
-            value={selectedCashBoxId}
-            onChange={(event) => setSelectedCashBoxId(event.target.value)}
-            disabled={Boolean(busyAction)}
-          >
-            {cashBoxes.map((box) => (
-              <option key={box.id} value={box.id}>{box.code}{box.description ? ` — ${box.description}` : ""}</option>
-            ))}
-          </select>
-        </label>
-      ) : null}
 
-      {/* CORRECCIÓN 2 (UX): Acción principal SIEMPRE visible.
-          "Abrir sesión" se muestra arriba en una tarjeta destacada, antes que el
-          formulario de revisión de cierre automático (que ahora es colapsable),
-          para que el botón nunca quede empujado fuera de la vista. */}
-      {!activeSession && !isReconciling && cashBoxes.length > 0 && (
-        <div className="rounded-xl border-2 border-[var(--color-success-200)] bg-[var(--color-success-50)] p-4 space-y-3">
-          <p className="text-sm font-medium text-[var(--color-success-700)]">
-            No hay sesión abierta. Ingresa el monto de apertura y abre una sesión para comenzar a cobrar.
-          </p>
-          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+        {status === "OPEN" && session ? (
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_18rem] md:items-end">
+            <div className="min-w-0 space-y-2">
+              <p className="text-sm text-[var(--color-text-muted)]">Debe haber en la gaveta</p>
+              <p className="text-3xl font-bold tabular-nums text-[var(--color-text)] sm:text-4xl" data-testid="cash-expected">
+                {expected ? money(expected.expectedCash) : "—"}
+              </p>
+              {expected ? (
+                <p className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-[var(--color-text-secondary)]">
+                  <span>Apertura <strong className="tabular-nums">{money(expected.openingAmount)}</strong></span>
+                  <span>Cobros en efectivo <strong className="tabular-nums text-[var(--color-success-700)]">+{money(expected.cashPayments)}</strong></span>
+                  {expected.movementsNet !== 0 ? (
+                    <span>
+                      {expected.movementsNet < 0 ? "Salidas" : "Entradas"}{" "}
+                      <strong className={`tabular-nums ${expected.movementsNet < 0 ? "text-[var(--color-danger-700)]" : "text-[var(--color-success-700)]"}`}>
+                        {expected.movementsNet < 0 ? "−" : "+"}{money(Math.abs(expected.movementsNet))}
+                      </strong>
+                    </span>
+                  ) : null}
+                </p>
+              ) : null}
+              <p className="text-xs text-[var(--color-text-muted)]">
+                Abierta {session.openedBy ? `por ${session.openedBy.fullName || session.openedBy.username} ` : ""}desde las {fmtTimeShort(session.openedAt)}
+              </p>
+            </div>
+            {confirmingClose ? (
+              <div className="space-y-2.5 rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3">
+                <p className="text-sm font-medium text-[var(--color-warning-700)]">
+                  Vas a contar la gaveta. Mientras cuentas no se puede cobrar en esta caja, y no se puede volver atrás.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="flex-1 rounded-xl bg-[var(--btn-danger-bg,var(--color-danger-600))] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[var(--btn-danger-hover,var(--color-danger-700))] disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => void requestClose()}
+                    disabled={Boolean(busyAction)}
+                    data-testid="cash-session-request-close-confirm"
+                  >
+                    {busyAction === "requestClose" ? "Procesando…" : "Sí, a contar"}
+                  </button>
+                  <button
+                    type="button"
+                    className="flex-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2.5 text-sm font-medium text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-50"
+                    onClick={() => setConfirmingClose(false)}
+                    disabled={Boolean(busyAction)}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="w-full rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] px-5 py-3 text-sm font-semibold text-[var(--color-warning-700)] transition-colors hover:bg-[var(--color-warning-100)] disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => { setNotice(null); setConfirmingClose(true); }}
+                disabled={Boolean(busyAction)}
+                data-testid="cash-session-request-close"
+              >
+                Cerrar turno y contar
+              </button>
+            )}
+          </div>
+        ) : status === "RECONCILING" && session ? (
+          <div className="space-y-3">
             <div>
-              <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Monto de apertura (C$)</label>
+              <p className="text-base font-semibold text-[var(--color-text)]">Cuenta el efectivo de la gaveta</p>
+              <p className="text-sm text-[var(--color-text-muted)]">Cuenta todo lo que hay, billetes y monedas. La caja no cobra hasta que confirmes.</p>
+            </div>
+            <CashCount key={session.id} expected={expected?.expectedCash ?? null} busy={busyAction === "close"} onConfirm={(counted) => void closeSession(counted)} />
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+            <label className="block">
+              <span className="mb-1 block text-sm text-[var(--color-text-muted)]">La caja está cerrada. ¿Con cuánto efectivo empieza la gaveta?</span>
               <input
-                className="hm-input rounded-xl"
+                className="hm-input rounded-xl text-lg font-semibold tabular-nums"
                 type="number"
+                inputMode="decimal"
                 min="0"
                 step="0.01"
                 value={openingAmount}
                 onChange={(event) => setOpeningAmount(event.target.value)}
-                placeholder="Monto apertura"
-                disabled={Boolean(busyAction)}
+                disabled={Boolean(busyAction) || pendingAutoClosed.length > 0}
+                aria-label="Monto de apertura (C$)"
               />
-            </div>
-            <div className="flex items-end">
-              <button
-                className="w-full rounded-xl bg-[var(--color-success-600)] hover:bg-[var(--color-success-700)] px-5 py-3 sm:py-2.5 text-sm font-semibold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={() => void doOpenSession()}
-                disabled={!canOpen || Boolean(busyAction)}
-                data-testid="cash-session-open"
-              >
-                {busyAction === "open" ? "Abriendo..." : "Abrir sesión"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Session details when open */}
-      {activeSession && (
-        <div className="rounded-xl border border-[var(--color-success-100)] bg-[var(--color-success-50)] p-4 text-sm space-y-1">
-          {activeSession.openedBy && (
-            <div className="text-[var(--color-success-700)]">
-              <strong>👤 Abierta por:</strong> {activeSession.openedBy.fullName || activeSession.openedBy.username}
-            </div>
-          )}
-          <div className="text-[var(--color-success-700)]">
-            <strong>⏱ Abierta desde:</strong> {fmtDateTime(activeSession.openedAt)}
-          </div>
-          <div className="text-[var(--color-success-700)]">
-            <strong>Monto de apertura:</strong> C$ {Number(activeSession.openingAmount).toFixed(2)}
-          </div>
-        </div>
-      )}
-
-      {/* Gastos y retiros — visible mientras la sesión está abierta */}
-      {activeSession && (
-        <CashMovementsPanel
-          cashSessionId={activeSession.id}
-          branchId={branchId}
-          physicalCashBoxId={selectedCashBoxId}
-          cashBoxCode={selectedCashBox?.code}
-        />
-      )}
-
-      {/* Separador: fin de turno */}
-      {activeSession && (
-        <div className="flex items-center gap-3 pt-1">
-          <div className="flex-1 border-t border-[var(--color-border)]" />
-          <span className="text-[0.6875rem] font-bold uppercase tracking-widest text-[var(--color-text-soft)]">Fin de turno</span>
-          <div className="flex-1 border-t border-[var(--color-border)]" />
-        </div>
-      )}
-
-      {/* Cierre de sesión — diferente al retiro: cierra el turno del cajero */}
-      {activeSession && (
-        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4 space-y-3">
-          <div>
-            <p className="text-sm font-semibold text-[var(--color-text)]">Cierre de sesión</p>
-            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-              Termina el turno del cajero. Deberás contar el efectivo físico para cerrar. El día operativo puede seguir abierto con otra sesión.
-            </p>
-          </div>
-          {confirmingClose ? (
-            <div className="rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3 space-y-2.5">
-              <p className="text-sm font-medium text-[var(--color-warning-700)]">
-                Vas a iniciar el cierre de tu caja — no vas a poder seguir cobrando hasta contar el efectivo y confirmar el monto. ¿Continuar?
-              </p>
-              <div className="flex gap-2">
-                <button
-                  className="flex-1 rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-warning-100)] hover:bg-[var(--color-warning-200)] px-4 py-2.5 text-sm font-semibold text-[var(--color-warning-700)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  onClick={requestCloseSession}
-                  disabled={!canRequestClose || Boolean(busyAction)}
-                  data-testid="cash-session-request-close-confirm"
-                >
-                  {busyAction === "requestClose" ? "Procesando..." : "Sí, iniciar cierre"}
-                </button>
-                <button
-                  className="flex-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-alt)] px-4 py-2.5 text-sm font-medium text-[var(--color-text)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  onClick={() => setConfirmingClose(false)}
-                  disabled={Boolean(busyAction)}
-                >
-                  Cancelar
-                </button>
-              </div>
-            </div>
-          ) : (
+            </label>
             <button
-              className="w-full rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] hover:bg-[var(--color-warning-100)] px-5 py-3 sm:py-2.5 text-sm font-medium text-[var(--color-warning-700)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={() => setConfirmingClose(true)}
-              disabled={!canRequestClose || Boolean(busyAction)}
-              data-testid="cash-session-request-close"
+              type="button"
+              className="w-full rounded-xl bg-[var(--btn-success-bg,var(--color-success-600))] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-[var(--btn-success-hover,var(--color-success-700))] disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+              onClick={() => void openSession()}
+              disabled={!selectedCashBoxId || Boolean(busyAction) || pendingAutoClosed.length > 0}
+              data-testid="cash-session-open"
             >
-              Solicitar cierre de sesión
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Reconciling message */}
-      {isReconciling && (
-        <div className="rounded-xl border border-[var(--color-warning-100)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)]">
-          Sesión en conciliación. Ingresa el monto de cierre y confirma.
-        </div>
-      )}
-
-      {/* Close session controls */}
-      {isReconciling && (
-        <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-          <div>
-            <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Monto de cierre (C$)</label>
-            <input
-              className="hm-input rounded-xl"
-              type="number"
-              min="0"
-              step="0.01"
-              value={closingAmount}
-              onChange={(event) => setClosingAmount(event.target.value)}
-              placeholder="Monto cierre"
-              disabled={Boolean(busyAction)}
-            />
-          </div>
-          <div className="flex items-end">
-            <button
-              className="w-full rounded-xl bg-[var(--color-text)] hover:bg-[var(--color-text-secondary)] px-5 py-3 sm:py-2.5 text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={closeSession}
-              disabled={!canClose || Boolean(busyAction)}
-              data-testid="cash-session-close"
-            >
-              {busyAction === "close" ? "Cerrando..." : "Cerrar sesion"}
+              {busyAction === "open" ? "Abriendo…" : "Abrir caja"}
             </button>
           </div>
+        )}
+
+        <NoticeLine notice={notice} />
+      </Card>
+
+      {status === "OPEN" && session ? (
+        <div className="grid items-start gap-4 lg:grid-cols-2">
+          <CashMovementsPanel
+            cashSessionId={session.id}
+            branchId={branchId}
+            cashOnHand={expected?.expectedCash ?? null}
+            onRegistered={() => void refresh().catch(() => undefined)}
+          />
+          <GastosLocalesPanel branchId={branchId} />
         </div>
+      ) : (
+        <GastosLocalesPanel branchId={branchId} />
       )}
-
-      {/* CORRECCIÓN 2 (UX): Revisión de cierre automático — indicador claro + colapsable.
-          Se ubica DESPUÉS de la acción principal y queda colapsado por defecto para
-          no desplazar el botón "Abrir sesión". */}
-      {pendingAutoClosedSessions.length > 0 && (
-        <div className="rounded-xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-4 text-sm space-y-3" data-testid="cash-session-pending-review">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-start gap-2">
-              <span className="mt-1 inline-flex h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-[var(--color-warning-500)]" />
-              <div>
-                <p className="font-semibold text-[var(--color-warning-700)]">⚠ Cierre automático pendiente de revisión</p>
-                <p className="text-xs text-[var(--color-text-muted)]">Esta caja fue cerrada por horario. No se pueden cobrar pagos sobre esa sesión hasta revisarla.</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="rounded-full border border-[var(--color-warning-200)] bg-[var(--color-surface)] px-2.5 py-1 text-xs font-semibold text-[var(--color-warning-700)]">
-                {pendingAutoClosedSessions.length} pendiente{pendingAutoClosedSessions.length !== 1 ? "s" : ""}
-              </span>
-              <button
-                type="button"
-                className="rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-surface)] px-3 py-1.5 text-xs font-semibold text-[var(--color-warning-700)] transition-colors hover:bg-[var(--color-warning-100)]"
-                onClick={() => setShowReviewForm((value) => !value)}
-                data-testid="cash-session-toggle-review"
-                aria-expanded={showReviewForm}
-              >
-                {showReviewForm ? "Ocultar revisión" : "Revisar ahora"}
-              </button>
-            </div>
-          </div>
-
-          {showReviewForm && (
-            <div className="space-y-3 border-t border-[var(--color-warning-200)] pt-3">
-              <label className="grid gap-1.5">
-                <span className="text-xs font-semibold text-[var(--color-text-muted)]">Sesion a revisar</span>
-                <select
-                  className="hm-input rounded-xl"
-                  value={reviewingSessionId}
-                  onChange={(event) => {
-                    const next = pendingAutoClosedSessions.find((item) => item.id === event.target.value);
-                    setReviewingSessionId(event.target.value);
-                    setReviewAmount(next?.expectedCashAmount ? Number(next.expectedCashAmount).toFixed(2) : "");
-                  }}
-                  disabled={Boolean(busyAction)}
-                >
-                  {pendingAutoClosedSessions.map((session) => (
-                    <option key={session.id} value={session.id}>
-                      {session.physicalCashBox?.code ?? "Caja"} - {session.autoClosedAt ? fmtDateTime(session.autoClosedAt) : "auto-cierre"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {reviewingSession && (
-                <div className="grid gap-3 md:grid-cols-3">
-                  <div className="rounded-lg border border-[var(--color-warning-100)] bg-[var(--color-surface)] p-3">
-                    <p className="text-xs text-[var(--color-text-muted)]">Monto esperado</p>
-                    <p className="font-semibold text-[var(--color-text)]">C$ {expectedForReview.toFixed(2)}</p>
-                  </div>
-                  <label className="grid gap-1.5">
-                    <span className="text-xs font-semibold text-[var(--color-text-muted)]">Monto contado real</span>
-                    <input
-                      className="hm-input rounded-xl"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={reviewAmount}
-                      onChange={(event) => setReviewAmount(event.target.value)}
-                      disabled={Boolean(busyAction)}
-                    />
-                  </label>
-                  <div className={`rounded-lg border p-3 ${Math.abs(reviewDifference) > 5 ? "border-[var(--color-danger-200)] bg-[var(--color-danger-50)]" : "border-[var(--color-border)] bg-[var(--color-surface)]"}`}>
-                    <p className="text-xs text-[var(--color-text-muted)]">Diferencia</p>
-                    <p className="font-semibold text-[var(--color-text)]">C$ {reviewDifference.toFixed(2)}</p>
-                  </div>
-                </div>
-              )}
-
-              <label className="grid gap-1.5">
-                <span className="text-xs font-semibold text-[var(--color-text-muted)]">Nota de revision</span>
-                <textarea
-                  className="hm-input min-h-20 rounded-xl px-3 py-2"
-                  value={reviewNote}
-                  onChange={(event) => setReviewNote(event.target.value)}
-                  placeholder="Describe el conteo fisico y cualquier diferencia."
-                  disabled={Boolean(busyAction)}
-                />
-              </label>
-
-              <div className="flex justify-end">
-                <button
-                  className="rounded-xl bg-[var(--color-warning-600)] px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[var(--color-warning-700)] disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={reviewAutoClosedSession}
-                  disabled={!reviewingSessionId || !reviewNote.trim() || Boolean(busyAction)}
-                >
-                  {busyAction === "review" ? "Revisando..." : "Revisar cierre"}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Feedback message */}
-      {message && !loadError ? (
-        <p className="text-sm text-[var(--color-text-secondary)] bg-[var(--color-surface-alt)] rounded-xl px-3 py-2">
-          {message}
-        </p>
-      ) : null}
 
       {declaration && (
         <CashDestinationDeclarationModal
@@ -739,6 +436,112 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
           onSaved={() => setDeclaration(null)}
         />
       )}
-    </section>
+    </div>
+  );
+}
+
+/** Cierre automático por horario: se cuenta lo que quedó y se deja nota. */
+function AutoCloseReview({
+  sessions,
+  busy,
+  onSubmit,
+}: {
+  sessions: AutoClosedSession[];
+  busy: boolean;
+  onSubmit: (sessionId: string, countedCashAmount: number, note: string) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [sessionId, setSessionId] = useState(sessions[0]?.id ?? "");
+  const current = sessions.find((s) => s.id === sessionId) ?? sessions[0];
+  const expected = Number(current?.expectedCashAmount ?? 0);
+  const [amount, setAmount] = useState(current?.expectedCashAmount ? expected.toFixed(2) : "");
+  const [note, setNote] = useState("");
+  const diff = Math.round(((Number(amount) || 0) - expected) * 100) / 100;
+
+  return (
+    <div className="space-y-3 rounded-xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-5" data-testid="cash-session-pending-review">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning-700)]" aria-hidden />
+          <div>
+            <p className="text-sm font-semibold text-[var(--color-warning-700)]">
+              {sessions.length === 1 ? "Una caja se cerró sola por horario" : `${sessions.length} cajas se cerraron solas por horario`}
+            </p>
+            <p className="text-xs text-[var(--color-text-muted)]">Cuenta lo que quedó y deja una nota. Hasta entonces no se puede abrir otra.</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-surface)] px-3 py-2 text-sm font-semibold text-[var(--color-warning-700)] transition-colors hover:bg-[var(--color-warning-100)]"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          data-testid="cash-session-toggle-review"
+        >
+          {open ? "Ocultar" : "Revisar ahora"}
+        </button>
+      </div>
+
+      {open && current ? (
+        <div className="space-y-3 border-t border-[var(--color-warning-200)] pt-3">
+          {sessions.length > 1 ? (
+            <select
+              className="hm-input rounded-xl"
+              value={current.id}
+              onChange={(event) => {
+                const next = sessions.find((s) => s.id === event.target.value);
+                setSessionId(event.target.value);
+                setAmount(next?.expectedCashAmount ? Number(next.expectedCashAmount).toFixed(2) : "");
+              }}
+              disabled={busy}
+              aria-label="Sesión a revisar"
+            >
+              {sessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.physicalCashBox?.code ?? "Caja"} · {s.autoClosedAt ? fmtDateTime(s.autoClosedAt) : "cierre automático"}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+              <p className="text-xs text-[var(--color-text-muted)]">Debía haber</p>
+              <p className="font-semibold tabular-nums text-[var(--color-text)]">{money(expected)}</p>
+            </div>
+            <label className="grid gap-1">
+              <span className="text-xs font-semibold text-[var(--color-text-muted)]">Contado</span>
+              <input className="hm-input rounded-xl" type="number" inputMode="decimal" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={busy} />
+            </label>
+            <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+              <p className="text-xs text-[var(--color-text-muted)]">Diferencia</p>
+              <p className={`font-semibold tabular-nums ${diff === 0 ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-700)]"}`}>
+                {diff === 0 ? "Cuadra" : `${diff > 0 ? "Sobran" : "Faltan"} ${money(Math.abs(diff))}`}
+              </p>
+            </div>
+          </div>
+          <label className="grid gap-1">
+            <span className="text-xs font-semibold text-[var(--color-text-muted)]">Nota de revisión</span>
+            <textarea
+              className="hm-input min-h-20 rounded-xl px-3 py-2"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Cómo se contó y por qué hay diferencia, si la hay."
+              disabled={busy}
+            />
+          </label>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="rounded-xl bg-[var(--btn-primary-bg,var(--color-info-700))] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[var(--btn-primary-hover,var(--color-info-600))] disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={async () => {
+                if (await onSubmit(current.id, Number(amount) || 0, note.trim())) setNote("");
+              }}
+              disabled={!note.trim() || amount.trim() === "" || busy}
+            >
+              {busy ? "Registrando…" : "Registrar revisión"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }

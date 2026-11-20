@@ -545,6 +545,14 @@ function send(res: http.ServerResponse, status: number, body: unknown, extraHead
 }
 const ok = (res: http.ServerResponse, data: unknown) => send(res, 200, { ok: true, data });
 
+type MockCash = { id: string; status: "OPEN" | "RECONCILING" | "CLOSED"; opening: number; cashPayments: number; openedAt: string };
+const mockCashOpenedAt = (() => { const d = new Date(); d.setHours(7, 32, 0, 0); return d.toISOString(); })();
+const mockCash = new Map<string, MockCash>([["br-central", { id: "cs-1", status: "OPEN", opening: 2000, cashPayments: 17650.5, openedAt: mockCashOpenedAt }]]);
+const mockCashMovements: Array<{ id: string; sessionId: string; type: string; amount: number; reason: string; createdAt: string; expense?: { category: string; conceptId: null; concept: null; receiptNumber: null; receiptPhotoUrl: string | null } }> = [
+  { id: "cm-1", sessionId: "cs-1", type: "EXPENSE_OUT", amount: 850, reason: "Almuerzo del personal", createdAt: mockCashOpenedAt, expense: { category: "FOOD", conceptId: null, concept: null, receiptNumber: null, receiptPhotoUrl: null } },
+  { id: "cm-2", sessionId: "cs-1", type: "CASH_OUT", amount: 350, reason: "Retiro de efectivo (cambio a otra caja)", createdAt: mockCashOpenedAt },
+];
+
 async function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -584,6 +592,54 @@ const server = http.createServer(async (req, res) => {
   }
 
   // "Mi día" de la caja: Central con día movido, Demo con caja cerrada y nada pendiente.
+  // Caja (/app/branch/cash): br-central arranca abierta; abrir, pedir cierre y cerrar viven en memoria.
+  if (path === "/api/cashier/cash-boxes") {
+    const branchId = url.searchParams.get("branchId") ?? "";
+    return ok(res, [{ id: `cb-${branchId}`, code: "CAJA-01", description: branchId === "br-central" ? "Caja principal Central" : "Caja principal" }]);
+  }
+  if (path === "/api/cashier/cash-sessions/active") {
+    const branchId = url.searchParams.get("branchId") ?? "";
+    const cash = mockCash.get(branchId);
+    if (!cash || cash.status === "CLOSED") return ok(res, null);
+    const movementsNet = -mockCashMovements.filter((m) => m.sessionId === cash.id).reduce((t, m) => t + m.amount, 0);
+    const expectedCash = cash.opening + cash.cashPayments + movementsNet;
+    return ok(res, {
+      id: cash.id, status: cash.status, openingAmount: String(cash.opening), openedAt: cash.openedAt,
+      expectedCashAmount: String(expectedCash), openedBy: { username: "maria", fullName: "María López" }, canOperate: true,
+      ...(url.searchParams.get("withExpected") === "1"
+        ? { expected: { openingAmount: cash.opening, cashPayments: cash.cashPayments, movementsNet, expectedCash } }
+        : {}),
+    });
+  }
+  if (path === "/api/branch/cash/sessions/auto-closed-pending") return ok(res, []);
+  if (path === "/api/cashier/cash-sessions/open" && method === "POST") {
+    const body = await readJson(req);
+    const branchId = String(body.branchId ?? "");
+    mockCash.set(branchId, { id: `cs-${randomUUID().slice(0, 6)}`, status: "OPEN", opening: Number(body.openingAmount ?? 0), cashPayments: 0, openedAt: new Date().toISOString() });
+    return ok(res, { id: mockCash.get(branchId)!.id });
+  }
+  if (path === "/api/cashier/cash-sessions/close-request" && method === "POST") {
+    const body = await readJson(req);
+    const cash = [...mockCash.values()].find((c) => c.id === body.cashSessionId);
+    if (cash) cash.status = "RECONCILING";
+    return ok(res, { status: "RECONCILING" });
+  }
+  if (path === "/api/cashier/cash-sessions/close" && method === "POST") {
+    const body = await readJson(req);
+    const cash = [...mockCash.values()].find((c) => c.id === body.cashSessionId);
+    if (!cash) return send(res, 400, { ok: false, error: { code: "CASH_SESSION_NOT_RECONCILING", message: "No está en conciliación" } });
+    const net = -mockCashMovements.filter((m) => m.sessionId === cash.id).reduce((t, m) => t + m.amount, 0);
+    const difference = Math.round((Number(body.closingAmount ?? 0) - (cash.opening + cash.cashPayments + net)) * 100) / 100;
+    cash.status = "CLOSED";
+    return ok(res, { status: "CLOSED", ...(difference !== 0 ? { warning: { code: "CASH_DIFFERENCE_RECORDED", difference, threshold: 0 } } : {}) });
+  }
+  if (path === "/api/cashier/v2/cash-movements" && method === "GET") {
+    const sessionId = url.searchParams.get("cashSessionId");
+    return ok(res, mockCashMovements.filter((m) => m.sessionId === sessionId).map((m) => ({
+      id: m.id, type: m.type, amount: String(m.amount), reason: m.reason, notes: null, createdAt: m.createdAt,
+      createdBy: { fullName: "María López", username: "maria" }, operatingExpense: m.expense ?? null, cashPurchase: null,
+    })));
+  }
   if (path === "/api/branch/dashboard") {
     const branch = branches.find((b) => b.id === url.searchParams.get("branchId")) ?? branches[0];
     const at = (h: number, m: number) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.toISOString(); };
@@ -611,9 +667,11 @@ const server = http.createServer(async (req, res) => {
         { paymentId: "pay-5", orderId: "o-5", orderNumber: "MGA-000227", amount: 2100, method: "CASH", paidAt: at(11, 55) },
       ],
       lowStock: [
-        { productId: "p-varilla", name: "VARILLA DE HIERRO 3/8 STD", unit: "VARILLA", onHand: 4, threshold: 20, soldToday: 36 },
-        { productId: "p-pintura", name: "PINTURA DE ACEITE BLANCA", unit: "UN", onHand: 0, threshold: 5, soldToday: 3 },
-        { productId: "p-plywood", name: 'PLYWOOD DE 3/16"', unit: "UNIDAD", onHand: 2, threshold: 5, soldToday: 2 },
+        { productId: "p-pintura", name: "PINTURA DE ACEITE BLANCA", unit: "UN", onHand: 0, soldToday: 3, daysOfCover: 0, level: "out" },
+        { productId: "p-cemento", name: "CEMENTO CONTINENTAL", unit: "UN", onHand: 20, soldToday: 13, daysOfCover: 1.5, level: "short" },
+        { productId: "p-varilla", name: "VARILLA DE HIERRO 3/8 STD", unit: "VARILLA", onHand: 40, soldToday: 36, daysOfCover: 4.6, level: "watch" },
+        { productId: "p-arena", name: "LATA DE ARENA", unit: "LATA", onHand: 575, soldToday: 69, daysOfCover: 17.1, level: "ok" },
+        { productId: "p-plywood", name: 'PLYWOOD DE 3/16"', unit: "UNIDAD", onHand: 12, soldToday: 2, daysOfCover: 84, level: "ok" },
       ],
     });
   }

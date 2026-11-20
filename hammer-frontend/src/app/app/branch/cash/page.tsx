@@ -1,15 +1,12 @@
 "use client";
 
 import { CashSessionPanel } from "@/components/cash-session/cash-session-panel";
-import { GastosLocalesPanel } from "@/components/cash-session/gastos-locales-panel";
 import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 
 /**
- * FASE 3 (UX): pantalla "Caja".
- * Solo se encarga del control de la sesión de caja física:
- * abrir, conciliar y cerrar la caja del día. La cola de cobro de
- * órdenes vive en una pantalla separada ("Cobros").
+ * Pantalla "Caja": la gaveta del turno (cuánto debe haber, salidas de dinero,
+ * gastos de hoy y el cierre con conteo). Cobrar órdenes vive en "Cobros".
  */
 export default function BranchCashPage() {
   const sessionState = useSession();
@@ -27,15 +24,12 @@ export default function BranchCashPage() {
   }
 
   return (
-    <section className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-[var(--color-text)]">Caja</h1>
-        <p className="text-sm text-[var(--color-text-muted)]">
-          Abre, concilia y cierra la sesión de la caja física. Para cobrar órdenes usa la pantalla <strong>Cobros</strong>.
-        </p>
-      </div>
+    <section className="flex flex-col gap-4 overflow-y-auto pb-4">
+      <header>
+        <h1 className="text-2xl font-bold text-[var(--color-text)]">Caja</h1>
+        <p className="text-sm text-[var(--color-text-muted)]">La gaveta de tu turno. Para cobrar órdenes usa <strong>Cobros</strong>.</p>
+      </header>
       <CashSessionPanel branchId={branchId} />
-      <GastosLocalesPanel branchId={branchId} />
     </section>
   );
 }
