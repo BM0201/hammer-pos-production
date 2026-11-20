@@ -25,8 +25,6 @@ type ActiveSession = {
   openingAmount: string;
   openedAt: string;
   openedBy?: { username: string; fullName: string };
-  /** GET .../active?withExpected=1: lo que debe haber en la gaveta y de dónde sale. */
-  expected?: { openingAmount: number; cashPayments: number; movementsNet: number; expectedCash: number };
   /** Desde 20 min antes del cierre y mientras se cuenta: la API no manda el esperado (conteo a ciegas). */
   blindCount?: boolean;
 };
@@ -190,7 +188,7 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
     if (!selectedCashBoxId) return;
     const query = new URLSearchParams({ branchId, physicalCashBoxId: selectedCashBoxId });
     const [activeRes, pendingRes] = await Promise.all([
-      apiFetch(`/api/cashier/cash-sessions/active?${query}&withExpected=1`),
+      apiFetch(`/api/cashier/cash-sessions/active?${query}`),
       apiFetch(`/api/branch/cash/sessions/auto-closed-pending?${query}`),
     ]);
     const activeJson = (await activeRes.json()) as unknown;
@@ -317,7 +315,6 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
 
   const status = session?.status ?? "CLOSED";
   const pill = STATUS_PILL[status];
-  const expected = session?.expected ?? null;
   const closePhase = closeAt && countFrom ? closeReminderPhase(now, Date.parse(countFrom), Date.parse(closeAt)) : "none";
   if (wantsClose && status === "OPEN") {
     setWantsClose(false);
@@ -361,29 +358,13 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
           <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_18rem] md:items-end">
             <div className="min-w-0 space-y-2">
               <p className="text-sm text-[var(--color-text-muted)]">Debe haber en la gaveta</p>
-              {session.blindCount ? (
-                <p className="text-lg font-semibold text-[var(--color-text)]" data-testid="cash-expected-hidden">
-                  No disponible hasta el conteo del cierre
-                </p>
-              ) : (
-                <p className="text-3xl font-bold tabular-nums text-[var(--color-text)] sm:text-4xl" data-testid="cash-expected">
-                  {expected ? money(expected.expectedCash) : "—"}
-                </p>
-              )}
-              {expected ? (
-                <p className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-[var(--color-text-secondary)]">
-                  <span>Apertura <strong className="tabular-nums">{money(expected.openingAmount)}</strong></span>
-                  <span>Cobros en efectivo <strong className="tabular-nums text-[var(--color-success-700)]">+{money(expected.cashPayments)}</strong></span>
-                  {expected.movementsNet !== 0 ? (
-                    <span>
-                      {expected.movementsNet < 0 ? "Salidas" : "Entradas"}{" "}
-                      <strong className={`tabular-nums ${expected.movementsNet < 0 ? "text-[var(--color-danger-700)]" : "text-[var(--color-success-700)]"}`}>
-                        {expected.movementsNet < 0 ? "−" : "+"}{money(Math.abs(expected.movementsNet))}
-                      </strong>
-                    </span>
-                  ) : null}
-                </p>
-              ) : null}
+              {/* Conteo a ciegas: la API nunca manda cuánto debe haber; se ve al cerrar el turno. */}
+              <p className="text-lg font-semibold text-[var(--color-text)]" data-testid="cash-expected-hidden">
+                No disponible hasta el conteo del cierre
+              </p>
+              <p className="text-sm text-[var(--color-text-secondary)]">
+                Abrió con <strong className="tabular-nums">{money(Number(session.openingAmount))}</strong> de sencillo
+              </p>
               {closePhase !== "none" && closeAt ? (
                 <p className="rounded-xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-sm font-medium text-[var(--color-warning-700)]" data-testid="cash-close-soon">
                   {closePhase === "soon"
@@ -488,7 +469,6 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
           <CashMovementsPanel
             cashSessionId={session.id}
             branchId={branchId}
-            cashOnHand={expected?.expectedCash ?? null}
             onRegistered={() => void refresh().catch(() => undefined)}
           />
           <GastosLocalesPanel branchId={branchId} />
@@ -557,10 +537,8 @@ function AutoCloseReview({
   const [open, setOpen] = useState(false);
   const [sessionId, setSessionId] = useState(sessions[0]?.id ?? "");
   const current = sessions.find((s) => s.id === sessionId) ?? sessions[0];
-  const expected = Number(current?.expectedCashAmount ?? 0);
-  const [amount, setAmount] = useState(current?.expectedCashAmount ? expected.toFixed(2) : "");
+  const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
-  const diff = Math.round(((Number(amount) || 0) - expected) * 100) / 100;
 
   return (
     <div className="space-y-3 rounded-xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-5" data-testid="cash-session-pending-review">
@@ -592,9 +570,8 @@ function AutoCloseReview({
               className="hm-input rounded-xl"
               value={current.id}
               onChange={(event) => {
-                const next = sessions.find((s) => s.id === event.target.value);
                 setSessionId(event.target.value);
-                setAmount(next?.expectedCashAmount ? Number(next.expectedCashAmount).toFixed(2) : "");
+                setAmount("");
               }}
               disabled={busy}
               aria-label="Sesión a revisar"
@@ -606,29 +583,17 @@ function AutoCloseReview({
               ))}
             </select>
           ) : null}
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
-              <p className="text-xs text-[var(--color-text-muted)]">Debía haber</p>
-              <p className="font-semibold tabular-nums text-[var(--color-text)]">{money(expected)}</p>
-            </div>
-            <label className="grid gap-1">
-              <span className="text-xs font-semibold text-[var(--color-text-muted)]">Contado</span>
-              <input className="hm-input rounded-xl" type="number" inputMode="decimal" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={busy} />
-            </label>
-            <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
-              <p className="text-xs text-[var(--color-text-muted)]">Diferencia</p>
-              <p className={`font-semibold tabular-nums ${diff === 0 ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-700)]"}`}>
-                {diff === 0 ? "Cuadra" : `${diff > 0 ? "Sobran" : "Faltan"} ${money(Math.abs(diff))}`}
-              </p>
-            </div>
-          </div>
+          <label className="grid max-w-xs gap-1">
+            <span className="text-xs font-semibold text-[var(--color-text-muted)]">Contado (lo que hay en la gaveta)</span>
+            <input className="hm-input rounded-xl" type="number" inputMode="decimal" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={busy} />
+          </label>
           <label className="grid gap-1">
             <span className="text-xs font-semibold text-[var(--color-text-muted)]">Nota de revisión</span>
             <textarea
               className="hm-input min-h-20 rounded-xl px-3 py-2"
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="Cómo se contó y por qué hay diferencia, si la hay."
+              placeholder="Cómo se contó y quién estaba."
               disabled={busy}
             />
           </label>

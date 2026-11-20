@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { HandCoins, Landmark, Moon, Lock, Clock, UserCheck, Users, Footprints, ChevronRight, ChevronDown, AlertTriangle, X, Check, Wallet } from "lucide-react";
+import { HandCoins, Landmark, Moon, Clock, UserCheck, Users, Footprints, ChevronRight, ChevronDown, AlertTriangle, X, Check, Wallet } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
@@ -37,16 +37,9 @@ type Movement = {
   occurredAt: string;
 };
 type Postponement = { id: string; amount: number; reason: string | null; postponedUntil: string; createdAt: string };
-type BankAccountBreakdown = { accountId: string; bankName: string; accountAlias: string; last4: string; amount: number };
 type CashDestinationSummary = {
-  session: { id: string; openedAt: string; expectedCashAmount: number };
-  /** Parte C — los tres estados del dinero, mismo vocabulario que Tesorería de Master. */
-  money: {
-    physical: { inDrawer: number; cashFund: number; availableToMove: number };
-    inAccount: { total: number; byAccount: BankAccountBreakdown[] };
-    pendingSettlement: { total: number };
-    other: { total: number };
-  };
+  /** Conteo a ciegas: el servidor no manda cuánto hay en la gaveta (expectedCashAmount null, sin money). */
+  session: { id: string; openedAt: string };
   movements: Movement[];
   postponements: Postponement[];
   consecutivePostponements: number;
@@ -162,11 +155,7 @@ export default function CashDestinationPage() {
     return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
   }
 
-  const noCashAtAll = summary ? summary.money.physical.inDrawer <= 0.01 : false;
-  const noSurplus = summary ? summary.money.physical.availableToMove <= 0.01 : false;
   const noBankAccounts = bankAccounts.length === 0;
-  const cashInDrawer = summary ? summary.money.physical.inDrawer : 0;
-  const fundPct = summary && cashInDrawer > 0 ? Math.max(0, Math.min(100, (summary.money.physical.cashFund / cashInDrawer) * 100)) : 0;
 
   // C.4 — el cajero necesita saber qué pasó ANTES de decidir qué hacer
   // ahora; hoy eso solo aparecía en el historial, después de las opciones.
@@ -225,46 +214,10 @@ export default function CashDestinationPage() {
         </Card>
       ) : (
         <>
-          {/* B.2 · El número primero — sin tarjeta que lo envuelva */}
-          <div className="px-1">
-            <p className="text-sm font-medium text-[var(--color-text-muted)]">Podés mover ahora</p>
-            <p className="mt-1 text-[44px] font-medium leading-none tabular-nums text-[var(--color-success-700)]">{money(summary.money.physical.availableToMove)}</p>
-            <p className="mt-2 text-sm text-[var(--color-text-muted)]">de los {money(cashInDrawer)} que hay en la gaveta</p>
-
-            {/* B.3 · La barra del fondo de caja — solo proporción, sin texto adentro (Parte B: al 3.7% de ancho el texto se truncaba en "FO... C...") */}
-            {summary.money.physical.cashFund > 0 && (
-              <div className="mt-5">
-                <div className="flex h-[14px] w-full overflow-hidden rounded-[7px]">
-                  <div className="h-full shrink-0 bg-[var(--color-surface-alt)]" style={{ width: `${fundPct}%`, minWidth: "6px" }} />
-                  <div className="h-full min-w-0 flex-1 bg-[var(--color-success-500)]" />
-                </div>
-
-                {/* La cifra vive arriba, una sola vez (hero) — acá solo la leyenda que explica la proporción */}
-                <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[13px]">
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-2 w-2 shrink-0 rounded-sm bg-[var(--color-surface-alt)]" aria-hidden="true" />
-                    <span className="text-[var(--color-text-muted)]">Fondo de caja</span>
-                    <span className="font-medium tabular-nums text-[var(--color-text)]">{money(summary.money.physical.cashFund)}</span>
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-2 w-2 shrink-0 rounded-sm bg-[var(--color-success-500)]" aria-hidden="true" />
-                    <span className="text-[var(--color-text-muted)]">Para mover</span>
-                    <span className="font-medium tabular-nums text-[var(--color-text)]">{money(summary.money.physical.availableToMove)}</span>
-                  </span>
-                </div>
-
-                <p className="mt-2 flex items-center gap-1.5 text-xs text-[var(--color-text-soft)]">
-                  <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  El fondo de caja se queda en la gaveta para dar vuelto mañana
-                </p>
-              </div>
-            )}
-          </div>
-
           {/* B.4 · Cinco filas en tres grupos — o el estado vacío que corresponda (B.7) */}
           <div>
             <h2 className="px-1 text-[15px] font-medium text-[var(--color-text)]">
-              {noSurplus ? "Nada para mover todavía" : `¿Qué hacés con los ${money(summary.money.physical.availableToMove)}?`}
+              ¿Qué hacés con el efectivo?
             </h2>
 
             {/* C.4 — qué pasó ANTES de decidir qué hacer ahora */}
@@ -275,13 +228,7 @@ export default function CashDestinationPage() {
               </div>
             )}
 
-            {noSurplus ? (
-              <p className="mt-2 px-1 text-sm text-[var(--color-text-muted)]">
-                {noCashAtAll
-                  ? "Todavía no se ha cobrado efectivo en esta caja."
-                  : `Todo el efectivo en gaveta es el fondo de caja (${money(summary.money.physical.cashFund)}). No hay excedente para mover.`}
-              </p>
-            ) : (
+            <p className="mt-1 px-1 text-[13px] text-[var(--color-text-muted)]">El sencillo se queda en la gaveta para dar vuelto.</p>
               <div className="mt-3 space-y-4">
                 <div>
                   <p className="mb-2 px-1 text-[13px] text-[var(--color-text-muted)]">Va al banco</p>
@@ -335,55 +282,7 @@ export default function CashDestinationPage() {
                   </div>
                 </div>
               </div>
-            )}
           </div>
-
-          {/* Parte D · Sección 2 — dinero que no pasa por la gaveta: ya está
-              registrado, no es una decisión. Filas planas, sin borde de
-              tarjeta ni chevron — esto no se toca. */}
-          {(summary.money.inAccount.total > 0.01 || summary.money.pendingSettlement.total > 0.01) && (
-            <div className="space-y-4 border-t border-[var(--color-border)] px-1 pt-5">
-              <div>
-                <h2 className="text-[15px] font-medium text-[var(--color-text)]">Dinero que no pasa por la gaveta</h2>
-                <p className="mt-0.5 text-sm text-[var(--color-text-muted)]">Esto ya está registrado. No tenés que hacer nada.</p>
-              </div>
-
-              {summary.money.inAccount.total > 0.01 && (
-                <div className="flex items-start gap-3">
-                  <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-text-soft)]" aria-hidden="true" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-sm text-[var(--color-text-muted)]">En cuenta</span>
-                      <span className="text-[20px] font-medium leading-none tabular-nums text-[var(--color-text-muted)]">{money(summary.money.inAccount.total)}</span>
-                    </div>
-                    <div className="mt-1.5 space-y-0.5">
-                      {summary.money.inAccount.byAccount.slice(0, 3).map((a) => (
-                        <p key={a.accountId} className="text-[13px] text-[var(--color-text-soft)]">
-                          Banco {a.bankName} ****{a.last4} · {money(a.amount)}
-                        </p>
-                      ))}
-                      {summary.money.inAccount.byAccount.length > 3 && (
-                        <p className="text-[13px] text-[var(--color-text-soft)]">y {summary.money.inAccount.byAccount.length - 3} cuentas más</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {summary.money.pendingSettlement.total > 0.01 && (
-                <div className="flex items-start gap-3">
-                  <Clock className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-text-soft)]" aria-hidden="true" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-sm text-[var(--color-text-muted)]">Por liquidar</span>
-                      <span className="text-[20px] font-medium leading-none tabular-nums text-[var(--color-text-muted)]">{money(summary.money.pendingSettlement.total)}</span>
-                    </div>
-                    <p className="mt-1.5 text-[13px] text-[var(--color-text-soft)]">Pagos con tarjeta. El banco los deposita en 1-2 días.</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* B.6 · Historial al pie */}
           <Card className="p-4">
@@ -431,7 +330,6 @@ export default function CashDestinationPage() {
               variant={activeSheet}
               branchId={branchId}
               cashSessionId={cashSessionId}
-              availableToMove={summary.money.physical.availableToMove}
               bankAccounts={bankAccounts}
               selfUserId={selfUserId}
               selfFullName={selfFullName}
@@ -442,7 +340,6 @@ export default function CashDestinationPage() {
           {activeSheet === "POSTPONE" && (
             <PostponeSheet
               cashSessionId={cashSessionId}
-              availableToMove={summary.money.physical.availableToMove}
               consecutivePostponements={summary.consecutivePostponements}
               policy={summary.policy}
               onClose={() => setActiveSheet(null)}
@@ -627,11 +524,10 @@ function PersonPicker({ people, loaded, value, onChange }: { people: BranchPerso
  * nunca de un tercer campo de "modo" que se pueda desincronizar (C.1/D.1).
  * Todas reusan sendCashOutToCustody (POST send-deposit).
  */
-function SendCashSheet({ variant, branchId, cashSessionId, availableToMove, bankAccounts, selfUserId, selfFullName, onClose, onDone }: {
+function SendCashSheet({ variant, branchId, cashSessionId, bankAccounts, selfUserId, selfFullName, onClose, onDone }: {
   variant: Exclude<SheetKind, "POSTPONE">;
   branchId: string;
   cashSessionId: string;
-  availableToMove: number;
   bankAccounts: BankAccountOption[];
   selfUserId: string;
   selfFullName: string;
@@ -646,7 +542,7 @@ function SendCashSheet({ variant, branchId, cashSessionId, availableToMove, bank
 
   const [people, setPeople] = useState<BranchPerson[]>([]);
   const [peopleLoaded, setPeopleLoaded] = useState(false);
-  const [amount, setAmount] = useState(availableToMove > 0 ? availableToMove.toFixed(2) : "");
+  const [amount, setAmount] = useState("");
   const [selectedPersonId, setSelectedPersonId] = useState("");
   const [bankAccountId, setBankAccountId] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -671,7 +567,6 @@ function SendCashSheet({ variant, branchId, cashSessionId, availableToMove, bank
   useEffect(() => { setTimeout(() => firstFieldRef.current?.focus(), 50); }, []);
 
   const amountNumber = Number(amount) || 0;
-  const overCap = amountNumber > availableToMove + 0.01;
   const title = SHEET_TITLES[variant];
   const selectedPerson = people.find((p) => p.id === selectedPersonId) ?? null;
 
@@ -682,7 +577,6 @@ function SendCashSheet({ variant, branchId, cashSessionId, availableToMove, bank
     if (picksRecipient && !selectedPersonId) { toast.error("Elegí a quién se lo vas a entregar."); return; }
     if (goesToBank && !bankAccountId) { toast.error("Elegí a qué cuenta va."); return; }
     if (amountNumber <= 0) { toast.error("El monto debe ser mayor que 0."); return; }
-    if (overCap) { toast.error(`El monto no puede superar lo disponible (${money(availableToMove)}).`); return; }
 
     setSubmitting(true);
     try {
@@ -726,13 +620,10 @@ function SendCashSheet({ variant, branchId, cashSessionId, availableToMove, bank
 
         <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
           ¿Cuánto?
-          <div className="mt-1 flex gap-2">
-            <Input ref={firstFieldRef} type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className={overCap ? "border-[var(--color-danger-400)]" : ""} required />
-            <Button type="button" variant="ghost" size="sm" onClick={() => setAmount(availableToMove.toFixed(2))}>Todo</Button>
+          <div className="mt-1">
+            <Input ref={firstFieldRef} type="number" inputMode="decimal" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required />
           </div>
-          <span className={["mt-1 block text-[0.6875rem]", overCap ? "font-semibold text-[var(--color-danger-600)]" : "text-[var(--color-text-soft)]"].join(" ")}>
-            Disponible: {money(availableToMove)}
-          </span>
+          <span className="mt-1 block text-[0.6875rem] text-[var(--color-text-soft)]">Lo que contaste en la mano.</span>
         </label>
 
         {needsPersonPicker && (
@@ -761,7 +652,7 @@ function SendCashSheet({ variant, branchId, cashSessionId, availableToMove, bank
           </p>
         )}
 
-        <Button type="submit" variant="success" loading={submitting} disabled={overCap} className="w-full" icon={<Check className="h-4 w-4" />}>
+        <Button type="submit" variant="success" loading={submitting} className="w-full" icon={<Check className="h-4 w-4" />}>
           Confirmar salida
         </Button>
       </form>
@@ -770,15 +661,14 @@ function SendCashSheet({ variant, branchId, cashSessionId, availableToMove, bank
 }
 
 /** "Se queda en la gaveta hasta mañana" — postponeCashDeposit: registra la decisión, NO mueve dinero. */
-function PostponeSheet({ cashSessionId, availableToMove, consecutivePostponements, policy, onClose, onDone }: {
+function PostponeSheet({ cashSessionId, consecutivePostponements, policy, onClose, onDone }: {
   cashSessionId: string;
-  availableToMove: number;
   consecutivePostponements: number;
   policy: { maxDaysHolding: number } | null;
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [amount, setAmount] = useState(availableToMove > 0 ? availableToMove.toFixed(2) : "");
+  const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const firstFieldRef = useRef<HTMLInputElement | null>(null);
@@ -786,7 +676,6 @@ function PostponeSheet({ cashSessionId, availableToMove, consecutivePostponement
   useEffect(() => { setTimeout(() => firstFieldRef.current?.focus(), 50); }, []);
 
   const amountNumber = Number(amount) || 0;
-  const overCap = amountNumber > availableToMove + 0.01;
   const nextConsecutiveCount = consecutivePostponements + 1;
   const willRequireAttention = policy !== null && nextConsecutiveCount >= policy.maxDaysHolding;
 
@@ -794,7 +683,6 @@ function PostponeSheet({ cashSessionId, availableToMove, consecutivePostponement
     event.preventDefault();
     if (submitting) return; // registra un compromiso real — el doble toque no puede duplicarlo.
     if (amountNumber <= 0) { toast.error("El monto debe ser mayor que 0."); return; }
-    if (overCap) { toast.error(`El monto no puede superar el efectivo esperado en caja (${money(availableToMove)}).`); return; }
 
     setSubmitting(true);
     try {
@@ -826,13 +714,10 @@ function PostponeSheet({ cashSessionId, availableToMove, consecutivePostponement
 
         <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
           Monto
-          <div className="mt-1 flex gap-2">
-            <Input ref={firstFieldRef} type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className={overCap ? "border-[var(--color-danger-400)]" : ""} required />
-            <Button type="button" variant="ghost" size="sm" onClick={() => setAmount(availableToMove.toFixed(2))}>Todo</Button>
+          <div className="mt-1">
+            <Input ref={firstFieldRef} type="number" inputMode="decimal" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required />
           </div>
-          <span className={["mt-1 block text-[0.6875rem]", overCap ? "font-semibold text-[var(--color-danger-600)]" : "text-[var(--color-text-soft)]"].join(" ")}>
-            Disponible: {money(availableToMove)}
-          </span>
+          <span className="mt-1 block text-[0.6875rem] text-[var(--color-text-soft)]">Lo que contaste en la mano.</span>
         </label>
 
         <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
@@ -852,7 +737,7 @@ function PostponeSheet({ cashSessionId, availableToMove, consecutivePostponement
           </p>
         )}
 
-        <Button type="submit" variant="secondary" loading={submitting} disabled={overCap} className="w-full" icon={<Moon className="h-4 w-4" />}>
+        <Button type="submit" variant="secondary" loading={submitting} className="w-full" icon={<Moon className="h-4 w-4" />}>
           Confirmar
         </Button>
       </form>

@@ -2,7 +2,6 @@ import { ApprovalStatus, PaymentStatus, Prisma, SaleOrderStatus, TransportServic
 import { prisma } from "@/lib/prisma";
 import { getBranchSalesRealtimeSummary, getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
-import { calculateExpectedCashForSessionTx } from "@/modules/cash-session/service";
 import { getCashAutoCloseConfig } from "@/modules/cash-session/auto-close-config";
 import { isBlindCountTime } from "@/modules/cash-session/auto-close-service";
 import { buildPendingList, PACE_WINDOW_DAYS, rankSoldStock, type PendingKey } from "@/modules/dashboard/my-day";
@@ -71,37 +70,28 @@ export async function getBranchDayView(branchId: string, userId: string, access:
     }),
   ]);
 
-  // Conteo a ciegas desde 20 min antes del cierre: no se muestra cuánto debe haber.
-  const blindCount = access.cash && isBlindCountTime(new Date(), await getCashAutoCloseConfig());
+  // Desde 20 min antes del cierre: hora del conteo (la sucursal nunca ve cuánto debe haber).
+  const countTime = access.cash && isBlindCountTime(new Date(), await getCashAutoCloseConfig());
 
   return {
     branchId,
     branchName: sales.branchName,
     businessDate: sales.businessDate,
     // null = sin permiso de caja (no se muestra la sección); [] = caja cerrada.
-    cashSessions: !access.cash ? null : await Promise.all(
-      cashSessions.map(async (s) => ({
+    cashSessions: !access.cash ? null : cashSessions.map((s) => ({
         id: s.id,
         status: s.status,
         openedAt: s.openedAt,
         boxCode: s.physicalCashBox.code,
         boxName: s.physicalCashBox.description,
         openedByName: s.openedBy.fullName || s.openedBy.username,
-        // Solo con la caja abierta y antes del conteo a ciegas; contando o auto-cerrada, el conteo manda.
-        expectedCash:
-          s.status === "OPEN" && !blindCount
-            ? (await calculateExpectedCashForSessionTx(prisma as unknown as Prisma.TransactionClient, s.id, s.openingAmount)).expectedCash
-            : null,
+        countTime: s.status === "OPEN" && countTime,
       })),
-    ),
+    // Solo cantidades: con los montos se podría sacar cuánto debe haber en la gaveta.
     sales: {
-      paidTotal: sales.paidSalesTotal,
       paidCount: sales.paidSalesCount,
-      averageTicket: sales.paidSalesCount > 0 ? sales.paidSalesTotal / sales.paidSalesCount : 0,
-      byMethod: sales.paymentsByMethod,
+      byMethod: sales.paymentsByMethod.map((m) => ({ method: m.method, count: m.count })),
       cancelledCount: sales.cancelledSalesCount,
-      cancelledTotal: sales.cancelledSalesTotal,
-      pendingPaymentTotal: sales.pendingPaymentTotal,
     },
     pending: buildPendingList({ payments, myDrafts, dispatches, transports, approvals }, access),
     recentSales: recentPayments.map((p) => ({

@@ -40,7 +40,8 @@ export async function GET(request: Request) {
       take: 25,
     });
 
-    return ok(data);
+    // La sucursal cuenta a ciegas: lo esperado (y el contado que el cierre automático copió de ahí) no sale.
+    return ok(data.map((s) => ({ ...s, expectedCashAmount: null, countedCashAmount: null, closingAmount: null })));
   } catch (error) {
     return toHttpErrorResponse(error);
   }

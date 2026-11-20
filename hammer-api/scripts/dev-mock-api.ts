@@ -601,22 +601,24 @@ const server = http.createServer(async (req, res) => {
     const branchId = url.searchParams.get("branchId") ?? "";
     return ok(res, [{ id: `cb-${branchId}`, code: "CAJA-01", description: branchId === "br-central" ? "Caja principal Central" : "Caja principal" }]);
   }
+  if (path === "/api/cashier/bank-accounts") return ok(res, [{ id: "ba-1", bankName: "BAC", accountAlias: "Operativa", accountNumber: "100200300", currencyCode: "NIO" }]);
+  if (path === "/api/cashier/branch-people") return ok(res, [{ id: "u-2", fullName: "Elena Bermúdez", roleLabel: "Supervisora" }]);
   if (path === "/api/cashier/cash-sessions/active") {
     const branchId = url.searchParams.get("branchId") ?? "";
     const cash = mockCash.get(branchId);
     if (!cash || cash.status === "CLOSED") return ok(res, null);
-    const movementsNet = -mockCashMovements.filter((m) => m.sessionId === cash.id).reduce((t, m) => t + m.amount, 0);
-    const expectedCash = cash.opening + cash.cashPayments + movementsNet;
     const blindCount = cash.status === "RECONCILING" || Date.now() >= Date.parse(mockCashCountFrom);
+    // Igual que la API: la sucursal nunca recibe cuánto debe haber.
     return ok(res, {
       id: cash.id, status: cash.status, openingAmount: String(cash.opening), openedAt: cash.openedAt,
-      expectedCashAmount: blindCount ? null : String(expectedCash), openedBy: { username: "maria", fullName: "María López" }, canOperate: true, blindCount,
-      ...(!blindCount && url.searchParams.get("withExpected") === "1"
-        ? { expected: { openingAmount: cash.opening, cashPayments: cash.cashPayments, movementsNet, expectedCash } }
-        : {}),
+      expectedCashAmount: null, openedBy: { username: "maria", fullName: "María López" }, canOperate: true, blindCount,
     });
   }
   if (path === "/api/branch/cash/sessions/auto-closed-pending") return ok(res, []);
+  // Barra de la caja: mismas cifras que "Mi día" de Central.
+  if (path === "/api/branch/pos/realtime-summary") {
+    return ok(res, { summary: { paidSalesTotal: 48230.75, paidSalesCount: 23, pendingPaymentTotal: 3200, pendingPaymentCount: 2 } });
+  }
   // Contexto de la caja: el cierre automático cae 20 min después de arrancar el mock, para ver el aviso previo.
   if (path === "/api/pos/v2/context") {
     const branchId = url.searchParams.get("branchId") ?? "";
@@ -694,17 +696,17 @@ const server = http.createServer(async (req, res) => {
     if (branch.id !== "br-central") {
       return ok(res, {
         branchId: branch.id, branchName: branch.name, businessDate: new Date().toISOString().slice(0, 10),
-        cashSessions: [], sales: { paidTotal: 0, paidCount: 0, averageTicket: 0, byMethod: [], cancelledCount: 0, cancelledTotal: 0, pendingPaymentTotal: 0 },
+        cashSessions: [], sales: { paidCount: 0, byMethod: [], cancelledCount: 0 },
         pending: [], recentSales: [], lowStock: [],
       });
     }
     return ok(res, {
       branchId: branch.id, branchName: branch.name, businessDate: new Date().toISOString().slice(0, 10),
-      cashSessions: [{ id: "cs-1", status: "OPEN", openedAt: at(7, 32), boxCode: "CAJA-01", boxName: "Caja principal", openedByName: "María López", expectedCash: Date.now() >= Date.parse(mockCashCountFrom) ? null : 18450.5 }],
+      cashSessions: [{ id: "cs-1", status: "OPEN", openedAt: at(7, 32), boxCode: "CAJA-01", boxName: "Caja principal", openedByName: "María López", countTime: Date.now() >= Date.parse(mockCashCountFrom) }],
       sales: {
-        paidTotal: 48230.75, paidCount: 23, averageTicket: 2096.99,
-        byMethod: [{ method: "CASH", amount: 30120.75, count: 16 }, { method: "CARD", amount: 11410, count: 5 }, { method: "TRANSFER", amount: 6700, count: 2 }],
-        cancelledCount: 1, cancelledTotal: 850, pendingPaymentTotal: 3200,
+        paidCount: 23,
+        byMethod: [{ method: "CASH", count: 16 }, { method: "CARD", count: 5 }, { method: "TRANSFER", count: 2 }],
+        cancelledCount: 1,
       },
       pending: [{ key: "payments", count: 2 }, { key: "myDrafts", count: 1 }, { key: "dispatches", count: 3 }],
       recentSales: [

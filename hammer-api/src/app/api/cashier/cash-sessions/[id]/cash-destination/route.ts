@@ -29,7 +29,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     if (!canInAnyAssignedBranch(session, CAPABILITIES.CASH_SESSION_OPERATE)) return fail("FORBIDDEN", "Forbidden", 403);
     if (!isMaster(session) && !canInBranch(session, branchId, CAPABILITIES.CASH_SESSION_OPERATE)) return fail("FORBIDDEN", "Forbidden", 403);
 
-    return ok(await getCashSessionDestinationSummary(cashSessionId));
+    // Conteo a ciegas: la sucursal no ve cuánto hay ni cuánto debe haber; solo sus propios movimientos.
+    const { money: _money, ...summary } = await getCashSessionDestinationSummary(cashSessionId);
+    return ok({ ...summary, session: { ...summary.session, expectedCashAmount: null } });
   } catch (error) {
     return toHttpErrorResponse(error);
   }

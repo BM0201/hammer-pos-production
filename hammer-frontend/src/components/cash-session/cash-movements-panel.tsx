@@ -108,13 +108,11 @@ type DuplicateInfo = { description: string; amount: number; createdAt: string } 
 export function CashMovementsPanel({
   cashSessionId,
   branchId,
-  cashOnHand,
   onRegistered,
 }: {
   cashSessionId: string;
   branchId: string;
   /** Lo que debe haber en la gaveta ahora; null si no se sabe (no bloquea). */
-  cashOnHand: number | null;
   /** Tras registrar una salida, para que el panel de caja recalcule lo esperado. */
   onRegistered?: () => void;
 }) {
@@ -225,7 +223,6 @@ export function CashMovementsPanel({
 
   function detailIsValid(): string | null {
     if (!amount || isNaN(amt) || amt <= 0) return "Anota el monto (mayor a 0).";
-    if (cashOnHand != null && amt > cashOnHand) return `Supera el efectivo en caja (${money(cashOnHand)}).`;
     if (isExpense && selection!.item.key === "OTHER" && description.trim().length < 10) {
       return "Describe qué fue el gasto (mínimo 10 caracteres) — no encaja en ninguna categoría.";
     }
@@ -306,7 +303,7 @@ export function CashMovementsPanel({
         window.dispatchEvent(new CustomEvent(GASTOS_LOCAL_REFRESH_EVENT));
       }
       const anotadoEn = selection.kind === "expense" ? `Gastos › ${CATEGORY_LABELS[selection.item.key] ?? selection.item.key}` : selection.kind === "purchase" ? "Compras pagadas con caja (informativo)" : "Retiro de caja";
-      setSuccessMessage(`Anotado en ${anotadoEn}.${cashOnHand != null ? ` Quedan ${money(cashOnHand - amt)} en la gaveta.` : ""}`);
+      setSuccessMessage(`Anotado en ${anotadoEn}.`);
       resetForm();
       setOpen(false);
       onRegistered?.();
@@ -326,7 +323,6 @@ export function CashMovementsPanel({
 
   const SelectedIcon = selection ? selectionTitle(selection).icon : null;
 
-  const projectedCash = cashOnHand != null && !isNaN(amt) ? cashOnHand - amt : null;
 
   function handlePickKeyDown(e: React.KeyboardEvent) {
     if (e.key === "ArrowDown") { e.preventDefault(); setPickFocusIndex((i) => Math.min(i + 1, pickList.length - 1)); }
@@ -615,14 +611,6 @@ export function CashMovementsPanel({
                     <p><strong>Recibo:</strong> {receiptChoice === "photo" ? (receiptPhotoUrl ? "Foto adjunta ✓" : "Subiendo…") : receiptChoice === "none" ? "Sin recibo" : "—"}</p>
                   )}
                   <p className="text-[var(--color-text-soft)]">{periodLabel()}</p>
-                  <div className="mt-2 rounded-lg bg-[var(--color-surface-alt)] p-2">
-                    <p className="font-semibold">
-                      Caja queda en {projectedCash != null ? money(projectedCash) : "—"}
-                    </p>
-                    {projectedCash != null && projectedCash < 0 && (
-                      <p className="mt-1 text-[var(--color-danger-600)]">Supera el efectivo disponible — no se puede confirmar.</p>
-                    )}
-                  </div>
 
                   {step === "confirm" && (
                     <button

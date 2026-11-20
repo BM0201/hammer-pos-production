@@ -1,12 +1,10 @@
 "use client";
 
-import { money } from "@/lib/format";
 import type { CashSessionProblem } from "../types";
 
 type RealtimeSummary = {
-  paidSalesTotal?: number;
   paidSalesCount?: number;
-  pendingPaymentTotal?: number;
+  pendingPaymentCount?: number;
 } | null;
 
 type PosSummaryCardsProps = {
@@ -29,10 +27,10 @@ function pillState(activeCashSessionId: string | null, cashSessionProblem?: Cash
   return { label: "Caja cerrada", dot: "bg-[var(--color-sidebar-section)]" };
 }
 
-function Stat({ label, value, hideOnPhone = false }: { label: string; value: string; hideOnPhone?: boolean }) {
+function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div
-      className={`${hideOnPhone ? "hidden sm:flex" : "flex"} flex-col whitespace-nowrap border-l border-[var(--color-sidebar-hover)] px-2.5 sm:px-4`}
+      className={`flex flex-col whitespace-nowrap border-l border-[var(--color-sidebar-hover)] px-2.5 sm:px-4`}
       style={{ lineHeight: 1.2 }}
     >
       <span className="text-[11px] text-[var(--color-sidebar-section)]">{label}</span>
@@ -61,9 +59,9 @@ export function PosSummaryCards({
         <span className="sr-only sm:not-sr-only">{pill.label}</span>
       </div>
 
-      <Stat label="Ventas hoy" value={money(realtimeSummary?.paidSalesTotal ?? 0)} />
-      <Stat label="Cobradas" value={String(realtimeSummary?.paidSalesCount ?? 0)} hideOnPhone />
-      <Stat label="Por cobrar" value={money(realtimeSummary?.pendingPaymentTotal ?? 0)} />
+      {/* Solo cantidades: los montos dejarían sacar cuánto debe haber en la gaveta antes del conteo. */}
+      <Stat label="Ventas hoy" value={String(realtimeSummary?.paidSalesCount ?? 0)} />
+      <Stat label="Por cobrar" value={String(realtimeSummary?.pendingPaymentCount ?? 0)} />
     </div>
   );
 }

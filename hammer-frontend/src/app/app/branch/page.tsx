@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   CreditCard,
+  Eye,
   PackageX,
   Receipt,
   ShieldCheck,
@@ -41,15 +42,13 @@ type DayView = {
     boxCode: string;
     boxName: string | null;
     openedByName: string;
-    expectedCash: number | null;
+    /** Desde 20 min antes del cierre automático: hora de contar la gaveta. */
+    countTime: boolean;
   }> | null;
   sales: {
-    paidTotal: number;
     paidCount: number;
-    averageTicket: number;
-    byMethod: Array<{ method: string; amount: number; count: number }>;
+    byMethod: Array<{ method: string; count: number }>;
     cancelledCount: number;
-    cancelledTotal: number;
   };
   pending: Array<{ key: PendingKey; count: number }>;
   recentSales: Array<{ paymentId: string; orderNumber: string; amount: number; method: string; paidAt: string }>;
@@ -118,20 +117,14 @@ function CashSection({ sessions }: { sessions: NonNullable<DayView["cashSessions
               <p className="mt-1 text-xs text-[var(--color-text-muted)]">
                 Desde las {fmtTimeShort(s.openedAt)} · {s.openedByName}
               </p>
-              {s.expectedCash !== null ? (
-                <div className="mt-2 flex items-baseline justify-between gap-2">
-                  <span className="text-xs text-[var(--color-text-secondary)]">Efectivo que debe haber en gaveta</span>
-                  <span className="text-lg font-bold tabular-nums text-[var(--color-text)]">{money(s.expectedCash)}</span>
-                </div>
-              ) : open ? (
-                // La API lo esconde desde 20 min antes del cierre: conteo a ciegas.
+              {s.countTime ? (
                 <p className="mt-2 text-sm font-medium text-[var(--color-warning-700)]">Hora del conteo de cierre: cuenta la gaveta.</p>
               ) : null}
             </li>
           );
         })}
       </ul>
-      {sessions.some((s) => s.status === "OPEN" && s.expectedCash === null) ? (
+      {sessions.some((s) => s.countTime) ? (
         <Link href={"/app/branch/cash?cerrar=1" as Route} className={`${linkButton} w-full`}>Contar la gaveta</Link>
       ) : (
         <Link href="/app/branch/cash" className={`${linkButton} w-full`}>
@@ -174,30 +167,25 @@ function PendingSection({ pending }: { pending: DayView["pending"] }) {
   );
 }
 
+/** Solo cantidades: con los montos se podría sacar cuánto debe haber en la gaveta antes del conteo. */
 function SalesSection({ sales }: { sales: DayView["sales"] }) {
-  const max = Math.max(1, ...sales.byMethod.map((m) => m.amount));
+  const max = Math.max(1, ...sales.byMethod.map((m) => m.count));
   return (
     <Section title="Ventas de hoy" icon={<Receipt className="h-4 w-4" />}>
       <div>
-        <p className="text-3xl font-bold tabular-nums text-[var(--color-text)]">{money(sales.paidTotal)}</p>
-        <p className="mt-0.5 text-sm text-[var(--color-text-muted)]">
-          {sales.paidCount === 1 ? "1 venta cobrada" : `${sales.paidCount} ventas cobradas`}
-          {sales.paidCount > 0 ? ` · promedio ${money(sales.averageTicket)}` : ""}
-        </p>
+        <p className="text-3xl font-bold tabular-nums text-[var(--color-text)]" data-testid="my-day-sales-count">{sales.paidCount}</p>
+        <p className="mt-0.5 text-sm text-[var(--color-text-muted)]">{sales.paidCount === 1 ? "venta cobrada" : "ventas cobradas"}</p>
       </div>
       {sales.byMethod.length > 0 ? (
         <ul className="flex flex-col gap-2.5">
           {sales.byMethod.map((m) => (
             <li key={m.method}>
               <div className="flex items-baseline justify-between gap-2 text-sm">
-                <span className="text-[var(--color-text-secondary)]">
-                  {METHOD_LABEL[m.method] ?? m.method}
-                  <span className="ml-1.5 text-xs text-[var(--color-text-muted)]">({m.count})</span>
-                </span>
-                <span className="font-semibold tabular-nums text-[var(--color-text)]">{money(m.amount)}</span>
+                <span className="text-[var(--color-text-secondary)]">{METHOD_LABEL[m.method] ?? m.method}</span>
+                <span className="font-semibold tabular-nums text-[var(--color-text)]">{m.count}</span>
               </div>
               <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-alt)]" aria-hidden>
-                <div className="h-full rounded-full bg-[var(--color-pay)]" style={{ width: `${(m.amount / max) * 100}%` }} />
+                <div className="h-full rounded-full bg-[var(--color-pay)]" style={{ width: `${(m.count / max) * 100}%` }} />
               </div>
             </li>
           ))}
@@ -206,30 +194,49 @@ function SalesSection({ sales }: { sales: DayView["sales"] }) {
       {sales.cancelledCount > 0 ? (
         <p className="flex items-center gap-1.5 text-xs text-[var(--color-danger-600)]">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          {sales.cancelledCount === 1 ? "1 venta anulada" : `${sales.cancelledCount} ventas anuladas`} ({money(sales.cancelledTotal)})
+          {sales.cancelledCount === 1 ? "1 venta anulada" : `${sales.cancelledCount} ventas anuladas`}
         </p>
       ) : null}
     </Section>
   );
 }
 
+/** El monto de cada ticket solo se ve al tocarlo, uno a la vez: la lista no deja sumar la gaveta de un vistazo. */
 function RecentSalesSection({ recent }: { recent: DayView["recentSales"] }) {
+  const [shownId, setShownId] = useState<string | null>(null);
   return (
     <Section title="Últimos cobros" icon={<Receipt className="h-4 w-4" />}>
       {recent.length === 0 ? (
         <p className="text-sm text-[var(--color-text-muted)]">Todavía no hay cobros hoy.</p>
       ) : (
         <ul className="divide-y divide-[var(--color-border)]">
-          {recent.map((s) => (
-            <li key={s.paymentId} className="flex items-center gap-3 py-2.5">
-              <span className="w-[4.75rem] shrink-0 text-xs tabular-nums text-[var(--color-text-muted)]">{fmtTimeShort(s.paidAt)}</span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-[var(--color-text)]">{s.orderNumber}</span>
-                <span className="text-xs text-[var(--color-text-muted)]">{METHOD_LABEL[s.method] ?? s.method}</span>
-              </span>
-              <span className="text-sm font-semibold tabular-nums text-[var(--color-text)]">{money(s.amount)}</span>
-            </li>
-          ))}
+          {recent.map((s) => {
+            const shown = shownId === s.paymentId;
+            return (
+              <li key={s.paymentId}>
+                <button
+                  type="button"
+                  className="flex min-h-11 w-full items-center gap-3 py-2.5 text-left"
+                  onClick={() => setShownId(shown ? null : s.paymentId)}
+                  aria-expanded={shown}
+                  data-testid="my-day-recent-sale"
+                >
+                  <span className="w-[4.75rem] shrink-0 text-xs tabular-nums text-[var(--color-text-muted)]">{fmtTimeShort(s.paidAt)}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-[var(--color-text)]">{s.orderNumber}</span>
+                    <span className="text-xs text-[var(--color-text-muted)]">{METHOD_LABEL[s.method] ?? s.method}</span>
+                  </span>
+                  {shown ? (
+                    <span className="text-sm font-semibold tabular-nums text-[var(--color-text)]">{money(s.amount)}</span>
+                  ) : (
+                    <span className="flex items-center gap-1 text-xs text-[var(--color-text-muted)]">
+                      <Eye className="h-3.5 w-3.5" aria-hidden /> Ver monto
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </Section>
