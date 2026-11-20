@@ -165,8 +165,8 @@ mustContain(
 );
 mustContain(
   "app/app/branch/page.tsx",
-  ["KpiCard", "RoleSummary"],
-  "/app/branch es el dashboard 'Mi Sucursal' con KPIs. No debe ser el workspace de Despacho.",
+  ["BranchDayPage", "/api/branch/dashboard", "branch-my-day"],
+  "/app/branch es 'Mi día' de la caja (estado de caja, lo que falta, ventas de hoy). No debe ser el workspace de Despacho.",
 );
 mustContain(
   "app/app/master/production/page.tsx",

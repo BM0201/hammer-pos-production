@@ -4,7 +4,7 @@
  */
 
 /** Cuando el producto no tiene punto de reorden ni mínimo en la sucursal. */
-export const DEFAULT_LOW_STOCK_THRESHOLD = 5;
+const DEFAULT_LOW_STOCK_THRESHOLD = 5;
 
 export function lowStockThreshold(setting: { reorderPoint: number | null; minStock: number | null } | null): number {
   return setting?.reorderPoint ?? setting?.minStock ?? DEFAULT_LOW_STOCK_THRESHOLD;
@@ -29,7 +29,7 @@ export function pickLowStock(candidates: LowStockCandidate[], limit = 8): LowSto
 
 export type PendingKey = "payments" | "myDrafts" | "dispatches" | "transports" | "approvals";
 
-export type PendingItem = { key: PendingKey; count: number };
+type PendingItem = { key: PendingKey; count: number };
 
 /**
  * Lo que falta resolver hoy. Solo entra lo que el usuario puede atender

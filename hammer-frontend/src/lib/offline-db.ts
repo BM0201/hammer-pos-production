@@ -45,14 +45,6 @@ async function idbPut(store: string, key: string, value: unknown): Promise<void>
   });
 }
 
-async function idbDel(store: string, key: string): Promise<void> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const req = db.transaction(store, "readwrite").objectStore(store).delete(key);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
 
 async function idbGetAll<T>(store: string): Promise<T[]> {
   const db = await openDb();
@@ -152,10 +144,6 @@ export async function updateOfflineSale(sale: OfflineSale): Promise<void> {
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
   });
-}
-
-export async function removeFromQueue(offlineId: string): Promise<void> {
-  await idbDel("queue", offlineId);
 }
 
 export async function getPendingCount(): Promise<number> {

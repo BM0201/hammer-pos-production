@@ -8,7 +8,7 @@ import { buildPendingList, lowStockThreshold, pickLowStock, type PendingKey } fr
 const ACTIVE_CASH_STATUSES = ["OPEN", "RECONCILING", "AUTO_CLOSED_PENDING_REVIEW"] as const;
 
 /** Qué secciones de "Mi día" puede ver el usuario en esta sucursal (lo decide la ruta con canInBranch). */
-export type DayViewAccess = Record<PendingKey, boolean> & { cash: boolean };
+type DayViewAccess = Record<PendingKey, boolean> & { cash: boolean };
 
 /**
  * "Mi día" de la caja: estado de caja, lo que falta, ventas de hoy y lo que

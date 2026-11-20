@@ -36,7 +36,7 @@ function getBranchRoles(session: SessionPayload, branchId: string): RoleCode[] {
     .map((membership) => membership.roleCode);
 }
 
-export function assertBranchDashboardModuleEnabled(
+function assertBranchDashboardModuleEnabled(
   kind: BranchDashboardKind,
   moduleConfig: BranchDashboardModuleConfig,
 ): void {

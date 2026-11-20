@@ -53,17 +53,18 @@ export function ProductCombobox({
   /** Búsqueda en servidor: solo productos visibles en esta sucursal. */
   branchId?: string;
 }) {
-  const [query, setQuery] = useState(value ? `${value.sku} — ${value.name}` : "");
+  const valueLabel = value ? `${value.sku} — ${value.name}` : "";
+  const [query, setQuery] = useState(valueLabel);
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const blurTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // El texto del producto ya elegido no es una búsqueda.
-  const results = useProductSearch(value && query === `${value.sku} — ${value.name}` ? "" : query, { branchId });
+  const results = useProductSearch(value && query === valueLabel ? "" : query, { branchId });
 
   useEffect(() => {
-    setQuery(value ? `${value.sku} — ${value.name}` : "");
-  }, [value?.id]);
+    setQuery(valueLabel);
+  }, [valueLabel]);
 
   useEffect(() => () => { if (blurTimeout.current) clearTimeout(blurTimeout.current); }, []);
 
