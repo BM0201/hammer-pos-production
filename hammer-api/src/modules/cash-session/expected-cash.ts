@@ -12,6 +12,10 @@
  * en el mismo acto). Restar `changeAmount` del esperado lo descontaba DOS veces
  * (una implícita en `amount`, otra explícita) y el arqueo quedaba corto.
  * `changeAmount` es solo métrica informativa/auditoría.
+ *
+ * EXCEPCIÓN — COBRO EN DÓLARES (`receivedUsdAmount` no nulo): lo recibido son
+ * US$, que van a su propia cuenta (esperado en US$), y el vuelto sale en C$ de
+ * la gaveta. En córdobas ese tender deja `amount − receivedAmount` (= −vuelto).
  */
 import { CashMovementType, PaymentMethod, Prisma } from "@prisma/client";
 
@@ -109,13 +113,24 @@ export type TenderLikeDecimal = {
   method: PaymentMethod | string;
   amount: Prisma.Decimal | number | string;
   changeAmount?: Prisma.Decimal | number | string | null;
+  receivedAmount?: Prisma.Decimal | number | string | null;
+  receivedUsdAmount?: Prisma.Decimal | number | string | null;
 };
 export type CashMovementLikeDecimal = { type: CashMovementType; amount: Prisma.Decimal | number | string };
 
+/** Córdobas que los tenders CASH dejan en la gaveta (un cobro en dólares deja −vuelto; ver excepción arriba). */
 export function cashTenderTotalDecimal(tenders: readonly TenderLikeDecimal[]): Prisma.Decimal {
   return tenders
     .filter((tender) => tender.method === PaymentMethod.CASH)
-    .reduce((sum, tender) => sum.add(tender.amount), new Prisma.Decimal(0));
+    .reduce(
+      (sum, tender) => (tender.receivedUsdAmount == null ? sum.add(tender.amount) : sum.add(tender.amount).sub(tender.receivedAmount ?? tender.amount)),
+      new Prisma.Decimal(0),
+    );
+}
+
+/** US$ que los cobros en dólares dejan en la gaveta. */
+export function usdTenderTotalDecimal(tenders: readonly TenderLikeDecimal[]): Prisma.Decimal {
+  return tenders.reduce((sum, tender) => (tender.receivedUsdAmount == null ? sum : sum.add(tender.receivedUsdAmount)), new Prisma.Decimal(0));
 }
 
 export function tenderTotalsByMethodDecimal(

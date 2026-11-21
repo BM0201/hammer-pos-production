@@ -1,26 +1,31 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Banknote, CreditCard, ArrowLeftRight, Plus, X, Check, ChevronRight, ChevronLeft, ChevronDown, Copy, AlertTriangle } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Banknote, CreditCard, ArrowLeftRight, DollarSign, Plus, X, Check, ChevronRight, ChevronLeft, Copy, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { money, numFixed, usdMoney } from "@/lib/format";
 import toast from "react-hot-toast";
 
 /**
  * Composición de pago compartida entre el diálogo de cobro del POS
- * (charge-dialog.tsx) y la cola de cajero (cashier-payments.tsx) —
- * correccion-destino-y-pantalla-cobro.md §2.3/§2.4,
- * prompt-pantallas-recorrido-dinero.md §1 (Pantalla 1 · Cobro),
- * prompt-correccion-dialogo-cobro.md (sin pestañas: una sola lista de
- * líneas, se agrega una del método que corresponda — nunca "se elige un
- * método" por separado de agregar la línea).
+ * (charge-dialog.tsx) y la cola de cajero (cashier-payments.tsx).
  *
- * Modelo mental: no se elige un método, se arma el pago hasta cubrir el
- * total. El backend ya soporta esto de punta a punta (PaymentTender,
- * normalizeTenders, PaymentMethod.MIXED) — esto es la interfaz que faltaba.
+ * Caso normal (casi todos los cobros): "¿Cómo paga?" con cuatro botones
+ * grandes — Efectivo, Dólares, Tarjeta, Transferencia — y solo la pregunta de
+ * ese método. El botón final dice lo que va a pasar ("Cobrar C$1,335 en
+ * efectivo"). "Paga con dos formas" abre la lista de líneas para armar el pago
+ * hasta cubrir el total (PaymentTender / MIXED en el backend).
+ *
+ * Dólares: el cliente entrega US$, el vuelto sale en córdobas. Se manda como
+ * un tender CASH con `receivedUsdAmount`; el servidor recalcula con la tasa
+ * vigente y la caja espera esos US$ aparte de los córdobas.
  */
 
 export type TenderMethod = "CASH" | "CARD" | "TRANSFER";
+/** Lo que elige el cajero: los dólares son efectivo, pero se preguntan distinto. */
+type PayChoice = TenderMethod | "USD";
 
 export type BankAccountOption = {
   id: string;
@@ -36,42 +41,55 @@ export type ComposedTender = {
   amount: number;
   receivedAmount?: number;
   changeAmount?: number;
+  /** Solo cobro en dólares: US$ que entregó el cliente (receivedAmount es su equivalente en C$). */
+  receivedUsdAmount?: number;
   referenceNumber?: string | null;
   bankAccountId?: string | null;
 };
 
 type DraftLine = {
   id: string;
-  method: TenderMethod;
+  method: PayChoice;
   amountRaw: string;
   receivedRaw: string;
+  usdRaw: string;
   referenceNumber: string;
   bankAccountId: string;
-  /** Solo gatilla CUÁNDO se muestran los errores (§1.5: "al confirmar o al
-   * salir del campo, nunca al abrir") — no participa en si el pago es válido. */
+  /** Solo gatilla CUÁNDO se muestran los errores (al confirmar o al salir del campo, nunca al abrir). */
   touched: boolean;
 };
 
-const METHOD_META: Record<TenderMethod, { label: string; icon: typeof Banknote }> = {
-  CASH: { label: "Efectivo", icon: Banknote },
-  CARD: { label: "Tarjeta", icon: CreditCard },
-  TRANSFER: { label: "Transferencia", icon: ArrowLeftRight },
+const METHOD_META: Record<PayChoice, { label: string; icon: typeof Banknote; action: string }> = {
+  CASH: { label: "Efectivo", icon: Banknote, action: "en efectivo" },
+  USD: { label: "Dólares", icon: DollarSign, action: "en dólares" },
+  CARD: { label: "Tarjeta", icon: CreditCard, action: "con tarjeta" },
+  TRANSFER: { label: "Transferencia", icon: ArrowLeftRight, action: "por transferencia" },
 };
 
 function round2(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+/**
+ * US$ → C$ a 2 decimales, redondeo hacia arriba en .5 — en enteros (centavos ×
+ * diezmilésimas) para dar exactamente lo mismo que el servidor (Decimal
+ * ROUND_HALF_UP); con flotantes 40 × 36.6243 podía caer del otro lado del .5.
+ */
+export function usdToNio(usd: number, rate: number): number {
+  return Math.round((Math.round(usd * 100) * Math.round(rate * 10000)) / 10000) / 100;
+}
+
 function nextId(existing: DraftLine[]) {
   return String(existing.reduce((max, l) => Math.max(max, Number(l.id) || 0), 0) + 1);
 }
 
-function newLine(method: TenderMethod, amount: number, existing: DraftLine[]): DraftLine {
+function newLine(method: PayChoice, amount: number, existing: DraftLine[]): DraftLine {
   return {
     id: nextId(existing),
     method,
     amountRaw: amount > 0 ? amount.toFixed(2) : "",
     receivedRaw: "",
+    usdRaw: "",
     referenceNumber: "",
     bankAccountId: "",
     touched: false,
@@ -82,14 +100,9 @@ const BILLETES = [50, 100, 200, 500, 1000] as const;
 const BILLETE_MAYOR = 1000;
 
 /**
- * Montos con los que realmente te pagan un total dado (prompt-correccion-
- * dialogo-cobro.md §2.4). El exacto primero; después el siguiente múltiplo
- * de 50 (el vuelto chico que se da con monedas y billetes bajos); después
- * las denominaciones de billete que superan el total; si ninguna alcanza
- * (el total supera hasta el billete más grande), se completa con múltiplos
- * del billete mayor. El algoritmo anterior usaba pasos fijos de
- * 500/1000/2000: correcto para C$890, absurdo para C$45, donde ofrecía
- * tres montos que nadie va a entregar por un clavo.
+ * Montos con los que realmente te pagan un total dado. El exacto primero;
+ * después el siguiente múltiplo de 50; después las denominaciones de billete
+ * que superan el total; si ninguna alcanza, múltiplos del billete mayor.
  */
 export function quickCashAmounts(total: number): number[] {
   if (!(total > 0)) return [];
@@ -115,78 +128,139 @@ export function quickCashAmounts(total: number): number[] {
   return out.slice(0, 4);
 }
 
-type LineValidation = { amount: number; valid: boolean; needsReference: boolean; needsBankAccount: boolean; insufficientCash: boolean };
+/** Dólares con los que te pagan un total en C$: el mínimo que alcanza y los billetes redondos que siguen. */
+export function quickUsdAmounts(total: number, rate: number): number[] {
+  if (!(total > 0) || !(rate > 0)) return [];
+  let min = Math.ceil(total / rate);
+  if (usdToNio(min, rate) < total) min += 1;
+  const out: number[] = [min];
+  for (const step of [5, 10, 20, 50, 100]) {
+    if (out.length >= 4) break;
+    const candidate = Math.ceil(min / step) * step;
+    if (!out.includes(candidate)) out.push(candidate);
+  }
+  return out;
+}
+
+type LineValidation = {
+  amount: number;
+  /** C$ recibidos (efectivo: lo que entregó; dólares: su equivalente). */
+  received: number;
+  valid: boolean;
+  needsReference: boolean;
+  needsBankAccount: boolean;
+  needsUsd: boolean;
+  insufficientCash: boolean;
+};
 
 /**
  * `accountsAvailable`: si la sucursal todavía no tiene cuentas cargadas, la
- * cuenta de destino no se exige — no se puede pedir un dato que no existe
- * (correccion-destino-y-pantalla-cobro.md §5: "si es una sola cuenta, el
- * selector desaparece"; sin ninguna, tampoco se pide).
+ * cuenta de destino no se exige — no se puede pedir un dato que no existe.
  */
-function validateLine(line: DraftLine, accountsAvailable: boolean): LineValidation {
+function validateLine(line: DraftLine, accountsAvailable: boolean, usdRate: number | null): LineValidation {
   const amount = Number(line.amountRaw) || 0;
+  const base = { amount, received: amount, needsReference: false, needsBankAccount: false, needsUsd: false, insufficientCash: false };
   if (line.method === "CASH") {
     const received = line.receivedRaw.length > 0 ? Number(line.receivedRaw) || 0 : amount;
     const insufficientCash = received < amount;
-    return { amount, valid: amount > 0 && !insufficientCash, needsReference: false, needsBankAccount: false, insufficientCash };
+    return { ...base, received, valid: amount > 0 && !insufficientCash, insufficientCash };
+  }
+  if (line.method === "USD") {
+    const usd = Number(line.usdRaw) || 0;
+    const received = usdRate && usd > 0 ? usdToNio(usd, usdRate) : 0;
+    const needsUsd = !(usd > 0) || !usdRate;
+    const insufficientCash = !needsUsd && received < amount;
+    return { ...base, received, valid: amount > 0 && !needsUsd && !insufficientCash, needsUsd, insufficientCash };
   }
   const needsReference = !line.referenceNumber.trim();
   const needsBankAccount = line.method === "TRANSFER" && accountsAvailable && !line.bankAccountId;
-  return { amount, valid: amount > 0 && !needsReference && !needsBankAccount, needsReference, needsBankAccount, insufficientCash: false };
+  return { ...base, valid: amount > 0 && !needsReference && !needsBankAccount, needsReference, needsBankAccount };
 }
 
 export type PaymentComposerProps = {
   total: number;
   isSubmitting?: boolean;
-  submitLabel?: string;
   onSubmit: (tenders: ComposedTender[]) => void;
-  /** Métodos ofrecidos para agregar — por defecto los tres. Venta directa puede excluir CREDIT/otros aparte. */
+  /** Métodos ofrecidos — por defecto los tres. */
   availableMethods?: TenderMethod[];
-  /** Cuentas propias para "¿a qué cuenta entró?" en transferencias (§2.2/§3). Sin cuentas cargadas, no se pide. */
+  /** Cuentas propias para "¿a qué cuenta entró?" en transferencias. Sin cuentas cargadas, no se pide. */
   bankAccounts?: BankAccountOption[];
 };
-
-/** prompt-caja-gastos-pos-cobro.md Commit 4 — "método como pestañas: cambiar de pestaña CAMBIA el método, no agrega". */
-type TabMode = TenderMethod | "MIXED";
 
 export function PaymentComposer({
   total,
   isSubmitting = false,
-  submitLabel = "Confirmar cobro",
   onSubmit,
   availableMethods = ["CASH", "CARD", "TRANSFER"],
   bankAccounts = [],
 }: PaymentComposerProps) {
-  const [lines, setLines] = useState<DraftLine[]>(() => [newLine(availableMethods[0] ?? "CASH", total, [])]);
-  // Acordeón: solo una línea abierta a la vez (§2.2, prueba 12). La línea
-  // inicial de efectivo arranca abierta — es el caso simple, un toque.
-  const [openLineId, setOpenLineId] = useState<string | null>(() => lines[0]?.id ?? null);
+  // Tasa USD→NIO que fijó Master en Tesorería; sin tasa no se cobra en dólares.
+  const [usdRate, setUsdRate] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    apiFetch("/api/cashier/exchange-rate")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((raw) => {
+        const rate = raw ? Number((unwrapApiData(raw) as { usdToNioRate: number | null }).usdToNioRate) : 0;
+        if (alive) setUsdRate(rate > 0 ? rate : null);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const choices: PayChoice[] = availableMethods.includes("CASH")
+    ? availableMethods.flatMap((m): PayChoice[] => (m === "CASH" ? ["CASH", "USD"] : [m]))
+    : availableMethods;
+  // Sin método elegido de entrada: el cajero tiene que decir cómo pagó. Antes arrancaba en
+  // Efectivo y una transferencia cobrada de un clic quedaba como efectivo (la caja salía corta).
+  const [lines, setLines] = useState<DraftLine[]>([]);
   const [pickerLineId, setPickerLineId] = useState<string | null>(null);
-  const [tabMode, setTabMode] = useState<TabMode>(availableMethods[0] ?? "CASH");
+  const [mixed, setMixed] = useState(false);
   const accountsAvailable = bankAccounts.length > 0;
 
-  // Pestaña simple (no MIXED): SIEMPRE una sola línea de ese método, por el
-  // total completo — "cambiar de pestaña cambia el método, no agrega nada".
-  // Combinado es la ÚNICA pestaña que deja 2+ líneas (el modelo viejo de
-  // "+ método" sigue intacto ahí adentro, sin tocar esa lógica).
-  function selectTab(mode: TabMode) {
-    setTabMode(mode);
-    if (mode === "MIXED") return;
-    const line = newLine(mode, total, []);
+  /** Un método = una sola línea por el total completo. */
+  function choose(method: PayChoice) {
+    setMixed(false);
+    const line = newLine(method, total, []);
     setLines([line]);
-    setOpenLineId(line.id);
+    if (method === "TRANSFER" && accountsAvailable) setPickerLineId(line.id);
   }
 
-  const validations = useMemo(() => lines.map((l) => validateLine(l, accountsAvailable)), [lines, accountsAvailable]);
+  function startMixed() {
+    setMixed(true);
+    // La línea que ya estaba queda como primera forma; la segunda se agrega con los botones de abajo.
+    // Cuánto cubre se anota a mano (los dólares cubren su equivalente).
+    setLines((prev) =>
+      prev.slice(0, 1).map((l) => {
+        const usd = Number(l.usdRaw) || 0;
+        const amountRaw = l.method === "USD" && usdRate && usd > 0 ? usdToNio(usd, usdRate).toFixed(2) : "";
+        return { ...l, amountRaw, receivedRaw: "" };
+      }),
+    );
+  }
+
+  const validations = useMemo(() => lines.map((l) => validateLine(l, accountsAvailable, usdRate)), [lines, accountsAvailable, usdRate]);
   const covered = useMemo(() => round2(validations.reduce((sum, v) => sum + v.amount, 0)), [validations]);
   const missing = round2(total - covered);
   const exactMatch = Math.abs(missing) < 0.005;
   const allLinesValid = validations.every((v) => v.valid);
   const canConfirm = !isSubmitting && lines.length > 0 && exactMatch && allLinesValid;
-  const hasCashLine = lines.some((l) => l.method === "CASH");
+  const single = lines[0];
 
   function updateLine(id: string, patch: Partial<DraftLine>) {
-    setLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+    setLines((prev) =>
+      prev.map((l) => {
+        if (l.id !== id) return l;
+        const next = { ...l, ...patch };
+        // En dos formas, lo que se aplica de los dólares es su equivalente: nunca hay vuelto en esa línea.
+        if (mixed && next.method === "USD" && patch.usdRaw !== undefined) {
+          const usd = Number(next.usdRaw) || 0;
+          next.amountRaw = usdRate && usd > 0 ? usdToNio(usd, usdRate).toFixed(2) : "";
+        }
+        return next;
+      }),
+    );
   }
 
   function touchLine(id: string) {
@@ -195,18 +269,12 @@ export function PaymentComposer({
 
   function removeLine(id: string) {
     setLines((prev) => (prev.length > 1 ? prev.filter((l) => l.id !== id) : prev));
-    setOpenLineId((prev) => (prev === id ? null : prev));
   }
 
-  function addLine(method: TenderMethod) {
-    const line = newLine(method, Math.max(missing, 0), lines);
+  function addLine(method: PayChoice) {
+    const line = newLine(method, method === "USD" ? 0 : Math.max(missing, 0), lines);
     setLines((prev) => [...prev, line]);
-    setOpenLineId(line.id);
-    if (method === "TRANSFER" && bankAccounts.length > 0) setPickerLineId(line.id);
-  }
-
-  function toggleOpen(id: string) {
-    setOpenLineId((prev) => (prev === id ? null : id));
+    if (method === "TRANSFER" && accountsAvailable) setPickerLineId(line.id);
   }
 
   function confirm() {
@@ -216,9 +284,14 @@ export function PaymentComposer({
     }
     const tenders: ComposedTender[] = lines.map((line, i) => {
       const v = validations[i];
-      if (line.method === "CASH") {
-        const received = line.receivedRaw.length > 0 ? Number(line.receivedRaw) || 0 : v.amount;
-        return { method: "CASH", amount: v.amount, receivedAmount: round2(received), changeAmount: round2(received - v.amount) };
+      if (line.method === "CASH" || line.method === "USD") {
+        return {
+          method: "CASH",
+          amount: v.amount,
+          receivedAmount: round2(v.received),
+          changeAmount: round2(v.received - v.amount),
+          ...(line.method === "USD" ? { receivedUsdAmount: Number(line.usdRaw) } : {}),
+        };
       }
       return {
         method: line.method,
@@ -244,84 +317,145 @@ export function PaymentComposer({
     );
   }
 
+  const submitText = mixed
+    ? exactMatch
+      ? `Cobrar ${money(total)} en ${lines.length} formas`
+      : missing > 0
+        ? `Falta ${money(missing)}`
+        : `Sobra ${money(-missing)}`
+    : !single
+      ? "Elige cómo paga"
+      : single.method === "USD" && validations[0]?.needsUsd
+      ? "Anota cuántos dólares entrega"
+      : `Cobrar ${money(total)} ${METHOD_META[single.method].action}`;
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {/* Pestañas de método — Alt+1..4 en computadora (ver ChargeDialog). */}
-      <div className="mb-3 flex flex-none gap-1 rounded-xl bg-[var(--color-surface-muted)] p-1" data-testid="payment-composer-tabs">
-        {[...availableMethods, "MIXED" as const].map((m) => {
-          const Meta = m === "MIXED" ? { label: "Combinado", icon: Plus } : METHOD_META[m];
-          const active = tabMode === m;
-          return (
-            <button
-              key={m}
-              type="button"
-              data-testid={`payment-composer-tab-${m}`}
-              onClick={() => selectTab(m)}
-              disabled={isSubmitting}
+    <div className="@container flex h-full min-h-0 flex-col">
+      {/* ¿Cómo paga? — Alt+1..4 en computadora (ver ChargeDialog). */}
+      <div className="mb-3 flex-none">
+        <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">{mixed ? "Paga con dos formas" : "¿Cómo paga?"}</p>
+        <div className={mixed ? "hidden" : "grid grid-cols-2 gap-2 @md:grid-cols-4"} data-testid="payment-composer-tabs">
+          {choices.map((m) => {
+            const Meta = METHOD_META[m];
+            const active = !mixed && single?.method === m;
+            const noRate = m === "USD" && !usdRate;
+            return (
+              <button
+                key={m}
+                type="button"
+                data-testid={`payment-composer-tab-${m}`}
+                onClick={() => choose(m)}
+                disabled={isSubmitting || noRate}
+                aria-pressed={active}
+                title={noRate ? "Master debe fijar el tipo de cambio en Tesorería" : undefined}
+                className={[
+                  "flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl border-2 px-2 py-2 text-sm font-semibold transition-colors",
+                  active
+                    ? "border-[var(--color-pay)] bg-[var(--color-pay)]/10 text-[var(--color-pay)]"
+                    : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-pay)]",
+                  noRate ? "cursor-not-allowed opacity-50" : "",
+                ].join(" ")}
+              >
+                <Meta.icon className="h-5 w-5" />
+                {Meta.label}
+              </button>
+            );
+          })}
+        </div>
+        {!mixed && choices.includes("USD") && !usdRate ? (
+          <p className="mt-1.5 text-xs text-[var(--color-text-muted)]">Dólares: Master debe fijar el tipo de cambio en Tesorería.</p>
+        ) : null}
+        {!mixed && choices.length > 1 ? (
+          <button
+            type="button"
+            onClick={startMixed}
+            disabled={isSubmitting}
+            className="mt-2 text-xs font-semibold text-[var(--color-pay)] underline-offset-2 hover:underline pointer-coarse:py-2"
+            data-testid="payment-composer-mixed"
+          >
+            Paga con dos formas
+          </button>
+        ) : null}
+      </div>
+
+      {/* Cuerpo — única área con scroll. */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {mixed ? (
+          <div className="space-y-2">
+            <div
               className={[
-                "flex flex-1 items-center justify-center gap-1 rounded-lg py-1.5 text-[11px] font-semibold transition-colors",
-                active ? "bg-[var(--color-surface)] text-[var(--color-pay)] shadow-sm" : "text-[var(--color-text-muted)]",
+                "flex items-center justify-between rounded-xl px-4 py-2.5 text-sm font-semibold",
+                exactMatch
+                  ? "border border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]"
+                  : "border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] text-[var(--color-danger-600)]",
               ].join(" ")}
             >
-              <Meta.icon className="h-3 w-3" /> {Meta.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Barra de cubierto/falta — siempre visible (§2.3), no solo con 2+ líneas. */}
-      <div
-        className={[
-          "mb-3 flex flex-none items-center justify-between rounded-xl px-4 py-2.5 text-sm font-semibold",
-          exactMatch
-            ? "border border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]"
-            : "border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] text-[var(--color-danger-600)]",
-        ].join(" ")}
-      >
-        <span>Cubierto C$ {covered.toFixed(2)}</span>
-        <span>{exactMatch ? "Completo" : missing > 0 ? `Falta C$ ${missing.toFixed(2)}` : `Sobra C$ ${Math.abs(missing).toFixed(2)}`}</span>
-      </div>
-
-      {/* Lista de líneas — única área con scroll (§1/§2.5). */}
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
-        {lines.map((line, i) => (
-          <LineItem
-            key={line.id}
-            line={line}
-            validation={validations[i]}
+              <span>Cubierto {money(covered)}</span>
+              <span>{exactMatch ? "Completo" : missing > 0 ? `Falta ${money(missing)}` : `Sobra ${money(-missing)}`}</span>
+            </div>
+            {lines.map((line, i) => (
+              <LineItem
+                key={line.id}
+                line={line}
+                validation={validations[i]}
+                removable={lines.length > 1}
+                bankAccounts={bankAccounts}
+                usdRate={usdRate}
+                onChange={(patch) => updateLine(line.id, patch)}
+                onTouch={() => touchLine(line.id)}
+                onRemove={() => removeLine(line.id)}
+                onOpenAccountPicker={() => setPickerLineId(line.id)}
+              />
+            ))}
+          </div>
+        ) : single ? (
+          <MethodBody
+            key={single.id + single.method}
+            line={single}
+            validation={validations[0]}
             total={total}
-            open={openLineId === line.id}
-            removable={lines.length > 1}
             bankAccounts={bankAccounts}
-            onToggleOpen={() => toggleOpen(line.id)}
-            onChange={(patch) => updateLine(line.id, patch)}
-            onTouch={() => touchLine(line.id)}
-            onRemove={() => removeLine(line.id)}
-            onOpenAccountPicker={() => setPickerLineId(line.id)}
+            usdRate={usdRate}
+            onChange={(patch) => updateLine(single.id, patch)}
+            onTouch={() => touchLine(single.id)}
+            onOpenAccountPicker={() => setPickerLineId(single.id)}
           />
-        ))}
+        ) : (
+          <p className="rounded-xl border border-dashed border-[var(--color-border)] px-4 py-6 text-center text-sm text-[var(--color-text-muted)]" data-testid="payment-composer-choose-hint">
+            Toca cómo pagó el cliente. Si fue transferencia o tarjeta, no lo cobres como efectivo: la caja no cuadra.
+          </p>
+        )}
       </div>
 
-      {/* Pie fijo: agregar método (solo en "Combinado") + confirmar (§2.5, prueba 11). */}
+      {/* Pie fijo: agregar forma (solo en dos formas) + confirmar. */}
       <div className="flex-none space-y-2 pt-3">
-        {tabMode === "MIXED" && (
-          <div className="flex flex-wrap gap-1.5">
-            {availableMethods
-              .filter((method) => method !== "CASH" || !hasCashLine) // §3: efectivo, una sola línea (prueba 5)
-              .map((method) => {
-                const Meta = METHOD_META[method];
-                return (
-                  <button
-                    key={method}
-                    type="button"
-                    onClick={() => addLine(method)}
-                    disabled={isSubmitting}
-                    className="flex items-center gap-1.5 rounded-lg border border-dashed border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-pay)] hover:text-[var(--color-pay)]"
-                  >
-                    <Plus className="h-3 w-3" /> {Meta.label}
-                  </button>
-                );
-              })}
+        {mixed && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {choices
+              .filter((method) => !lines.some((l) => l.method === method) || method === "CARD" || method === "TRANSFER")
+              .filter((method) => method !== "USD" || usdRate)
+              .map((method) => (
+                <button
+                  key={method}
+                  type="button"
+                  onClick={() => addLine(method)}
+                  disabled={isSubmitting}
+                  className="flex items-center gap-1.5 rounded-lg border border-dashed border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-pay)] hover:text-[var(--color-pay)] pointer-coarse:py-2.5"
+                >
+                  <Plus className="h-3 w-3" /> {METHOD_META[method].label}
+                </button>
+              ))}
+            <button
+              type="button"
+              onClick={() => {
+                setMixed(false);
+                setLines([]);
+              }}
+              disabled={isSubmitting}
+              className="ml-auto text-xs font-semibold text-[var(--color-text-muted)] hover:underline pointer-coarse:py-2.5"
+            >
+              Una sola forma
+            </button>
           </div>
         )}
 
@@ -334,204 +468,350 @@ export function PaymentComposer({
           icon={<Check className="h-5 w-5" />}
           data-testid="payment-composer-confirm"
         >
-          {submitLabel}
+          {submitText}
         </Button>
       </div>
     </div>
   );
 }
 
-/** Texto informativo bajo una línea de tarjeta — nunca invisible: la plata
- * de tarjeta no entra al banco por el monto de la venta, se liquida a 1-2
- * días menos comisión (prompt-pantallas-recorrido-dinero.md §1.4). */
-function CardSettlementNote() {
-  return (
-    <p className="mt-2 flex items-center gap-1.5 whitespace-nowrap overflow-x-auto rounded-lg bg-[var(--color-warning-50)] px-2.5 py-2 text-[0.6875rem] text-[var(--color-warning-700)]">
-      <AlertTriangle className="h-3 w-3 shrink-0" />
-      Se liquida en 1–2 días menos comisión · queda en <b>Por liquidar</b>, no en el banco
-    </p>
-  );
-}
-
-/**
- * Una línea del cobro — encabezado siempre visible (ícono, método, monto
- * editable, quitar) y, si está abierta, el cuerpo propio del método debajo
- * (prompt-correccion-dialogo-cobro.md §2.2). Reemplaza los dos componentes
- * viejos (SingleLineEditor + TenderRow): antes el caso de una sola línea
- * tenía su propio layout con pestañas de método — ahora toda línea se ve
- * igual, se abra o no.
- */
-function LineItem({
-  line, validation, total, open, removable, bankAccounts, onToggleOpen, onChange, onTouch, onRemove, onOpenAccountPicker,
+/** El cuerpo de un cobro de una sola forma: solo la pregunta de ese método. */
+function MethodBody({
+  line, validation, total, bankAccounts, usdRate, onChange, onTouch, onOpenAccountPicker,
 }: {
   line: DraftLine;
   validation: LineValidation;
   total: number;
-  open: boolean;
+  bankAccounts: BankAccountOption[];
+  usdRate: number | null;
+  onChange: (patch: Partial<DraftLine>) => void;
+  onTouch: () => void;
+  onOpenAccountPicker: () => void;
+}) {
+  if (line.method === "CASH") {
+    const change = round2(validation.received - total);
+    return (
+      <ReceivedPad
+        label="¿Con cuánto paga?"
+        prefix="C$"
+        value={line.receivedRaw}
+        onChange={(receivedRaw) => onChange({ receivedRaw })}
+        quickAmounts={quickCashAmounts(total)}
+        quickLabel={(amt, i) => (i === 0 ? "Exacto" : `C$${amt}`)}
+        result={
+          validation.insufficientCash ? (
+            <ResultCard tone="danger" label="Falta" value={money(total - validation.received)} />
+          ) : line.receivedRaw ? (
+            <ResultCard tone="change" label="Vuelto" value={money(change)} />
+          ) : (
+            <p className="text-center text-xs text-[var(--color-text-muted)]">Si paga exacto, toca Cobrar.</p>
+          )
+        }
+      />
+    );
+  }
+
+  if (line.method === "USD" && usdRate) {
+    const usd = Number(line.usdRaw) || 0;
+    return (
+      <ReceivedPad
+        label="¿Cuántos dólares entrega?"
+        prefix="US$"
+        value={line.usdRaw}
+        onChange={(usdRaw) => onChange({ usdRaw })}
+        quickAmounts={quickUsdAmounts(total, usdRate)}
+        quickLabel={(amt) => `US$${amt}`}
+        result={
+          <div className="space-y-1.5">
+            {usd > 0 ? (
+              <p className="text-center text-sm text-[var(--color-text-secondary)]" data-testid="payment-composer-usd-equivalent">
+                {usdMoney(usd)} equivale a <b className="text-[var(--color-text)]">{money(validation.received)}</b>
+              </p>
+            ) : null}
+            {validation.insufficientCash ? (
+              <ResultCard tone="danger" label="Falta" value={money(total - validation.received)} />
+            ) : usd > 0 ? (
+              <ResultCard tone="change" label="Vuelto en córdobas" value={money(validation.received - total)} />
+            ) : null}
+            <p className="text-center text-[0.6875rem] text-[var(--color-text-muted)]">
+              Tipo de cambio {numFixed(usdRate, 4)} · el vuelto se da en córdobas
+            </p>
+          </div>
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl bg-[var(--color-surface-muted)] px-4 py-3 text-center">
+        <p className="text-xs text-[var(--color-text-muted)]">Se cobra {METHOD_META[line.method].action}</p>
+        <p className="text-2xl font-bold tabular-nums text-[var(--color-text)]">{money(total)}</p>
+      </div>
+      <ReferenceFields line={line} validation={validation} bankAccounts={bankAccounts} onChange={onChange} onTouch={onTouch} onOpenAccountPicker={onOpenAccountPicker} />
+    </div>
+  );
+}
+
+function ResultCard({ tone, label, value }: { tone: "change" | "danger"; label: string; value: string }) {
+  return (
+    <div
+      className={[
+        "flex items-center justify-between rounded-xl px-4 py-3",
+        tone === "danger"
+          ? "border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] text-[var(--color-danger-600)]"
+          : "border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] text-[var(--color-warning-700)]",
+      ].join(" ")}
+      data-testid="payment-composer-result"
+    >
+      <span className="text-sm font-semibold">{label}</span>
+      <span className="text-2xl font-bold tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+/**
+ * Campo de "cuánto entrega" con montos rápidos y teclado en pantalla. El
+ * teclado solo aparece solo en pantallas táctiles; con mouse y teclado queda
+ * el botón "Mostrar teclado".
+ */
+function ReceivedPad({
+  label, prefix, value, onChange, quickAmounts, quickLabel, result,
+}: {
+  label: string;
+  prefix: string;
+  value: string;
+  onChange: (value: string) => void;
+  quickAmounts: number[];
+  quickLabel: (amount: number, index: number) => string;
+  result: React.ReactNode;
+}) {
+  const [showKeypad, setShowKeypad] = useState(() => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches);
+
+  function appendDigit(digit: string) {
+    if (digit === "00" && !value) return;
+    const next = value + digit;
+    if (next.replace(".", "").length > 10) return;
+    onChange(next);
+  }
+
+  return (
+    <div className="space-y-2.5">
+      <div>
+        <label className="mb-1 block text-sm font-semibold text-[var(--color-text)]">{label}</label>
+        <div className="flex items-center gap-2">
+          <div className="flex flex-1 items-center rounded-xl border-2 border-[var(--color-border)] bg-[var(--color-surface)] px-3 focus-within:border-[var(--color-pay)]">
+            <span className="text-base font-semibold text-[var(--color-text-muted)]">{prefix}</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="0.01"
+              className="w-full bg-transparent px-2 py-2.5 text-right text-2xl font-bold tabular-nums text-[var(--color-text)] outline-none focus-visible:outline-none!"
+              placeholder="0.00"
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              autoFocus
+              aria-label={label}
+              data-testid="payment-composer-received"
+            />
+          </div>
+          {!showKeypad ? (
+            <button type="button" onClick={() => setShowKeypad(true)} className="shrink-0 rounded-lg border border-[var(--color-border)] px-2.5 py-2 text-xs font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]">
+              Teclado
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-4 gap-1.5">
+        {quickAmounts.map((amt, i) => (
+          <button
+            key={amt}
+            type="button"
+            onClick={() => onChange(String(amt))}
+            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2 text-sm font-semibold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-pay)] hover:text-[var(--color-pay)] pointer-coarse:py-3"
+            data-testid="payment-composer-quick-amount"
+          >
+            {quickLabel(amt, i)}
+          </button>
+        ))}
+      </div>
+
+      {result}
+
+      {showKeypad ? (
+        <div className="grid grid-cols-3 gap-1.5">
+          {["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0"].map((d) => (
+            <button key={d} type="button" onClick={() => appendDigit(d)} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 text-base font-semibold text-[var(--color-text)] transition-[background-color,transform] hover:bg-[var(--color-surface-alt)] active:scale-95">
+              {d}
+            </button>
+          ))}
+          <button type="button" onClick={() => onChange(value.slice(0, -1))} className="flex items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 text-base text-[var(--color-text-secondary)] transition-[background-color,transform] hover:bg-[var(--color-surface-alt)] active:scale-95" aria-label="Borrar">
+            ⌫
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Texto bajo una línea de tarjeta: la plata de tarjeta se liquida a 1-2 días menos comisión. */
+function CardSettlementNote() {
+  return (
+    <p className="mt-2 flex items-center gap-1.5 rounded-lg bg-[var(--color-warning-50)] px-2.5 py-2 text-[0.6875rem] text-[var(--color-warning-700)]">
+      <AlertTriangle className="h-3 w-3 shrink-0" />
+      <span>Se liquida en 1–2 días menos comisión · queda en <b>Por liquidar</b>, no en el banco</span>
+    </p>
+  );
+}
+
+/** Cuenta de destino (transferencia) + número de referencia (tarjeta y transferencia). */
+function ReferenceFields({
+  line, validation, bankAccounts, onChange, onTouch, onOpenAccountPicker,
+}: {
+  line: DraftLine;
+  validation: LineValidation;
+  bankAccounts: BankAccountOption[];
+  onChange: (patch: Partial<DraftLine>) => void;
+  onTouch: () => void;
+  onOpenAccountPicker: () => void;
+}) {
+  const selectedAccount = bankAccounts.find((a) => a.id === line.bankAccountId) ?? null;
+  return (
+    <div className="space-y-2.5">
+      {line.method === "TRANSFER" && bankAccounts.length > 0 ? (
+        <div>
+          <label className="mb-1 block text-xs font-medium text-[var(--color-text-muted)]">
+            ¿A qué cuenta entró? <span className="text-[var(--color-danger-600)]">*</span>
+          </label>
+          <button
+            type="button"
+            onClick={onOpenAccountPicker}
+            data-testid="payment-composer-open-account-picker"
+            className="flex w-full items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-left text-sm hover:border-[var(--color-pay)]"
+          >
+            {selectedAccount ? (
+              <span className="min-w-0">
+                <span className="flex items-center gap-1.5">
+                  <span className="font-semibold text-[var(--color-text)]">{selectedAccount.bankName}</span>
+                  <CurrencyChip currency={selectedAccount.currencyCode} />
+                </span>
+                <span className="block truncate text-xs text-[var(--color-text-muted)]">{selectedAccount.owner ?? selectedAccount.accountAlias}</span>
+              </span>
+            ) : (
+              <span className="text-[var(--color-text-soft)]">Elegí a cuál cuenta entró…</span>
+            )}
+            <ChevronRight className="h-4 w-4 shrink-0 text-[var(--color-text-soft)]" />
+          </button>
+          {line.touched && validation.needsBankAccount ? <p className="mt-1 text-xs text-[var(--color-danger-600)]">Requerido para transferencias.</p> : null}
+        </div>
+      ) : null}
+      <div>
+        <label className="mb-1 block text-xs font-medium text-[var(--color-text-muted)]">
+          Número de referencia <span className="text-[var(--color-danger-600)]">*</span>
+        </label>
+        <input
+          className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-soft)] focus:border-[var(--color-pay)] focus:ring-2 focus:ring-[var(--color-pay)]/10"
+          type="text"
+          value={line.referenceNumber}
+          onChange={(e) => onChange({ referenceNumber: e.target.value })}
+          onBlur={onTouch}
+          placeholder={line.method === "CARD" ? "Nro. de autorización" : "Nro. de transacción"}
+          autoFocus
+          data-testid="payment-composer-reference"
+        />
+        {line.touched && validation.needsReference ? (
+          <p className="mt-1 text-xs text-[var(--color-danger-600)]">Requerido para {line.method === "CARD" ? "tarjeta" : "transferencia"}.</p>
+        ) : null}
+      </div>
+      {line.method === "CARD" ? <CardSettlementNote /> : null}
+    </div>
+  );
+}
+
+/** Una forma de pago dentro de "Paga con dos formas": método, cuánto cubre y su dato propio. */
+function LineItem({
+  line, validation, removable, bankAccounts, usdRate, onChange, onTouch, onRemove, onOpenAccountPicker,
+}: {
+  line: DraftLine;
+  validation: LineValidation;
   removable: boolean;
   bankAccounts: BankAccountOption[];
-  onToggleOpen: () => void;
+  usdRate: number | null;
   onChange: (patch: Partial<DraftLine>) => void;
   onTouch: () => void;
   onRemove: () => void;
   onOpenAccountPicker: () => void;
 }) {
   const Meta = METHOD_META[line.method];
-  const Icon = Meta.icon;
-  const received = Number(line.receivedRaw) || 0;
-  const change = line.method === "CASH" && line.receivedRaw ? round2(received - validation.amount) : null;
-  const selectedAccount = bankAccounts.find((a) => a.id === line.bankAccountId) ?? null;
-  const quickAmounts = useMemo(() => quickCashAmounts(validation.amount || total), [validation.amount, total]);
-  // prompt-caja-gastos-pos-cobro.md Commit 4 — el teclado numérico en pantalla
-  // ocupa medio modal en computadora, donde ya hay uno físico. Solo se
-  // muestra solo por defecto en pantallas táctiles; en mouse+teclado queda
-  // un botón "Mostrar teclado" para el caso raro de una pantalla táctil que
-  // no se detectó bien.
-  const [showKeypad, setShowKeypad] = useState(() => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches);
-
-  function appendDigit(digit: string) {
-    if (digit === "00" && !line.receivedRaw) return;
-    const next = line.receivedRaw + digit;
-    if (next.replace(".", "").length > 10) return;
-    onChange({ receivedRaw: next });
-  }
-
+  const isUsd = line.method === "USD";
   return (
-    <div className={["rounded-xl border bg-[var(--color-surface)] transition-colors", open ? "border-[var(--color-pay)]" : "border-[var(--color-border)]"].join(" ")}>
-      <div className="flex items-center gap-2 p-2.5">
-        <button type="button" onClick={onToggleOpen} className="flex flex-1 items-center gap-2 text-left" data-testid={`payment-composer-line-header-${line.method}`}>
-          <Icon className="h-4 w-4 shrink-0 text-[var(--color-text-muted)]" />
-          <span className="shrink-0 text-sm font-semibold text-[var(--color-text)]">{Meta.label}</span>
-          <ChevronDown className={["ml-auto h-3.5 w-3.5 shrink-0 text-[var(--color-text-soft)] transition-transform", open ? "rotate-180" : ""].join(" ")} />
-        </button>
-        <Input
-          type="number"
-          min="0.01"
-          step="0.01"
-          value={line.amountRaw}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => onChange({ amountRaw: e.target.value })}
-          onBlur={onTouch}
-          className="w-24 shrink-0 text-right"
-          data-testid={`payment-composer-amount-${line.method}`}
-        />
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5">
+      <div className="flex items-center gap-2">
+        <Meta.icon className="h-4 w-4 shrink-0 text-[var(--color-text-muted)]" />
+        <span className="shrink-0 text-sm font-semibold text-[var(--color-text)]">{Meta.label}</span>
+        {isUsd ? (
+          <span className="ml-auto text-sm font-semibold tabular-nums text-[var(--color-text)]">{money(validation.amount)}</span>
+        ) : (
+          <label className="ml-auto flex items-center gap-1 whitespace-nowrap text-xs text-[var(--color-text-muted)]">
+            Cubre C$
+            <Input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={line.amountRaw}
+              onChange={(e) => onChange({ amountRaw: e.target.value })}
+              onBlur={onTouch}
+              className="w-24 shrink-0 text-right"
+              data-testid={`payment-composer-amount-${line.method}`}
+            />
+          </label>
+        )}
         {removable && (
-          <button type="button" onClick={onRemove} className="shrink-0 rounded p-1 pointer-coarse:p-3 text-[var(--color-text-soft)] hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)]" aria-label="Quitar">
+          <button type="button" onClick={onRemove} className="shrink-0 rounded p-1 text-[var(--color-text-soft)] hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)] pointer-coarse:p-3" aria-label="Quitar">
             <X className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
 
-      {open && (
-        <div className="border-t border-[var(--color-border)] p-3 pt-2.5">
-          {line.method === "CASH" ? (
-            <div>
-              <div className="mb-2.5 flex items-center justify-between rounded-lg bg-[var(--color-surface-muted)] px-3 py-2">
-                <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Recibido</span>
-                <span className={["text-lg font-bold tabular-nums", line.receivedRaw ? "text-[var(--color-text)]" : "text-[var(--color-text-soft)]"].join(" ")}>
-                  C$ {line.receivedRaw ? received.toFixed(2) : "0.00"}
-                </span>
-              </div>
-
-              {line.receivedRaw.length > 0 ? (
-                <div className={["mb-2.5 rounded-lg px-3 py-2 text-center", validation.insufficientCash ? "border border-[var(--color-danger-200)] bg-[var(--color-danger-50)]" : "border border-[var(--color-warning-200)] bg-[var(--color-warning-50)]"].join(" ")}>
-                  {validation.insufficientCash ? (
-                    <p className="text-sm font-semibold text-[var(--color-danger-600)]">Falta C$ {(validation.amount - received).toFixed(2)}</p>
-                  ) : (
-                    <p className="text-sm font-semibold text-[var(--color-warning-700)]">Vuelto C$ {change!.toFixed(2)}</p>
-                  )}
-                </div>
-              ) : null}
-
-              <div className="mb-2.5 grid grid-cols-4 gap-1.5">
-                {quickAmounts.map((amt, i) => (
-                  <button key={amt} onClick={() => onChange({ receivedRaw: String(amt) })} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] pointer-coarse:py-3 pointer-coarse:text-sm hover:border-[var(--color-pay)] hover:text-[var(--color-pay)] transition-colors" data-testid="payment-composer-quick-amount">
-                    {i === 0 ? "Exacto" : `C$${amt}`}
-                  </button>
-                ))}
-              </div>
-
-              {showKeypad ? (
-                <div className="grid grid-cols-3 gap-1.5">
-                  {["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0"].map((d) => (
-                    <button key={d} onClick={() => appendDigit(d)} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 text-base font-semibold text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] active:scale-95 transition-[background-color,transform]">
-                      {d}
-                    </button>
-                  ))}
-                  <button onClick={() => onChange({ receivedRaw: line.receivedRaw.slice(0, -1) })} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 flex items-center justify-center text-base text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] active:scale-95 transition-[background-color,transform]" aria-label="Borrar">
-                    ⌫
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-2">
-                  <input
-                    type="number"
-                    className="hm-input flex-1 text-right text-base"
-                    placeholder="Monto recibido"
-                    value={line.receivedRaw}
-                    onChange={(e) => onChange({ receivedRaw: e.target.value })}
-                    autoFocus
-                  />
-                  <button type="button" onClick={() => setShowKeypad(true)} className="shrink-0 rounded-lg border border-[var(--color-border)] px-2.5 py-2 text-xs font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)] pointer-coarse:py-3">
-                    Mostrar teclado
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-2.5">
-              {line.method === "TRANSFER" && bankAccounts.length > 0 ? (
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-[var(--color-text-muted)]">
-                    Cuenta de destino <span className="text-[var(--color-danger-600)]">*</span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={onOpenAccountPicker}
-                    data-testid="payment-composer-open-account-picker"
-                    className="flex w-full items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-left text-sm hover:border-[var(--color-pay)]"
-                  >
-                    {selectedAccount ? (
-                      <span className="min-w-0">
-                        <span className="flex items-center gap-1.5">
-                          <span className="font-semibold text-[var(--color-text)]">{selectedAccount.bankName}</span>
-                          <CurrencyChip currency={selectedAccount.currencyCode} />
-                        </span>
-                        <span className="block truncate text-xs text-[var(--color-text-muted)]">{selectedAccount.owner ?? selectedAccount.accountAlias}</span>
-                      </span>
-                    ) : (
-                      <span className="text-[var(--color-text-soft)]">Elegí a cuál cuenta entró…</span>
-                    )}
-                    <ChevronRight className="h-4 w-4 shrink-0 text-[var(--color-text-soft)]" />
-                  </button>
-                  {line.touched && validation.needsBankAccount ? (
-                    <p className="mt-1 text-xs text-[var(--color-danger-600)]">Requerido para transferencias.</p>
-                  ) : null}
-                </div>
-              ) : null}
-              <div>
-                <label className="mb-1 block text-xs font-medium text-[var(--color-text-muted)]">
-                  Número de referencia <span className="text-[var(--color-danger-600)]">*</span>
-                </label>
-                <input
-                  className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-soft)] focus:border-[var(--color-pay)] focus:ring-2 focus:ring-[var(--color-pay)]/10"
-                  type="text"
-                  value={line.referenceNumber}
-                  onChange={(e) => onChange({ referenceNumber: e.target.value })}
-                  onBlur={onTouch}
-                  placeholder={line.method === "CARD" ? "Nro. de autorización" : "Nro. de transacción"}
-                  autoFocus
-                  data-testid="payment-composer-reference"
-                />
-                {line.touched && validation.needsReference ? (
-                  <p className="mt-1 text-xs text-[var(--color-danger-600)]">Requerido para {line.method === "CARD" ? "tarjeta" : "transferencia"}.</p>
-                ) : null}
-              </div>
-              {line.method === "CARD" ? <CardSettlementNote /> : null}
-            </div>
-          )}
-        </div>
-      )}
+      <div className="mt-2">
+        {line.method === "CASH" ? (
+          <div className="flex items-center gap-2">
+            <label className="whitespace-nowrap text-xs text-[var(--color-text-muted)]">Entrega C$</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              className="hm-input w-28 text-right"
+              placeholder={line.amountRaw || "0.00"}
+              value={line.receivedRaw}
+              onChange={(e) => onChange({ receivedRaw: e.target.value })}
+            />
+            {line.receivedRaw ? (
+              <span className={["ml-auto text-sm font-semibold tabular-nums", validation.insufficientCash ? "text-[var(--color-danger-600)]" : "text-[var(--color-warning-700)]"].join(" ")}>
+                {validation.insufficientCash ? `Falta ${money(validation.amount - validation.received)}` : `Vuelto ${money(validation.received - validation.amount)}`}
+              </span>
+            ) : null}
+          </div>
+        ) : isUsd ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="whitespace-nowrap text-xs text-[var(--color-text-muted)]">Entrega US$</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              className="hm-input w-28 text-right"
+              placeholder="0.00"
+              value={line.usdRaw}
+              onChange={(e) => onChange({ usdRaw: e.target.value })}
+              onBlur={onTouch}
+              autoFocus
+            />
+            {usdRate ? <span className="text-[0.6875rem] text-[var(--color-text-muted)]">a {numFixed(usdRate, 4)} · sin vuelto en esta forma</span> : null}
+          </div>
+        ) : (
+          <ReferenceFields line={line} validation={validation} bankAccounts={bankAccounts} onChange={onChange} onTouch={onTouch} onOpenAccountPicker={onOpenAccountPicker} />
+        )}
+      </div>
     </div>
   );
 }
@@ -551,13 +831,8 @@ function CurrencyChip({ currency }: { currency: string }) {
 }
 
 /**
- * Paso propio del diálogo (no una tarjeta anidada) para elegir a qué cuenta
- * entró la transferencia — banco y moneda como titular visual, nombre
- * completo y número completo en monoespaciada grande, botón de copiar para
- * cuando el cajero le dicta la cuenta al cliente
- * (prompt-pantallas-recorrido-dinero.md §1.3). Sin tocar (§4 de la
- * corrección) — solo se le aplicó la misma estructura de tres zonas para
- * que su botón de confirmar también quede siempre visible.
+ * Paso propio del diálogo para elegir a qué cuenta entró la transferencia —
+ * lista compacta con radio; "Copiar" copia el número COMPLETO.
  */
 function AccountPickerStep({
   total, accounts, selectedId, onPick, onDone,
@@ -567,7 +842,7 @@ function AccountPickerStep({
   selectedId: string;
   /** Marca la cuenta elegida — el paso se queda abierto (así se ve la advertencia de moneda antes de confirmar). */
   onPick: (accountId: string) => void;
-  /** Vuelve al compositor — con o sin selección; el back-arrow y "Confirmar cuenta" hacen lo mismo. */
+  /** Vuelve al compositor — con o sin selección. */
   onDone: () => void;
 }) {
   async function copyNumber(event: React.MouseEvent, accountNumber: string) {
@@ -590,15 +865,10 @@ function AccountPickerStep({
         </button>
         <div>
           <p className="text-sm font-semibold text-[var(--color-text)]">¿A cuál cuenta entró?</p>
-          <p className="text-xs text-[var(--color-text-muted)]">Transferencia de C$ {total.toFixed(2)}</p>
+          <p className="text-xs text-[var(--color-text-muted)]">Transferencia de {money(total)}</p>
         </div>
       </div>
 
-      {/* prompt-caja-gastos-pos-cobro.md Commit 4 — lista compacta con radio
-          (banco, moneda, titular, últimos 4 dígitos): antes eran tarjetas
-          grandes con el número completo, que obligaban a hacer scroll con
-          varias cuentas. "Copiar" sigue copiando el número COMPLETO — acá
-          solo se MUESTRA recortado. */}
       <div className="min-h-0 flex-1 overflow-y-auto rounded-lg" style={{ border: "0.5px solid var(--color-border)" }}>
         {accounts.map((account, i) => {
           const selected = account.id === selectedId;

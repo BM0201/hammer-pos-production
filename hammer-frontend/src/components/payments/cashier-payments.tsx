@@ -397,7 +397,6 @@ export function CashierPayments({ branchId }: { branchId: string }) {
                     key={selected.id}
                     total={Number(selected.grandTotal)}
                     isSubmitting={isSubmitting}
-                    submitLabel={`Cobrar C$ ${Number(selected.grandTotal).toFixed(2)}`}
                     onSubmit={(tenders) => { void paySelected(tenders); }}
                     bankAccounts={bankAccounts}
                   />

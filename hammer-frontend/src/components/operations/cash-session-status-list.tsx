@@ -169,12 +169,19 @@ export function CashSessionStatusList({ sessions, branchId, dayLifecycle }: Prop
                     </div>
                   </div>
 
-                  {session.countedUsdAmount != null && Number(session.countedUsdAmount) > 0 ? (
+                  {Number(session.countedUsdAmount ?? 0) > 0 || Number(session.expectedUsdAmount ?? 0) > 0 ? (
                     <p className="border-t border-[var(--color-border)] px-3.5 py-2 text-xs text-[var(--color-text-secondary)]" data-testid="cash-session-usd">
                       Dólares contados aparte: <strong className="tabular-nums">{usdMoney(session.countedUsdAmount)}</strong>
                       {session.countedUsdRate != null
                         ? <> · equivale a <strong className="tabular-nums">{money(Number(session.countedUsdAmount) * Number(session.countedUsdRate))}</strong> (tipo de cambio {numFixed(session.countedUsdRate, 4)})</>
                         : " · sin tipo de cambio registrado"}
+                      {Number(session.expectedUsdAmount ?? 0) > 0 ? (
+                        <> · debía haber <strong className="tabular-nums">{usdMoney(session.expectedUsdAmount)}</strong>{" "}
+                          <strong className={diffColor(Number(session.countedUsdAmount ?? 0) - Number(session.expectedUsdAmount))}>
+                            ({usdMoney(Number(session.countedUsdAmount ?? 0) - Number(session.expectedUsdAmount))})
+                          </strong>
+                        </>
+                      ) : null}
                     </p>
                   ) : null}
 

@@ -31,7 +31,7 @@ type ActiveSession = {
   usdToNioRate?: number | null;
 };
 
-type CloseResult = { counted: number; expected: number; difference: number; sales: number; cashFund: number; opening: number | null; usd: number };
+type CloseResult = { counted: number; expected: number; difference: number; sales: number; cashFund: number; opening: number | null; usd: number; expectedUsd: number };
 type LastCashFund = { amount: number; note: string | null; declaredAt: string; setByMaster?: boolean };
 type Declaration = { cashSessionId: string; countedAmount: number; cashFund?: { amount: number; note: string } | null };
 
@@ -279,14 +279,14 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
       setBusyAction(null);
       return;
     }
-    const data = unwrapApiData(result.json) as { status?: string; expectedCash?: number; openingAmount?: number | string } | null;
+    const data = unwrapApiData(result.json) as { status?: string; expectedCash?: number; expectedUsd?: number; openingAmount?: number | string } | null;
     if (data?.status === "AUTO_CLOSED_PENDING_REVIEW") {
       setNotice({ tone: "info", text: "La caja quedó pendiente de revisión por Master." });
     } else {
       setDeclaration({ cashSessionId: sessionId, countedAmount: counted, cashFund: { amount: count.cashFund, note: count.cashFundNote } });
       const expectedCash = Number(data?.expectedCash ?? counted);
       const opening = data?.openingAmount != null ? Number(data.openingAmount) : null;
-      setCloseResult({ counted, expected: expectedCash, difference: countDifference(counted, expectedCash), sales: count.sales, cashFund: count.cashFund, opening, usd: count.usd });
+      setCloseResult({ counted, expected: expectedCash, difference: countDifference(counted, expectedCash), sales: count.sales, cashFund: count.cashFund, opening, usd: count.usd, expectedUsd: Number(data?.expectedUsd ?? 0) });
       setOpeningAmount(count.cashFund > 0 ? count.cashFund.toFixed(2) : "0");
     }
     await refresh().catch(() => undefined);
@@ -496,7 +496,8 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
 
 /** Lo contado contra lo que debía haber: se ve recién después de cerrar. */
 function CloseResultCard({ result }: { result: CloseResult }) {
-  const { counted, expected, difference, sales, cashFund, opening, usd } = result;
+  const { counted, expected, difference, sales, cashFund, opening, usd, expectedUsd } = result;
+  const usdDifference = countDifference(usd, expectedUsd);
   const tone = difference === 0 ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-700)]";
   return (
     <div className="space-y-2" data-testid="cash-close-result">
@@ -520,9 +521,17 @@ function CloseResultCard({ result }: { result: CloseResult }) {
       <p className="text-xs text-[var(--color-text-muted)]" data-testid="cash-close-split">
         Venta {money(sales)} + sencillo {money(cashFund)}
         {opening !== null ? `. El sencillo abrió con ${money(opening)}${cashFund !== opening ? ` y cierra con ${money(cashFund)} (${cashFund > opening ? "+" : "−"}${money(Math.abs(countDifference(cashFund, opening)))})` : " y cierra igual"}` : ""}.
-        {usd > 0 ? ` Dólares aparte: ${usdMoney(usd)}.` : ""}
+        {usd > 0 && expectedUsd === 0 ? ` Dólares aparte: ${usdMoney(usd)}.` : ""}
       </p>
-      {difference !== 0 ? (
+      {expectedUsd > 0 ? (
+        <p className="text-xs text-[var(--color-text-secondary)]" data-testid="cash-close-usd">
+          Dólares: contaste <b className="tabular-nums">{usdMoney(usd)}</b>, debía haber <b className="tabular-nums">{usdMoney(expectedUsd)}</b> ·{" "}
+          <b className={usdDifference === 0 ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-700)]"}>
+            {usdDifference === 0 ? "Cuadró" : `${usdDifference > 0 ? "Sobran" : "Faltan"} ${usdMoney(Math.abs(usdDifference))}`}
+          </b>
+        </p>
+      ) : null}
+      {difference !== 0 || usdDifference !== 0 ? (
         <p className="text-xs text-[var(--color-text-muted)]">La diferencia quedó registrada; Master la revisa en Día Operativo 360.</p>
       ) : null}
     </div>

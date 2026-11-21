@@ -628,6 +628,8 @@ model CashSession {
   countedUsdAmount   Decimal?          @db.Decimal(14, 2)
   /// Tipo de cambio USD→NIO con que se mostró el "equivale a" en el conteo.
   countedUsdRate     Decimal?          @db.Decimal(14, 4)
+  /// US$ que debía haber en la gaveta al cerrar (Σ US$ recibidos en cobros en dólares).
+  expectedUsdAmount  Decimal?          @db.Decimal(14, 2)
   requiresReview     Boolean           @default(false)
   reviewedAt         DateTime?
   reviewNote         String?
@@ -1823,6 +1825,9 @@ model PaymentTender {
   /// Solo TRANSFER — a qué cuenta propia entró el dinero. Sin esto el saldo
   /// esperado por cuenta no se puede calcular (correccion-destino-y-pantalla-cobro.md §2.2).
   bankAccountId    String?
+  /// Cobro en dólares: US$ que entregó el cliente. receivedAmount = US$ × usdRate en C$; el vuelto sale en C$.
+  receivedUsdAmount Decimal?     @db.Decimal(14, 2)
+  usdRate          Decimal?      @db.Decimal(14, 4)
   createdAt        DateTime      @default(now())
 
   payment        Payment          @relation(fields: [paymentId], references: [id], onDelete: Cascade)

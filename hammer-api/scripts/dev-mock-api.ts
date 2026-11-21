@@ -23,6 +23,7 @@
  * SOLO para desarrollo local. No toca Prisma ni requiere DATABASE_URL.
  */
 import http from "node:http";
+import { resolveUsdTenders } from "../src/modules/payments/usd-tender";
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_PAYROLL_RATES,
@@ -521,7 +522,57 @@ function mockLoadPreview() {
 // Asignación manual por sucursal (BranchProductSetting.isAvailable), clave "productId:branchId".
 const mockAssignments = new Set<string>();
 // Precio general por producto y precio propio por sucursal (clave "productId:branchId").
-const mockStandardPrices = new Map<string, number>();
+const mockStandardPrices = new Map<string, number>([["p-varilla", 185], ["p-quintal", 2450], ["p-pintura", 360], ["p-plywood", 300]]);
+const MOCK_USD_RATE = 36.6243;
+let mockRivasTender = { method: "CASH", referenceNumber: "" };
+function mockRivasSummary() {
+  return { id: "so-riv-1", orderNumber: "SO-RIV-MWPGCFFO", status: "PAID", grandTotal: 7600, commercialDate: "2026-11-20", createdAt: "2026-11-20T20:51:00Z",
+    branch: { id: "br-central", code: "RIV", name: "Rivas" }, customerName: null, createdByName: "Cajera Rivas", linesCount: 1, cancellable: true,
+    paymentStatus: "POSTED", paymentMethod: mockRivasTender.method, latestPaymentAt: "2026-11-20T20:51:00Z", requiresTransport: false, transportAmount: 0,
+    requiresManualInvoice: false, manualInvoiceStatus: "NOT_REQUIRED", manualInvoiceNumber: null, deliveryOrderNumber: null };
+}
+function mockRivasDetail() {
+  const cash = mockRivasTender.method === "CASH";
+  return { id: "so-riv-1", orderNumber: "SO-RIV-MWPGCFFO", status: "PAID", cancellable: true, returnable: true, requiresTransport: false, transportAmount: 0,
+    createdAt: "2026-11-20T20:51:00Z", updatedAt: "2026-11-20T20:51:00Z", notes: null, branch: { id: "br-central", code: "RIV", name: "Rivas" },
+    createdBy: { id: "u-3", name: "Cajera Rivas", username: "riv" }, customer: null,
+    totals: { subtotal: 7600, discountTotal: 0, taxTotal: 0, transportAmount: 0, grandTotal: 7600 }, documentMode: null,
+    returns: { fullyReturned: false, totalRefundedAmount: 0, items: [] }, cancellations: [], requiresManualInvoice: false, manualInvoice: null,
+    lines: [{ id: "l-1", productId: "p-quintal", productName: "Cemento quintal", sku: "CEM-42", unit: "UN", quantity: 3.1, unitPrice: 2450, discountAmount: 0, lineSubtotal: 7600, pendingOrReturnedQuantity: 0 }],
+    payments: [{ id: "pay-1", method: mockRivasTender.method, status: "POSTED", amount: 7600, currencyCode: "NIO", referenceNumber: cash ? null : mockRivasTender.referenceNumber,
+      paidAt: "2026-11-20T20:51:00Z", receivedByName: "Cajera Rivas",
+      tenders: [{ id: "pt-1", method: mockRivasTender.method, amount: 7600, receivedAmount: cash ? 7600 : null, changeAmount: cash ? 0 : null, receivedUsdAmount: null, referenceNumber: cash ? null : mockRivasTender.referenceNumber }] }],
+    auditTrail: [] };
+}
+function mockFinanceSummary() {
+  const items = [
+    { cashSessionId: "cs-1", branchId: "br-central", branchCode: "MSY", cashBoxCode: "CAJA-01", closedAt: "2026-11-18T23:30:00Z", closedByName: "Elena Bermúdez", amount: 150 },
+    { cashSessionId: "cs-2", branchId: "br-central", branchCode: "RIV", cashBoxCode: "CAJA-01", closedAt: "2026-11-14T21:30:00Z", closedByName: "Cajera Rivas", amount: 45.5 },
+  ];
+  const cashOverages = items.reduce((t, i) => t + i.amount, 0);
+  const perf = { grossSales: 420000, refunds: 3000, netSales: 417000, cogs: 310000, grossProfit: 107000, grossMarginPercent: 25.7, cashExpenses: 12000, bankExpenses: 8000,
+    retainedCashExpenses: 1500, payrollPaid: 45000, operatingExpenses: 66500, cashOverages, cashOverageItems: items, expensesBudgetMonthly: 70000,
+    operatingProfit: 107000 - 66500 + cashOverages, estimatedNetProfit: 107000 - 66500 + cashOverages, purchasesPaid: 0, payablesOpen: 0,
+    byBranch: [{ branchId: "br-central", branchCode: "MSY", branchName: "Masaya", grossSales: 420000, refunds: 3000, netSales: 417000, cogs: 310000, grossProfit: 107000,
+      grossMarginPercent: 25.7, cashExpenses: 12000, bankExpenses: 8000, retainedCashExpenses: 1500, payrollPaid: 45000, operatingExpenses: 66500, cashOverages, operatingProfit: 107000 - 66500 + cashOverages }] };
+  return { period: { year: 2026, month: 11 },
+    inventoryProjection: { inventoryValue: 0, potentialRevenue: 0, potentialGrossProfit: 0, potentialGrossMarginPercent: null, productsWithoutPrice: 0, productsWithoutCost: 0 },
+    operatingExpenses: { monthlyTotal: 70000, periodTotal: 70000 }, payroll: { payrollTotal: 40000, employerCostTotal: 45000, pendingPayrollTotal: 0 }, realPerformance: perf };
+}
+// Ticket de Vender en memoria (uno solo, del usuario de preview): para probar Vender → Cobrar sin base de datos.
+type MockTicketLine = { id: string; productId: string; quantity: number; unitPrice: number };
+let mockTicket = { id: "so-mock-1", orderNumber: "CEN-MOCK-0001", lines: [] as MockTicketLine[] };
+let mockTicketSeq = 1;
+function mockTicketJson() {
+  const total = mockTicket.lines.reduce((t, l) => t + l.quantity * l.unitPrice, 0).toFixed(2);
+  return {
+    id: mockTicket.id, orderNumber: mockTicket.orderNumber, status: "DRAFT", subtotal: total, discountTotal: "0", taxTotal: "0", grandTotal: total, transportAmount: "0", notes: null,
+    lines: mockTicket.lines.map((l) => {
+      const p = mockProducts.find((x) => x.id === l.productId);
+      return { id: l.id, productId: l.productId, quantity: String(l.quantity), unitPrice: l.unitPrice.toFixed(2), discountAmount: "0", lineSubtotal: (l.quantity * l.unitPrice).toFixed(2), product: { name: p?.name, sku: p?.sku } };
+    }),
+  };
+}
 const mockBranchPrices = new Map<string, { price: number; reason: string }>();
 // Misma regla que productTextSearchSql: cada palabra en nombre o SKU.
 const mockMatches = (p: MockProduct, q: string) => q.trim().toUpperCase().split(/\s+/).filter(Boolean).every((t) => `${p.sku} ${p.name}`.toUpperCase().includes(t));
@@ -545,7 +596,7 @@ function send(res: http.ServerResponse, status: number, body: unknown, extraHead
 }
 const ok = (res: http.ServerResponse, data: unknown) => send(res, 200, { ok: true, data });
 
-type MockCash = { id: string; status: "OPEN" | "RECONCILING" | "CLOSED"; opening: number; cashPayments: number; openedAt: string; counted?: number; declared?: boolean };
+type MockCash = { id: string; status: "OPEN" | "RECONCILING" | "CLOSED"; opening: number; cashPayments: number; openedAt: string; counted?: number; declared?: boolean; usdPayments?: number };
 const mockCashOpenedAt = (() => { const d = new Date(); d.setHours(7, 32, 0, 0); return d.toISOString(); })();
 const mockCashCloseAt = new Date(Date.now() + 20 * 60_000).toISOString();
 // El conteo a ciegas arranca 20 min antes del cierre: en el mock, desde que arranca.
@@ -601,6 +652,25 @@ const server = http.createServer(async (req, res) => {
     const branchId = url.searchParams.get("branchId") ?? "";
     return ok(res, [{ id: `cb-${branchId}`, code: "CAJA-01", description: branchId === "br-central" ? "Caja principal Central" : "Caja principal" }]);
   }
+  // Cuentas a las que puede entrar una transferencia (cobro): una en córdobas y una en dólares.
+  if (path === "/api/master/treasury/bank-accounts") return ok(res, [
+    { id: "ba-1", bankName: "BAC", accountAlias: "Operativa", accountNumber: "100200300", currencyCode: "NIO", owner: null },
+    { id: "ba-2", bankName: "Banpro", accountAlias: "Dólares", accountNumber: "500600700", currencyCode: "USD", owner: null },
+  ]);
+  if (path === "/api/cashier/exchange-rate") return ok(res, { usdToNioRate: MOCK_USD_RATE });
+
+  // Historial de Master: la venta de Rivas que se cobró como efectivo y fue transferencia (para probar "Corregir").
+  if (path === "/api/master/sales-orders" && method === "GET") return ok(res, { orders: [mockRivasSummary()] });
+  if (path === "/api/master/sales-orders/so-riv-1" && method === "GET") return ok(res, { order: mockRivasDetail() });
+  const correctMethod = path.match(/^\/api\/master\/payment-tenders\/([^/]+)\/correct-method$/);
+  if (correctMethod && method === "POST") {
+    const body = await readJson(req);
+    if (!String(body.referenceNumber ?? "").trim()) return send(res, 400, { ok: false, error: { code: "PAYMENT_REFERENCE_REQUIRED", message: "Falta la referencia." } });
+    mockRivasTender = { method: String(body.method), referenceNumber: String(body.referenceNumber) };
+    return ok(res, { paymentTenderId: correctMethod[1], method: body.method, amount: 7600 });
+  }
+  if (path === "/api/master/finance/summary") return ok(res, mockFinanceSummary());
+  if (path === "/api/master/finance/trend") return ok(res, { branchId: null, months: 12, points: [] });
   if (path === "/api/cashier/bank-accounts") return ok(res, [{ id: "ba-1", bankName: "BAC", accountAlias: "Operativa", accountNumber: "100200300", currencyCode: "NIO" }]);
   if (path === "/api/cashier/branch-people") return ok(res, [{ id: "u-2", fullName: "Elena Bermúdez", roleLabel: "Supervisora" }]);
   if (path === "/api/cashier/cash-sessions/active") {
@@ -660,7 +730,7 @@ const server = http.createServer(async (req, res) => {
     const difference = Math.round((countedCash - expectedCash) * 100) / 100;
     cash.status = "CLOSED";
     cash.counted = countedCash;
-    return ok(res, { status: "CLOSED", openingAmount: cash.opening, expectedCash, countedCash, difference, ...(difference !== 0 ? { warning: { code: "CASH_DIFFERENCE_RECORDED", difference, threshold: 0 } } : {}) });
+    return ok(res, { status: "CLOSED", openingAmount: cash.opening, expectedCash, countedCash, difference, expectedUsd: cash.usdPayments ?? 0, countedUsd: Number(body.countedUsdAmount ?? 0), ...(difference !== 0 ? { warning: { code: "CASH_DIFFERENCE_RECORDED", difference, threshold: 0 } } : {}) });
   }
   // Destino del efectivo al cerrar: obligatorio; si se recarga sin declarar, Caja lo vuelve a pedir.
   // El sencillo declarado es con lo que se propone abrir la próxima vez.
@@ -846,7 +916,51 @@ const server = http.createServer(async (req, res) => {
     });
   }
   if (path === "/api/catalog/products" && method === "GET") {
-    return ok(res, mockProducts.filter((p) => mockMatches(p, url.searchParams.get("q") ?? "")));
+    return ok(res, mockProducts.filter((p) => mockMatches(p, url.searchParams.get("q") ?? "")).map((p) => ({ ...p, effectivePrice: mockStandardPrices.get(p.id) ?? 100, availableSaleStock: 50 })));
+  }
+
+  if (path === "/api/sales/orders" && method === "GET") return ok(res, mockTicketJson());
+  const ticketLines = path.match(/^\/api\/sales\/orders\/([^/]+)\/lines(?:\/([^/]+))?$/);
+  if (ticketLines && method === "POST") {
+    const body = await readJson(req);
+    const productId = String(body.productId ?? "");
+    mockTicket.lines.push({ id: `sol-${randomUUID().slice(0, 6)}`, productId, quantity: Number(body.quantity ?? 1), unitPrice: mockStandardPrices.get(productId) ?? 100 });
+    return ok(res, mockTicketJson());
+  }
+  if (ticketLines?.[2] && method === "PATCH") {
+    const body = await readJson(req);
+    const line = mockTicket.lines.find((l) => l.id === ticketLines[2]);
+    if (line) line.quantity = Number(body.quantity ?? line.quantity);
+    return ok(res, mockTicketJson());
+  }
+  if (ticketLines?.[2] && method === "DELETE") {
+    mockTicket.lines = mockTicket.lines.filter((l) => l.id !== ticketLines[2]);
+    return ok(res, mockTicketJson());
+  }
+  const directSale = path.match(/^\/api\/sales\/orders\/([^/]+)\/direct-sale$/);
+  if (directSale && method === "POST") {
+    const body = await readJson(req);
+    type T = { method: "CASH" | "CARD" | "TRANSFER"; amount: number; receivedAmount?: number | null; changeAmount?: number | null; receivedUsdAmount?: number | null };
+    let tenders: ReturnType<typeof resolveUsdTenders<T>>;
+    try {
+      tenders = resolveUsdTenders((body.tenders ?? []) as T[], MOCK_USD_RATE);
+    } catch (error) {
+      return send(res, 400, { ok: false, error: { code: (error as Error).message, message: (error as Error).message } });
+    }
+    console.log("[mock] cobro", JSON.stringify(tenders));
+    const cash = [...mockCash.values()].find((c) => c.id === body.cashSessionId);
+    if (cash) {
+      for (const t of tenders) {
+        if (t.method !== "CASH") continue;
+        // Mismo invariante que expected-cash.ts: en dólares queda −vuelto en C$ y los US$ aparte.
+        cash.cashPayments += t.receivedUsdAmount == null ? t.amount : t.amount - (t.receivedAmount ?? t.amount);
+        if (t.receivedUsdAmount != null) cash.usdPayments = (cash.usdPayments ?? 0) + t.receivedUsdAmount;
+      }
+    }
+    const paid = { ...mockTicketJson(), status: "PAID" };
+    mockTicketSeq += 1;
+    mockTicket = { id: `so-mock-${mockTicketSeq}`, orderNumber: `CEN-MOCK-${String(mockTicketSeq).padStart(4, "0")}`, lines: [] };
+    return ok(res, paid);
   }
   const productMatch = path.match(/^\/api\/catalog\/products\/([^/]+)$/);
   if (productMatch && method === "PATCH") {

@@ -278,6 +278,7 @@ export async function autoCloseExpiredCashSessions(input: {
             autoClosedBySystem: true,
             autoClosedReason: AUTO_CLOSE_REASON,
             expectedCashAmount: decimal(expected.expectedCash),
+            expectedUsdAmount: expected.expectedUsd > 0 ? decimal(expected.expectedUsd) : null,
             countedCashAmount: null,
             differenceAmount: null,
             closingAmount: null,

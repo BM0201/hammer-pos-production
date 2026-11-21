@@ -15,7 +15,8 @@ import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
-import { bumpBankAccountUsageTx, recordSaleTenderEntriesTx } from "@/modules/treasury/service";
+import { bumpBankAccountUsageTx, getLatestUsdToNioRate, recordSaleTenderEntriesTx } from "@/modules/treasury/service";
+import { resolveUsdTenders } from "@/modules/payments/usd-tender";
 
 type PaymentTenderInput = {
   method: PaymentMethod;
@@ -25,6 +26,8 @@ type PaymentTenderInput = {
   referenceNumber?: string | null;
   /** Solo TRANSFER — a qué cuenta propia entró (correccion-destino-y-pantalla-cobro.md §2.2). */
   bankAccountId?: string | null;
+  /** Solo CASH en dólares: US$ entregados; el servidor recalcula receivedAmount/changeAmount con la tasa vigente. */
+  receivedUsdAmount?: number | null;
 };
 
 export async function listPendingPaymentOrders(params: { branchId: string; includeAllBranches: boolean }) {
@@ -231,7 +234,7 @@ export function normalizeTenders(input: {
   amount: number;
   method: PaymentMethod;
   referenceNumber?: string | null;
-  tenders?: PaymentTenderInput[];
+  tenders?: Array<PaymentTenderInput & { usdRate?: number | null }>;
 }) {
   const tenders = input.tenders?.length
     ? input.tenders
@@ -320,7 +323,8 @@ export async function postSaleOrderPayment(input: {
       }
 
       const orderTotal = new Prisma.Decimal(order.grandTotal);
-      const tenderSummary = normalizeTenders(input);
+      const usdRate = input.tenders?.some((t) => t.receivedUsdAmount != null) ? await getLatestUsdToNioRate() : null;
+      const tenderSummary = normalizeTenders({ ...input, tenders: input.tenders && resolveUsdTenders(input.tenders, usdRate) });
       const requestedAmount = tenderSummary.total;
       if (!requestedAmount.eq(orderTotal)) {
         throw attachAuditToError(new Error("INVALID_PAYMENT_AMOUNT"), {
@@ -470,6 +474,8 @@ export async function postSaleOrderPayment(input: {
             changeAmount: tender.changeAmount === null || tender.changeAmount === undefined ? null : new Prisma.Decimal(tender.changeAmount),
             referenceNumber: tender.referenceNumber ?? null,
             bankAccountId: tender.method === PaymentMethod.TRANSFER ? tender.bankAccountId ?? null : null,
+            receivedUsdAmount: "receivedUsdAmount" in tender && tender.receivedUsdAmount != null ? new Prisma.Decimal(tender.receivedUsdAmount) : null,
+            usdRate: "usdRate" in tender && tender.usdRate != null ? new Prisma.Decimal(tender.usdRate) : null,
           })),
         });
         await bumpBankAccountUsageTx(tx, tenderSummary.tenders.filter((t) => t.method === PaymentMethod.TRANSFER).map((t) => t.bankAccountId));

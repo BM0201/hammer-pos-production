@@ -15,7 +15,8 @@ import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-servi
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
 import { resolveCancellationCashPlan, type CashRefundHandling } from "@/modules/sales/cancellation-cash-policy";
-import { bumpBankAccountUsageTx, recordSaleTenderEntriesTx } from "@/modules/treasury/service";
+import { bumpBankAccountUsageTx, getLatestUsdToNioRate, recordSaleTenderEntriesTx } from "@/modules/treasury/service";
+import { resolveUsdTenders } from "@/modules/payments/usd-tender";
 
 type DirectSaleTenderInput = {
   method: PaymentMethod;
@@ -25,6 +26,8 @@ type DirectSaleTenderInput = {
   referenceNumber?: string | null;
   /** Solo TRANSFER — a qué cuenta propia entró (correccion-destino-y-pantalla-cobro.md §2.2). */
   bankAccountId?: string | null;
+  /** Solo CASH en dólares: US$ entregados; el servidor recalcula receivedAmount/changeAmount con la tasa vigente. */
+  receivedUsdAmount?: number | null;
 };
 
 // FIX BUG-010: Use crypto-random suffix instead of Date.now() to prevent collisions
@@ -766,7 +769,7 @@ export function normalizeDirectSaleTenders(input: {
   amount: number;
   method: PaymentMethod;
   referenceNumber?: string | null;
-  tenders?: DirectSaleTenderInput[];
+  tenders?: Array<DirectSaleTenderInput & { usdRate?: number | null }>;
 }) {
   const tenders = input.tenders?.length
     ? input.tenders
@@ -966,11 +969,12 @@ export async function submitDirectSale(input: {
       },
     });
 
+    const usdRate = input.tenders?.some((t) => t.receivedUsdAmount != null) ? await getLatestUsdToNioRate() : null;
     const tenderSummary = normalizeDirectSaleTenders({
       amount: Number(grandTotal),
       method: input.method,
       referenceNumber: input.referenceNumber,
-      tenders: input.tenders,
+      tenders: input.tenders && resolveUsdTenders(input.tenders, usdRate),
     });
     if (!tenderSummary.total.eq(grandTotal)) throw new Error("INVALID_PAYMENT_AMOUNT");
 
@@ -1003,6 +1007,8 @@ export async function submitDirectSale(input: {
         changeAmount: tender.changeAmount === null || tender.changeAmount === undefined ? null : new Prisma.Decimal(tender.changeAmount),
         referenceNumber: tender.referenceNumber ?? null,
         bankAccountId: tender.method === PaymentMethod.TRANSFER ? tender.bankAccountId ?? null : null,
+        receivedUsdAmount: "receivedUsdAmount" in tender && tender.receivedUsdAmount != null ? new Prisma.Decimal(tender.receivedUsdAmount) : null,
+        usdRate: "usdRate" in tender && tender.usdRate != null ? new Prisma.Decimal(tender.usdRate) : null,
       })),
     });
     await bumpBankAccountUsageTx(tx, tenderSummary.tenders.filter((t) => t.method === PaymentMethod.TRANSFER).map((t) => t.bankAccountId));
@@ -1899,6 +1905,7 @@ export async function getSaleOrderDetailForManagement(
         amount: Number(t.amount),
         receivedAmount: t.receivedAmount != null ? Number(t.receivedAmount) : null,
         changeAmount: t.changeAmount != null ? Number(t.changeAmount) : null,
+        receivedUsdAmount: t.receivedUsdAmount != null ? Number(t.receivedUsdAmount) : null,
         referenceNumber: t.referenceNumber ?? null,
       })),
     })),

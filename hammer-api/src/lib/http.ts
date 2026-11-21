@@ -351,6 +351,15 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "INVALID_CASH_CHANGE_AMOUNT") {
       return errJson("INVALID_CASH_CHANGE_AMOUNT", "El cambio registrado no coincide con el monto recibido menos el total.", 400);
     }
+    if (error.message === "USD_RATE_MISSING") {
+      return errJson("USD_RATE_MISSING", "No hay tipo de cambio: Master debe fijarlo en Tesorería antes de cobrar en dólares.", 400);
+    }
+    if (error.message === "USD_RATE_CHANGED") {
+      return errJson("USD_RATE_CHANGED", "El tipo de cambio cambió mientras cobrabas. Cierra el cobro y vuelve a abrirlo para ver el vuelto correcto.", 409);
+    }
+    if (error.message === "USD_TENDER_MUST_BE_CASH") {
+      return errJson("USD_TENDER_MUST_BE_CASH", "Los dólares solo se cobran en efectivo.", 400);
+    }
     if (error.message === "PAYMENT_INVALID_STATUS" || error.message === "PAYMENT_ALREADY_POSTED") {
       return errJson("CONFLICT", "La orden ya no está disponible para pago.", 409);
     }

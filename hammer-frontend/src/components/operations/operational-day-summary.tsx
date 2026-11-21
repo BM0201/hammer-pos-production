@@ -63,6 +63,8 @@ export type CashSessionRow = {
   /** Dólares contados al cierre: aparte, no suman al contado en córdobas. */
   countedUsdAmount?: string | number | null;
   countedUsdRate?: string | number | null;
+  /** US$ que debía haber (cobros en dólares). */
+  expectedUsdAmount?: string | number | null;
   openedAt: string;
   closedAt?: string | null;
   autoClosedAt?: string | null;

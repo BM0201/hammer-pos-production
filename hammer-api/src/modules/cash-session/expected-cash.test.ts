@@ -20,6 +20,8 @@ import { CashMovementType, PaymentMethod } from "@prisma/client";
 import {
   cashMovementsNetTotal,
   cashTenderTotal,
+  cashTenderTotalDecimal,
+  usdTenderTotalDecimal,
   computeExpectedCash,
   tenderTotalsByMethod,
 } from "./expected-cash";
@@ -96,4 +98,13 @@ describe("resumen del día operativo (tenders CASH sin restar vuelto)", () => {
     });
     assert.equal(expected, 2000 + 1350 - 200);
   });
+});
+
+it("cobro en dólares: en córdobas deja −vuelto, en dólares deja lo entregado", () => {
+  const tenders = [
+    { method: PaymentMethod.CASH, amount: 1335, receivedAmount: 1464.97, changeAmount: 129.97, receivedUsdAmount: 40 },
+    { method: PaymentMethod.CASH, amount: 850, receivedAmount: 1000, changeAmount: 150 },
+  ];
+  assert.equal(cashTenderTotalDecimal(tenders).toNumber(), 850 - 129.97);
+  assert.equal(usdTenderTotalDecimal(tenders).toNumber(), 40);
 });

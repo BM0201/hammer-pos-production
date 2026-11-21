@@ -33,13 +33,27 @@ export async function calculateExpectedCashForSessionTx(
     _sum: { changeAmount: true },
   });
 
+  // Cobros en dólares: su receivedAmount (C$) no está en la gaveta en córdobas,
+  // está en US$ — ver excepción en expected-cash.ts.
+  const usdAggregate = await tx.paymentTender.aggregate({
+    where: {
+      method: PaymentMethod.CASH,
+      receivedUsdAmount: { not: null },
+      payment: { cashSessionId, status: PaymentStatus.POSTED },
+    },
+    _sum: { receivedAmount: true, receivedUsdAmount: true },
+  });
+
   const cashMovements = await tx.cashMovement.findMany({
     where: { cashSessionId },
     select: { type: true, amount: true },
   });
 
   const opening = Number(openingAmount);
-  const postedCashPayments = Number(cashTenderAggregate._sum.amount ?? 0);
+  const postedCashPayments = new Prisma.Decimal(cashTenderAggregate._sum.amount ?? 0)
+    .sub(usdAggregate._sum.receivedAmount ?? 0)
+    .toNumber();
+  const expectedUsd = Number(usdAggregate._sum.receivedUsdAmount ?? 0);
   const cashChange = Number(changeAggregate._sum.changeAmount ?? 0);
   const movementNet = cashMovementsNetTotal(
     cashMovements.map((movement) => ({ type: movement.type, amount: Number(movement.amount) })),
@@ -62,6 +76,7 @@ export async function calculateExpectedCashForSessionTx(
     cashMovementsNet: movementNet,
     cashChange,
     expectedCash,
+    expectedUsd,
   };
 }
 
@@ -616,7 +631,7 @@ export async function closeCashSession(input: {
       throw new Error("CASH_SESSION_HAS_PENDING_PAYMENTS");
     }
 
-    const { openingAmount, postedCashPayments, refundsOrWithdrawals, cashChange, expectedCash } =
+    const { openingAmount, postedCashPayments, refundsOrWithdrawals, cashChange, expectedCash, expectedUsd } =
       await calculateExpectedCashForSessionTx(tx, session.id, session.openingAmount);
     const countedCash = Number(input.closingAmount);
     const difference = countedCash - expectedCash;
@@ -685,6 +700,7 @@ export async function closeCashSession(input: {
         countedCashAmount: toDecimal(countedCash),
         differenceAmount: toDecimal(difference),
         ...(await usdCountData(tx, input.countedUsdAmount)),
+        expectedUsdAmount: expectedUsd > 0 ? toDecimal(expectedUsd) : null,
         requiresReview: false,
         notes: input.notes ?? session.notes,
       },
@@ -723,6 +739,8 @@ export async function closeCashSession(input: {
       countedCash,
       difference,
       threshold,
+      expectedUsd,
+      countedUsd: Number(input.countedUsdAmount ?? 0),
     };
   });
 }

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch } from "@/lib/client/api";
 import { openPrintableDocument, printHtml, recordPrintAudit } from "@/lib/printing";
-import { money } from "@/lib/format";
+import { money, usdMoney } from "@/lib/format";
 import type { ComposedTender } from "@/components/payments/payment-composer";
 
 /**
@@ -129,7 +129,7 @@ export function PrintModal({ orderId, orderNumber, tenders, onClose }: PrintModa
   const total = tenders && tenders.length > 0 ? tenders.reduce((sum, t) => sum + t.amount, 0) : null;
   const change = tenders?.find((t) => t.method === "CASH")?.changeAmount ?? 0;
   const breakdown = tenders && tenders.length > 0
-    ? tenders.map((t) => `${METHOD_LABEL[t.method] ?? t.method} ${money(t.amount)}`).join(" · ")
+    ? tenders.map((t) => (t.receivedUsdAmount ? `Dólares ${usdMoney(t.receivedUsdAmount)} = ${money(t.receivedAmount)}` : `${METHOD_LABEL[t.method] ?? t.method} ${money(t.amount)}`)).join(" · ")
     : null;
 
   return (

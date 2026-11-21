@@ -10,6 +10,8 @@ export const paymentTenderSchema = z
     changeAmount: z.coerce.number().min(0).optional().nullable(),
     referenceNumber: z.string().max(100).optional().nullable(),
     bankAccountId: z.string().cuid().optional().nullable(),
+    /** Cobro en dólares (solo CASH): US$ que entregó el cliente. */
+    receivedUsdAmount: positiveMoneySchema.optional().nullable(),
   })
   // TRANSFER sin cuenta destino es plata que el libro mayor no puede
   // ubicar en ningún banco — mismo criterio que el control en el servicio

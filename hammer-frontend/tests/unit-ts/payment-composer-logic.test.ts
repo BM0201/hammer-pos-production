@@ -20,7 +20,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { quickCashAmounts } from "@/components/payments/payment-composer";
+import { quickCashAmounts, quickUsdAmounts, usdToNio } from "@/components/payments/payment-composer";
 
 type TenderMethod = "CASH" | "CARD" | "TRANSFER";
 type DraftLine = { id: string; method: TenderMethod; amountRaw: string; receivedRaw: string; referenceNumber: string; bankAccountId: string };
@@ -253,5 +253,19 @@ describe("quickCashAmounts: casos base", () => {
     for (const total of [1, 45, 45.5, 890, 1000, 1200, 12345]) {
       assert.ok(quickCashAmounts(total).length <= 4, `total=${total}`);
     }
+  });
+});
+
+describe("cobro en dólares (misma cuenta que el servidor, usd-tender.ts)", () => {
+  it("US$40 a 36.6243 equivale a C$1,464.97", () => {
+    assert.equal(usdToNio(40, 36.6243), 1464.97);
+  });
+  it("redondea .5 hacia arriba sin error de flotante", () => {
+    // 0.05 × 36.5 = 1.825 → 1.83 (en flotante 1.825 * 100 da 182.49999…)
+    assert.equal(usdToNio(0.05, 36.5), 1.83);
+  });
+  it("montos rápidos: el mínimo que alcanza y billetes redondos", () => {
+    assert.deepEqual(quickUsdAmounts(1335, 36.6243), [37, 40, 50, 100]);
+    assert.ok(usdToNio(37, 36.6243) >= 1335);
   });
 });

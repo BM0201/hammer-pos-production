@@ -125,7 +125,7 @@ export async function calculateOperationalSummaryTx(
           saleOrder: { branchId: day.branchId, status: { not: SaleOrderStatus.CANCELLED } },
         },
       },
-      select: { method: true, amount: true, changeAmount: true },
+      select: { method: true, amount: true, changeAmount: true, receivedAmount: true, receivedUsdAmount: true },
     }),
     tx.cashMovement.findMany({
       where: { cashSession: { operationalDayId: day.id } },
@@ -139,7 +139,7 @@ export async function calculateOperationalSummaryTx(
         operationalDayId: day.id,
         payment: { status: PaymentStatus.POSTED, saleOrder: { status: { not: SaleOrderStatus.CANCELLED } } },
       },
-      select: { method: true, amount: true, changeAmount: true },
+      select: { method: true, amount: true, changeAmount: true, receivedAmount: true, receivedUsdAmount: true },
     }),
     tx.saleOrder.count({ where: { operationalDayId: day.id } }),
     tx.saleOrder.count({ where: { branchId: day.branchId, createdAt: { gte: start, lt: end } } }),
@@ -351,11 +351,11 @@ export async function closeOrphanedCashSessionsForDayTx(tx: Prisma.TransactionCl
     const [cashTenders, cashMovements] = await Promise.all([
       tx.paymentTender.findMany({
         where: { method: PaymentMethod.CASH, payment: { cashSessionId: session.id, status: PaymentStatus.POSTED } },
-        select: { amount: true },
+        select: { amount: true, receivedAmount: true, receivedUsdAmount: true },
       }),
       tx.cashMovement.findMany({ where: { cashSessionId: session.id }, select: { type: true, amount: true } }),
     ]);
-    const postedCashPayments = cashTenderTotalDecimal(cashTenders.map((t) => ({ method: PaymentMethod.CASH, amount: t.amount })));
+    const postedCashPayments = cashTenderTotalDecimal(cashTenders.map((t) => ({ ...t, method: PaymentMethod.CASH })));
     const cashMovementsNet = cashMovementsNetTotalDecimal(cashMovements);
     const expectedCash = computeExpectedCashDecimal({ openingAmount: session.openingAmount, postedCashPayments, cashMovementsNet });
 
