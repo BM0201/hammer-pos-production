@@ -98,6 +98,7 @@ function buildFakeDb(opts: {
     refund: { findMany: async () => [] },
     inventoryMovement: { findMany: async () => [] },
     purchaseOrder: { findMany: async () => [] },
+    cashSession: { findMany: async () => [] },
   } as never;
 }
 

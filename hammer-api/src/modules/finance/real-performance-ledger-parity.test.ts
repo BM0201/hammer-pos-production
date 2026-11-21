@@ -67,6 +67,11 @@ function buildFakeDb() {
     refund: { findMany: async () => [] },
     inventoryMovement: { findMany: async () => [] },
     purchaseOrder: { findMany: async () => [] },
+    cashSession: {
+      findMany: async () => [
+        { id: "cs-1", closedAt: new Date("2026-10-20T23:00:00Z"), differenceAmount: decimal(120), physicalCashBox: { code: "CAJA-1", branchId: "branch-1" }, closedBy: { fullName: "Ana Pérez", username: "ana" } },
+      ],
+    },
   };
 
   return db as never;
@@ -84,4 +89,13 @@ test("LA QUE IMPORTA — computeRealPerformance.operatingExpenses === suma del l
   // + 5000*(13500/10000)=6750 (planilla a costo empresa) = 7635.
   assert.ok(Math.abs(ledgerTotal - 7635) < 0.01, "sanity check del fixture");
   assert.ok(Math.abs(performance.operatingExpenses - ledgerTotal) < 0.01, "computeRealPerformance debe sumar EXACTAMENTE lo mismo que el libro");
+});
+
+test("sobrante de caja: entra como ingreso aparte — no toca gastos, sí la utilidad", async () => {
+  const performance = await computeRealPerformance(null, START, END, { monthlyTotal: 0 }, buildFakeDb());
+  assert.equal(performance.cashOverages, 120);
+  assert.equal(performance.cashOverageItems.length, 1);
+  assert.equal(performance.cashOverageItems[0].branchCode, "MSY");
+  assert.ok(Math.abs(performance.operatingProfit - (performance.grossProfit - performance.operatingExpenses + 120)) < 0.01);
+  assert.equal(performance.byBranch[0].cashOverages, 120);
 });

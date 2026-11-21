@@ -7,7 +7,7 @@ import {
 import { TrendingUp, TrendingDown, Wallet, Receipt, Users, Landmark, Info, ChevronLeft, ChevronRight, RefreshCw, Building2 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { showToast } from "@/components/ui/toast";
-import { money } from "@/lib/format";
+import { money, fmtDateTimeShort } from "@/lib/format";
 
 /* ── Tipos del endpoint oficial: /api/master/finance/summary (finance/service.ts) ── */
 
@@ -26,7 +26,17 @@ type BranchRow = {
   retainedCashExpenses: number;
   payrollPaid: number;
   operatingExpenses: number;
+  cashOverages: number;
   operatingProfit: number;
+};
+
+type CashOverageItem = {
+  cashSessionId: string;
+  branchCode: string | null;
+  cashBoxCode: string | null;
+  closedAt: string;
+  closedByName: string | null;
+  amount: number;
 };
 
 type FinanceSummary = {
@@ -53,6 +63,8 @@ type FinanceSummary = {
     retainedCashExpenses: number;
     payrollPaid: number;
     operatingExpenses: number;
+    cashOverages: number;
+    cashOverageItems: CashOverageItem[];
     expensesBudgetMonthly: number;
     operatingProfit: number;
     estimatedNetProfit: number;
@@ -76,6 +88,7 @@ type TrendPoint = {
   bankExpenses: number;
   retainedCashExpenses: number;
   payrollPaid: number;
+  cashOverages: number;
   operatingProfit: number;
 };
 
@@ -114,7 +127,7 @@ function Card({
 
 function PnlRow({
   label, value, kind = "line", percent,
-}: { label: string; value: number; kind?: "line" | "minus" | "subtotal" | "total"; percent?: number | null }) {
+}: { label: string; value: number; kind?: "line" | "minus" | "plus" | "subtotal" | "total"; percent?: number | null }) {
   const isResult = kind === "subtotal" || kind === "total";
   const color =
     kind === "total"
@@ -128,7 +141,7 @@ function PnlRow({
       style={{ borderColor: isResult ? "var(--color-border-strong)" : undefined }}
     >
       <span className={`text-xs ${isResult ? "font-bold" : ""}`} style={{ color: isResult ? "var(--color-text)" : "var(--color-text-muted)" }}>
-        {kind === "minus" ? "(−) " : isResult ? "= " : ""}{label}
+        {kind === "minus" ? "(−) " : kind === "plus" ? "(+) " : isResult ? "= " : ""}{label}
       </span>
       <span className={`tabular-nums text-sm ${isResult ? "font-bold" : "font-medium"}`} style={{ color, fontFamily: "'DM Mono', ui-monospace, monospace" }}>
         {kind === "minus" && value > 0 ? `(${money(value)})` : money(value)}
@@ -397,7 +410,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                 </ResponsiveContainer>
               </div>
               <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                Barras = ingresos netos cobrados · línea = utilidad operativa real (ingresos − COGS − gastos de caja − banco − efectivo retenido − planilla pagada).
+                Barras = ingresos netos cobrados · línea = utilidad operativa real (ingresos − COGS − gastos de caja − banco − efectivo retenido − planilla pagada + sobrante de caja).
                 El mes en curso se ve parcial hasta cerrarlo.
               </p>
             </section>
@@ -424,11 +437,35 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                 <PnlRow label="Gastos pagados desde banco" value={perf.bankExpenses} kind="minus" />
                 <PnlRow label="Gastos con efectivo retenido" value={perf.retainedCashExpenses} kind="minus" />
                 <PnlRow label="Planilla pagada" value={perf.payrollPaid} kind="minus" />
+                <PnlRow label="Sobrante de caja" value={perf.cashOverages} kind="plus" />
                 <PnlRow label="Utilidad operativa" value={perf.operatingProfit} kind="total" />
+                {perf.cashOverageItems.length > 0 && (
+                  <details className="mt-2 rounded-md px-2 py-1.5 text-xs" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+                    <summary className="cursor-pointer py-1 font-medium" style={{ color: "var(--color-text-secondary)" }}>
+                      Revisar {perf.cashOverageItems.length === 1 ? "1 caja con sobrante" : `${perf.cashOverageItems.length} cajas con sobrante`}
+                    </summary>
+                    <p className="mb-1.5 text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+                      Sobró dinero al contar. Si fue un cobro anotado como tarjeta o transferencia que en verdad fue efectivo, o un vuelto mal dado, revísalo con quien cerró.
+                    </p>
+                    <ul className="divide-y" style={{ borderColor: "var(--color-border)" }}>
+                      {perf.cashOverageItems.map((o) => (
+                        <li key={o.cashSessionId} className="flex items-baseline justify-between gap-3 py-1.5">
+                          <span style={{ color: "var(--color-text-secondary)" }}>
+                            <b style={{ color: "var(--color-text)" }}>{o.branchCode ?? "—"}</b>
+                            {o.cashBoxCode ? ` · ${o.cashBoxCode}` : ""} · {fmtDateTimeShort(o.closedAt)}
+                            {o.closedByName ? ` · ${o.closedByName}` : ""}
+                          </span>
+                          <span className="tabular-nums font-medium" style={{ color: "var(--color-success-700)" }}>{money(o.amount)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
                 <p className="mt-2 text-[10px] leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
                   Gastos de caja = egresos que cada sucursal pagó desde la gaveta abierta · gastos de banco = pagos a
                   proveedor/gasto desde una cuenta bancaria registrada · efectivo retenido = gastos pagados con dinero
-                  ya cerrado en caja fuerte, esperando depósito — ninguno incluye planilla (va aparte, a costo empresa).
+                  ya cerrado en caja fuerte, esperando depósito — ninguno incluye planilla (va aparte, a costo empresa) ·
+                  sobrante de caja = lo que sobró al contar las cajas cerradas (contado − esperado), ingreso aparte.
                 </p>
               </div>
 
@@ -489,7 +526,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
             <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
               Reglas (todo en base caja, corte mensual hora Managua): ventas netas = pagos cobrados − reembolsos ·
               COGS = costo de salidas por venta − reingresos vendibles por devolución (lo dañado queda como merma) ·
-              utilidad operativa = utilidad bruta − gastos REALES pagados (egresos de caja de sucursal + banco + efectivo retenido + planilla desembolsada).
+              utilidad operativa = utilidad bruta − gastos REALES pagados (egresos de caja de sucursal + banco + efectivo retenido + planilla desembolsada) + sobrante de caja.
               El presupuesto mensual configurado se compara aparte, no se resta.
             </p>
           </section>
