@@ -674,9 +674,10 @@ export default function MasterOperationsPage() {
               </Card>
 
               <Card className="space-y-3 p-4">
-                <div className="hm-section-rule flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" /> Horario de referencia</div>
+                <div className="hm-section-rule flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" /> Horario del negocio</div>
                 <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
-                  Puramente informativo — ningún horario abre ni cierra el día. Solo alimenta lo que ven cajeros y Master como referencia habitual.
+                  Ningún horario abre ni cierra el día. <strong className="text-[var(--color-text)]">20 minutos antes del cierre</strong> la caja avisa que hay que contar la gaveta
+                  (ej. cierre 17:00 → aviso 16:40).
                 </p>
                 {!schedule ? (
                   <p className="text-sm text-[var(--color-text-muted)]">Cargando…</p>
@@ -714,7 +715,7 @@ export default function MasterOperationsPage() {
                   </>
                 )}
                 <div className="hm-alert hm-alert-info">
-                  La hora de corte de caja (bloqueo real de venta nocturna) se administra aparte, en{" "}
+                  La hora en que la caja se cierra sola (después del cierre del negocio) se administra aparte, en{" "}
                   <a href="/app/master/settings/cash-auto-close" className="font-semibold text-[var(--color-master-600)] hover:underline">Cierre automático de cajas</a>.
                 </div>
               </Card>

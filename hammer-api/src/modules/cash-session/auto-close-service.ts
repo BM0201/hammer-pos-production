@@ -63,7 +63,7 @@ function localParts(now: Date, timezone = DEFAULT_TIMEZONE): LocalParts {
  * Resolve the auto-close deadline for "now" given a configuration.
  *
  * The closing time is configurable per day-type (weekday / Saturday / Sunday) and
- * defaults to 17:00 (5:00 PM) on weekdays, 15:00 (3:00 PM) on Saturdays, disabled on Sundays.
+ * defaults to 17:30 (5:30 PM) on weekdays, 15:30 (3:30 PM) on Saturdays, disabled on Sundays.
  * Pure function (no I/O) — the caller passes the config it loaded once.
  */
 export function getCashAutoCloseDeadline(
@@ -120,22 +120,39 @@ export function getCashAutoCloseInstant(now: Date, config: CashAutoCloseConfig =
   return new Date(getOperationalWindowForManaguaDate(now).start.getTime() + (hour * 60 + minute) * 60_000);
 }
 
-/** Minutos antes del cierre automático en que la caja avisa y el esperado se esconde. */
+/** Minutos antes del cierre del negocio en que la caja avisa que hay que contar. */
 export const CASH_COUNT_LEAD_MINUTES = 20;
 
+/** Hora de cierre del negocio (horario de referencia de Día Operativo). */
+export type BusinessCloseTimes = Pick<CashAutoCloseConfig, "timezone" | "weekdayCloseTime" | "saturdayCloseTime" | "sundayCloseTime">;
+
 /**
- * Desde cuándo se cuenta a ciegas: 20 min antes del cierre de hoy. Desde ahí la
- * sucursal ya no ve cuánto debe haber en la gaveta (para que el conteo no se
- * acomode a la cifra); la diferencia se ve al cerrar. null si hoy no cierra solo.
+ * Desde cuándo se avisa y se cuenta a ciegas: 20 min antes del cierre del
+ * NEGOCIO (no del cierre automático de caja, que es aparte y más tarde). Si el
+ * negocio está configurado después del cierre de caja, manda el de caja, para
+ * que el aviso nunca llegue tarde. Desde ahí la sucursal no ve cuánto debe
+ * haber en la gaveta; la diferencia se ve al cerrar. null si hoy no hay cierre.
  */
-export function getBlindCountStart(now: Date, config: CashAutoCloseConfig = DEFAULT_CASH_AUTO_CLOSE_CONFIG): Date | null {
-  const closeAt = getCashAutoCloseInstant(now, config);
-  return closeAt ? new Date(closeAt.getTime() - CASH_COUNT_LEAD_MINUTES * 60_000) : null;
+export function getBlindCountStart(
+  now: Date,
+  config: CashAutoCloseConfig = DEFAULT_CASH_AUTO_CLOSE_CONFIG,
+  business: BusinessCloseTimes | null = null,
+): Date | null {
+  const closes = [
+    getCashAutoCloseInstant(now, config),
+    business ? getCashAutoCloseInstant(now, { ...business, enabled: true }) : null,
+  ].filter((d): d is Date => d !== null);
+  if (closes.length === 0) return null;
+  return new Date(Math.min(...closes.map((d) => d.getTime())) - CASH_COUNT_LEAD_MINUTES * 60_000);
 }
 
 /** true si a esta hora la sucursal no debe ver el efectivo esperado. */
-export function isBlindCountTime(now: Date, config: CashAutoCloseConfig = DEFAULT_CASH_AUTO_CLOSE_CONFIG): boolean {
-  const start = getBlindCountStart(now, config);
+export function isBlindCountTime(
+  now: Date,
+  config: CashAutoCloseConfig = DEFAULT_CASH_AUTO_CLOSE_CONFIG,
+  business: BusinessCloseTimes | null = null,
+): boolean {
+  const start = getBlindCountStart(now, config, business);
   return start !== null && now.getTime() >= start.getTime();
 }
 

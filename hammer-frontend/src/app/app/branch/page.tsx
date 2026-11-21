@@ -42,7 +42,7 @@ type DayView = {
     boxCode: string;
     boxName: string | null;
     openedByName: string;
-    /** Desde 20 min antes del cierre automático: hora de contar la gaveta. */
+    /** Desde 20 min antes del cierre del negocio: hora de contar la gaveta. */
     countTime: boolean;
   }> | null;
   sales: {

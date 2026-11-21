@@ -4,6 +4,7 @@ import { isMaster } from "@/modules/rbac/guards";
 import { getActiveCashSessionSchema } from "@/modules/cash-session/validators";
 import { getActiveCashSession, logCashSessionDenied } from "@/modules/cash-session/service";
 import { getCashAutoCloseConfig } from "@/modules/cash-session/auto-close-config";
+import { getOperationalDayAutoConfig } from "@/modules/operations/auto-day-config";
 import { isBlindCountTime } from "@/modules/cash-session/auto-close-service";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
@@ -66,8 +67,8 @@ export async function GET(request: Request) {
     }
 
     // Conteo a ciegas: la sucursal nunca ve cuánto debe haber; se ve al cerrar el turno.
-    // blindCount = hora del conteo (contando, o desde 20 min antes del cierre automático).
-    const blindCount = data.status === "RECONCILING" || isBlindCountTime(new Date(), await getCashAutoCloseConfig());
+    // blindCount = hora del conteo (contando, o desde 20 min antes del cierre del negocio).
+    const blindCount = data.status === "RECONCILING" || isBlindCountTime(new Date(), await getCashAutoCloseConfig(), await getOperationalDayAutoConfig());
 
     return ok({
       ...data,

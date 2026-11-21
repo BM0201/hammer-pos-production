@@ -10,6 +10,7 @@ import { businessDateFromNow } from "@/modules/operations/service";
 import { z } from "zod";
 import { getCashAutoCloseConfig } from "@/modules/cash-session/auto-close-config";
 import { getBlindCountStart, getCashAutoCloseInstant } from "@/modules/cash-session/auto-close-service";
+import { getOperationalDayAutoConfig } from "@/modules/operations/auto-day-config";
 
 const querySchema = z.object({
   branchId: z.string().cuid(),
@@ -113,10 +114,10 @@ export async function GET(request: Request) {
       }
     }
 
-    // Para avisar en la caja antes del cierre automático (pedir conteo y destino a tiempo).
-    const autoCloseConfig = hasOpenCashSession ? await getCashAutoCloseConfig() : null;
+    // Aviso de contar: 20 min antes del cierre del negocio; cashAutoCloseAt es aparte (la caja se cierra sola).
+    const [autoCloseConfig, businessHours] = hasOpenCashSession ? await Promise.all([getCashAutoCloseConfig(), getOperationalDayAutoConfig()]) : [null, null];
     const cashAutoCloseAt = autoCloseConfig ? getCashAutoCloseInstant(new Date(), autoCloseConfig) : null;
-    const cashCountFrom = autoCloseConfig ? getBlindCountStart(new Date(), autoCloseConfig) : null;
+    const cashCountFrom = autoCloseConfig ? getBlindCountStart(new Date(), autoCloseConfig, businessHours) : null;
 
     return ok({
       workflow,

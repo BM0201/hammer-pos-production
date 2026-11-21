@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getBranchSalesRealtimeSummary, getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import { getCashAutoCloseConfig } from "@/modules/cash-session/auto-close-config";
+import { getOperationalDayAutoConfig } from "@/modules/operations/auto-day-config";
 import { isBlindCountTime } from "@/modules/cash-session/auto-close-service";
 import { buildPendingList, PACE_WINDOW_DAYS, rankSoldStock, type PendingKey } from "@/modules/dashboard/my-day";
 
@@ -71,7 +72,7 @@ export async function getBranchDayView(branchId: string, userId: string, access:
   ]);
 
   // Desde 20 min antes del cierre: hora del conteo (la sucursal nunca ve cuánto debe haber).
-  const countTime = access.cash && isBlindCountTime(new Date(), await getCashAutoCloseConfig());
+  const countTime = access.cash && isBlindCountTime(new Date(), await getCashAutoCloseConfig(), await getOperationalDayAutoConfig());
 
   return {
     branchId,

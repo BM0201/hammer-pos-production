@@ -3,10 +3,10 @@ import { prisma } from "@/lib/prisma";
 const OPERATIONAL_DAY_AUTO_SETTING_KEY = "operational_day_auto_config";
 
 /**
- * Horario de referencia — Día Operativo 360. Puramente informativo: no abre
- * ni cierra nada por sí solo (el día se crea con la primera operación, y
- * confirmarlo es siempre un acto humano). Solo alimenta lo que la UI muestra
- * en Ajustes ("normalmente abrís a las 07:00, cerrás a las 17:30").
+ * Horario de referencia del negocio — Día Operativo 360. No abre ni cierra
+ * nada por sí solo (el día se crea con la primera operación, y confirmarlo es
+ * siempre un acto humano). Lo muestra Ajustes y de su hora de cierre sale el
+ * aviso de contar la gaveta (20 min antes; ver getBlindCountStart).
  */
 export interface OperationalDayAutoConfig {
   timezone: string;
@@ -23,8 +23,8 @@ const DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG: OperationalDayAutoConfig = {
   weekdayOpenTime: "07:00",
   saturdayOpenTime: "07:00",
   sundayOpenTime: null,
-  weekdayCloseTime: "18:30",
-  saturdayCloseTime: "17:00",
+  weekdayCloseTime: "17:00",
+  saturdayCloseTime: "15:00",
   sundayCloseTime: null,
 };
 
