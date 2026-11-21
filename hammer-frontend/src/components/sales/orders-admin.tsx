@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { apiFetch } from "@/lib/client/api";
+import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, fmtDateTimeShort } from "@/lib/format";
 import { useSession } from "@/lib/client/session";
 import { isMasterOrAbove } from "@/modules/rbac/role-routing";
@@ -131,6 +131,7 @@ type OrderDetail = {
       amount: number;
       receivedAmount: number | null;
       changeAmount: number | null;
+      receivedUsdAmount?: number | null;
       referenceNumber: string | null;
     }[];
   }[];
@@ -274,12 +275,12 @@ function detectProblems(o: OrderSummary): string[] {
 // ─── Badge ────────────────────────────────────────────────────────────────────
 
 const badgeStyles: Record<BadgeColor, string> = {
-  green: "bg-[var(--color-success-100)] text-[var(--color-success-800)] border-[var(--color-success-300)]",
-  yellow: "bg-[var(--color-warning-100)] text-[var(--color-warning-800)] border-[var(--color-warning-300)]",
-  red: "bg-[var(--color-danger-100)] text-[var(--color-danger-800)] border-[var(--color-danger-300)]",
+  green: "bg-[var(--color-success-100)] text-[var(--color-success-700)] border-[var(--color-success-300)]",
+  yellow: "bg-[var(--color-warning-100)] text-[var(--color-warning-700)] border-[var(--color-warning-300)]",
+  red: "bg-[var(--color-danger-100)] text-[var(--color-danger-700)] border-[var(--color-danger-300)]",
   gray: "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] border-[var(--color-border)]",
-  blue: "bg-[var(--color-info-100)] text-[var(--color-info-800)] border-[var(--color-info-300)]",
-  purple: "bg-[var(--color-master-100)] text-[var(--color-master-800)] border-[var(--color-master-300)]",
+  blue: "bg-[var(--color-info-100)] text-[var(--color-info-700)] border-[var(--color-info-300)]",
+  purple: "bg-[var(--color-master-100)] text-[var(--color-master-700)] border-[var(--color-master-300)]",
 };
 
 function Badge({ color, children }: { color: BadgeColor; children: React.ReactNode }) {
@@ -374,6 +375,116 @@ function CancelModal({
 // ─── Detail Panel ─────────────────────────────────────────────────────────────
 
 type DetailTab = "resumen" | "productos" | "pago" | "factura" | "auditoria";
+
+const METHOD_LABEL: Record<string, string> = { CASH: "Efectivo", CARD: "Tarjeta", TRANSFER: "Transferencia", MIXED: "Combinado" };
+const methodLabel = (m: string) => METHOD_LABEL[m] ?? m;
+
+type CorrectAccount = { id: string; bankName: string; accountAlias: string; currencyCode: string };
+
+/**
+ * Master: un cobro anotado como efectivo que en verdad entró por tarjeta o
+ * transferencia (Rivas 2026-11-20). El servidor recalcula el esperado de la
+ * caja y lo deja en la bitácora.
+ */
+function CorrectTenderMethod({ tenderId, amount, branchId, onDone }: { tenderId: string; amount: number; branchId: string; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [method, setMethod] = useState<"TRANSFER" | "CARD">("TRANSFER");
+  const [accounts, setAccounts] = useState<CorrectAccount[]>([]);
+  const [bankAccountId, setBankAccountId] = useState("");
+  const [referenceNumber, setReferenceNumber] = useState("");
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    apiFetch(`/api/master/treasury/bank-accounts?branchId=${branchId}&forPayments=true`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((raw) => setAccounts(raw ? ((unwrapApiData(raw) as CorrectAccount[] | null) ?? []) : []))
+      .catch(() => setAccounts([]));
+  }, [open, branchId]);
+
+  const ready = Boolean(referenceNumber.trim() && reason.trim().length >= 3 && (method === "CARD" || bankAccountId));
+
+  async function submit() {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/api/master/payment-tenders/${tenderId}/correct-method`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ method, referenceNumber, reason, bankAccountId: method === "TRANSFER" ? bankAccountId : null }),
+      });
+      if (!res.ok) {
+        const json = (await res.json().catch(() => null)) as { error?: { message?: string } | string } | null;
+        setError(typeof json?.error === "string" ? json.error : json?.error?.message ?? "No se pudo corregir.");
+        return;
+      }
+      setOpen(false);
+      onDone();
+    } catch {
+      setError("Error de red.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="mt-1 py-1 text-xs font-medium text-[var(--color-primary-700)] underline-offset-2 hover:underline">
+        ¿Fue tarjeta o transferencia? Corregir
+      </button>
+    );
+  }
+
+  const input = "mt-1 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]";
+  return (
+    <div className="mt-2 space-y-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-sm">
+      <p className="text-xs text-[var(--color-text-muted)]">
+        Se cobró {money(amount)} como efectivo. Al corregirlo, la caja deja de esperar ese dinero en la gaveta. Queda en la bitácora.
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        {(["TRANSFER", "CARD"] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            aria-pressed={method === m}
+            onClick={() => setMethod(m)}
+            className={`hm-btn hm-btn-sm ${method === m ? "hm-btn-primary" : "hm-btn-secondary"}`}
+          >
+            {methodLabel(m)}
+          </button>
+        ))}
+      </div>
+      {method === "TRANSFER" && (
+        <label className="block text-xs text-[var(--color-text-secondary)]">
+          Cuenta donde entró
+          <select className={input} value={bankAccountId} onChange={(e) => setBankAccountId(e.target.value)}>
+            <option value="">Elige la cuenta…</option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>{a.bankName} · {a.accountAlias} ({a.currencyCode})</option>
+            ))}
+          </select>
+        </label>
+      )}
+      <label className="block text-xs text-[var(--color-text-secondary)]">
+        {method === "CARD" ? "Número de autorización (voucher)" : "Número de referencia"}
+        <input className={input} value={referenceNumber} onChange={(e) => setReferenceNumber(e.target.value)} maxLength={100} />
+      </label>
+      <label className="block text-xs text-[var(--color-text-secondary)]">
+        Motivo
+        <input className={input} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} placeholder="Se cobró como efectivo por error" />
+      </label>
+      {error && <p role="alert" className="text-xs text-[var(--color-danger-700)]">{error}</p>}
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={() => setOpen(false)} className="hm-btn hm-btn-ghost hm-btn-sm">Cancelar</button>
+        <button type="button" disabled={!ready || saving} onClick={submit} className="hm-btn hm-btn-primary hm-btn-sm">
+          {saving ? "Guardando…" : `Cambiar a ${methodLabel(method).toLowerCase()}`}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function DetailPanel({
   mode,
@@ -732,7 +843,7 @@ function DetailPanel({
                   >
                     <div className="mb-2 flex items-center justify-between">
                       <span className="font-medium">
-                        {p.method} · {money(p.amount)} {p.currencyCode}
+                        {methodLabel(p.method)} · {money(p.amount)} {p.currencyCode}
                       </span>
                       <Badge color={p.status === "POSTED" ? "green" : p.status === "VOIDED" ? "red" : "yellow"}>
                         {p.status === "POSTED" ? "Cobrado" : p.status === "VOIDED" ? "Anulado" : p.status}
@@ -746,14 +857,28 @@ function DetailPanel({
                     {p.tenders.length > 0 && (
                       <div className="mt-2 space-y-1">
                         {p.tenders.map((t) => (
-                          <div key={t.id} className="flex justify-between text-xs">
-                            <span>{t.method}</span>
-                            <span>
-                              {money(t.amount)}
-                              {t.receivedAmount != null && t.receivedAmount !== t.amount
-                                ? ` (recibido ${money(t.receivedAmount)}, cambio ${money(t.changeAmount ?? 0)})`
-                                : ""}
-                            </span>
+                          <div key={t.id} className="text-xs">
+                            <div className="flex justify-between gap-2">
+                              <span>
+                                {t.receivedUsdAmount != null ? `Dólares US${t.receivedUsdAmount.toFixed(2)}` : methodLabel(t.method)}
+                                {t.referenceNumber && t.referenceNumber !== p.referenceNumber ? ` · ref ${t.referenceNumber}` : ""}
+                              </span>
+                              <span>
+                                {money(t.amount)}
+                                {t.receivedAmount != null && t.receivedAmount !== t.amount
+                                  ? ` (recibido ${money(t.receivedAmount)}, cambio ${money(t.changeAmount ?? 0)})`
+                                  : ""}
+                              </span>
+                            </div>
+                            {mode === "master" && p.status === "POSTED" && detail.status !== "CANCELLED"
+                              && t.method === "CASH" && t.receivedUsdAmount == null && (
+                              <CorrectTenderMethod
+                                tenderId={t.id}
+                                amount={t.amount}
+                                branchId={detail.branch.id}
+                                onDone={onOrderChanged}
+                              />
+                            )}
                           </div>
                         ))}
                       </div>

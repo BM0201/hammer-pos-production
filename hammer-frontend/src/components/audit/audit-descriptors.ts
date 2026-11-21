@@ -219,6 +219,23 @@ const DESCRIPTORS: Record<string, Descriptor> = {
     detail: (e) =>
       `Se anuló una venta ya creada${num(e.metadataJson?.voidedPaymentsCount) > 0 ? ", con pagos revertidos" : ""}.`,
   },
+  PAYMENT_METHOD_CORRECTED: {
+    sensitive: true,
+    role: "warning",
+    label: "corrigió el método de un cobro",
+    headline: (e) => {
+      const m = e.metadataJson as { orderNumber?: string; amount?: unknown; to?: { method?: string } } | null;
+      return [
+        seg("corrigió el cobro de "),
+        seg(`#${str(m?.orderNumber, shortId(e.entityId))}`, true),
+        seg(" por "),
+        seg(money(m?.amount), true),
+        seg(` de efectivo a ${m?.to?.method === "CARD" ? "tarjeta" : "transferencia"}`),
+      ];
+    },
+    context: (e) => `motivo: "${str(e.metadataJson?.reason as string)}"`,
+    detail: () => "El esperado de la caja bajó por ese monto: el dinero entró al banco, no a la gaveta.",
+  },
   SALE_CANCELLATION_REQUESTED: {
     sensitive: true,
     label: "solicitó anular una venta",
