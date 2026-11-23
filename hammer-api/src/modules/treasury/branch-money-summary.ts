@@ -4,6 +4,7 @@ import { paymentValidAsOfPeriodEnd } from "@/modules/finance/service";
 import { businessDateFromInstant, businessDateWeekRange, operationalWindow } from "@/modules/operations/business-date";
 import { getBranchCashPosition, type BranchCashPosition } from "@/modules/treasury/cash-monitor";
 import { getTreasuryAccountBalance } from "@/modules/treasury/service";
+import { summarizeUsdTenders, type UsdSales } from "@/modules/payments/usd-tender";
 
 /**
  * prompt-modulo-dinero-semana-sucursal.md — "Dinero de la semana" (Admin de
@@ -28,7 +29,7 @@ export type BranchMoneySummaryDay = MoneyByMethod & { businessDate: string };
 
 const EMPTY_METHOD_TOTALS: MoneyByMethod = { cash: 0, transfer: 0, card: 0, other: 0, total: 0 };
 
-type TenderRow = { method: PaymentMethod; amount: number; businessDate: Date };
+type TenderRow = { method: PaymentMethod; amount: number; businessDate: Date; receivedUsdAmount?: number | null };
 
 /**
  * Puro — agrupa tenders ya resueltos en 7 días (lunes-domingo), zero-filled
@@ -79,11 +80,11 @@ async function fetchWeekTenders(branchId: string, weekStart: Date, weekEnd: Date
       operationalDay: { branchId, businessDate: { gte: weekStart, lte: weekEnd } },
       payment: paymentValidAsOfPeriodEnd(periodEnd, branchId),
     },
-    select: { method: true, amount: true, operationalDay: { select: { businessDate: true } } },
+    select: { method: true, amount: true, receivedUsdAmount: true, operationalDay: { select: { businessDate: true } } },
   });
   return rows
     .filter((r): r is typeof r & { operationalDay: { businessDate: Date } } => r.operationalDay !== null)
-    .map((r) => ({ method: r.method, amount: Number(r.amount), businessDate: r.operationalDay.businessDate }));
+    .map((r) => ({ method: r.method, amount: Number(r.amount), businessDate: r.operationalDay.businessDate, receivedUsdAmount: r.receivedUsdAmount == null ? null : Number(r.receivedUsdAmount) }));
 }
 
 type InTransitEntry = {
@@ -164,6 +165,8 @@ export type BranchMoneySummary = {
   weekEnd: string;
   days: BranchMoneySummaryDay[];
   totals: MoneyByMethod;
+  /** Cobros en dólares de la semana (ya dentro de Efectivo): su propio apartado. */
+  usdSales: UsdSales | null;
   previousWeekTotal: number;
   totalChangePercent: number | null;
   /**
@@ -197,6 +200,7 @@ export async function getBranchMoneySummary(input: { branchId: string; weekStart
     weekEnd: ymd(weekEnd),
     days,
     totals,
+    usdSales: summarizeUsdTenders(thisWeekTenders),
     previousWeekTotal: previousTotals.total,
     totalChangePercent: computeWeekChangePercent(totals.total, previousTotals.total),
     cashNow,

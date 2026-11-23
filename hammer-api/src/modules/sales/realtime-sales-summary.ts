@@ -1,4 +1,5 @@
 import { PaymentMethod, PaymentStatus, Prisma, SaleOrderStatus } from "@prisma/client";
+import { summarizeUsdTenders, type UsdSales } from "@/modules/payments/usd-tender";
 import { prisma } from "@/lib/prisma";
 
 const TIMEZONE = "America/Managua";
@@ -99,6 +100,8 @@ export type RealtimeSalesSummary = {
     sellerName: string | null;
   } | null;
   paymentsByMethod: Array<{ method: PaymentMethod; amount: number; count: number }>;
+  /** Cobros en dólares (ya incluidos en CASH): su propio apartado. */
+  usdSales: UsdSales | null;
 };
 
 export async function buildBranchRealtimeSalesSummary(
@@ -129,6 +132,7 @@ export async function buildBranchRealtimeSalesSummary(
     deliveryOrdersIssued,
     paymentsByMethod,
     lastSale,
+    usdAgg,
   ] = await Promise.all([
     db.payment.aggregate({ where: paymentWhere, _sum: { amount: true }, _count: { _all: true } }),
     db.payment.count({ where: voidedWhere }),
@@ -206,6 +210,11 @@ export async function buildBranchRealtimeSalesSummary(
         },
       },
     }),
+    db.paymentTender.aggregate({
+      where: { payment: paymentWhere, receivedUsdAmount: { not: null } },
+      _sum: { receivedUsdAmount: true, amount: true },
+      _count: { _all: true },
+    }),
   ]);
 
   return {
@@ -242,6 +251,9 @@ export async function buildBranchRealtimeSalesSummary(
       amount: n(row._sum.amount),
       count: row._count._all,
     })),
+    usdSales: usdAgg._count._all > 0
+      ? { count: usdAgg._count._all, usd: n(usdAgg._sum.receivedUsdAmount), nio: n(usdAgg._sum.amount) }
+      : null,
   };
 }
 
@@ -286,6 +298,8 @@ async function getAllBranchesSalesRealtimeSummaryBatch(
     saleOrder: { branchId: { in: branchIds }, status: { not: SaleOrderStatus.CANCELLED } },
   };
 
+  // Cobros en dólares por sucursal: se llenan al leer los tenders (paso 8).
+  const usdRowsByBranch = new Map<string, Array<{ amount: Prisma.Decimal; receivedUsdAmount: Prisma.Decimal | null }>>();
   const [
     paidByBranch,
     voidedByBranch,
@@ -406,9 +420,15 @@ async function getAllBranchesSalesRealtimeSummaryBatch(
         select: {
           method: true,
           amount: true,
+          receivedUsdAmount: true,
           payment: { select: { saleOrder: { select: { branchId: true } } } },
         },
       });
+      for (const row of tenderRows) {
+        if (row.receivedUsdAmount == null) continue;
+        const bid = row.payment.saleOrder.branchId;
+        usdRowsByBranch.set(bid, [...(usdRowsByBranch.get(bid) ?? []), row]);
+      }
       const result = new Map<string, Array<{ method: PaymentMethod; amount: number; count: number }>>();
       const branchMethodMap = new Map<string, Map<string, { amount: number; count: number }>>();
       for (const row of tenderRows) {
@@ -502,6 +522,7 @@ async function getAllBranchesSalesRealtimeSummaryBatch(
       deliveryOrdersIssued: delivery?._count._all ?? 0,
       lastSale,
       paymentsByMethod: tenders,
+      usdSales: summarizeUsdTenders(usdRowsByBranch.get(bid) ?? []),
     } satisfies RealtimeSalesSummary;
   });
 }

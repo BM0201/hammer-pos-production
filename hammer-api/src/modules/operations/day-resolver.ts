@@ -184,6 +184,8 @@ export async function getCurrentOperationalDay(branchId: string) {
           physicalCashBox: true,
           openedBy: { select: { id: true, username: true, fullName: true } },
           reviewedBy: { select: { id: true, username: true, fullName: true } },
+          // Sencillo con que quedó la gaveta al cerrar (lo declarado en el destino del efectivo).
+          destinationDeclaration: { select: { retainCashFundPortion: true } },
         },
         orderBy: { openedAt: "asc" },
       },

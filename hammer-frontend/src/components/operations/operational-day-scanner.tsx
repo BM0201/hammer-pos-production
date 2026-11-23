@@ -228,7 +228,7 @@ export function OperationalDayScanner({
 
       {/* Result summary */}
       {diagnosis && !hasProblems && (
-        <div className="flex items-center gap-2 rounded-lg border border-[var(--color-success-300)] bg-[color-mix(in_srgb,var(--color-success-50)_50%,white)] px-3 py-2.5">
+        <div className="flex items-center gap-2 rounded-lg border border-[var(--color-success-300)] bg-[color-mix(in_srgb,var(--color-success-50)_50%,var(--color-surface))] px-3 py-2.5">
           <ShieldCheck className="text-[var(--color-success-700)]" style={{ width: "1.1rem", height: "1.1rem" }} />
           <div>
             <p className="text-sm font-semibold text-[var(--color-success-800)]">Sin problemas detectados</p>
@@ -254,8 +254,8 @@ export function OperationalDayScanner({
               key={f.key}
               className={`rounded-lg border p-3 ${
                 f.severity === "danger"
-                  ? "border-[var(--color-danger-300)] bg-[color-mix(in_srgb,var(--color-danger-50)_35%,white)]"
-                  : "border-[var(--color-warning-300)] bg-[color-mix(in_srgb,var(--color-warning-50)_35%,white)]"
+                  ? "border-[var(--color-danger-300)] bg-[color-mix(in_srgb,var(--color-danger-50)_35%,var(--color-surface))]"
+                  : "border-[var(--color-warning-300)] bg-[color-mix(in_srgb,var(--color-warning-50)_35%,var(--color-surface))]"
               }`}
             >
               <div className="flex flex-wrap items-center gap-2">

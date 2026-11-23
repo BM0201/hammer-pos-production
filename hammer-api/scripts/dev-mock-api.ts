@@ -24,6 +24,7 @@
  */
 import http from "node:http";
 import { resolveUsdTenders } from "../src/modules/payments/usd-tender";
+import { cashDifferenceMessage } from "../src/modules/operations/day-summary";
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_PAYROLL_RATES,
@@ -670,6 +671,25 @@ const server = http.createServer(async (req, res) => {
     return ok(res, { paymentTenderId: correctMethod[1], method: body.method, amount: 7600 });
   }
   if (path === "/api/master/finance/summary") return ok(res, mockFinanceSummary());
+  // Día operativo: Masaya del 21-nov tal como quedó en la base (sobrante C$2,165, sencillo 40 → 10).
+  if (path === "/api/master/operations/pending-review") return ok(res, [
+    { id: "day-msy-21", branchId: "br-central", branchCode: "MSY", branchName: "Masaya", businessDate: "2026-11-21", daysWaiting: 2, salesTotal: 19505, expectedCashTotal: 19545, attention: { autoClosedPendingReviewCount: 0, openOrReconcilingCashSessionsCount: 0 } },
+  ]);
+  if (path === "/api/branch/operations/day-msy-21/close-preview") {
+    const items = [
+      { key: "open_cash_sessions", label: "Cajas abiertas o en conciliacion", status: "OK", count: 0 },
+      { key: "auto_closed_pending_review", label: "Cierres automaticos pendientes de revision", status: "OK", count: 0 },
+      { key: "pending_payments", label: "Pagos pendientes", status: "OK" },
+      { key: "pending_dispatch", label: "Despachos pendientes", status: "OK", count: 0 },
+      { key: "critical_brain", label: "Decisiones criticas de Brain", status: "ATTENTION", count: 274 },
+      { key: "cash_difference", label: "Diferencia de caja", status: "ATTENTION", message: cashDifferenceMessage(2165, 100) },
+    ];
+    return ok(res, {
+      summary: { salesTotal: 19505, expectedCashTotal: 19545, countedCashTotal: 21710, cashDifferenceTotal: 2165,
+        cashSessions: [{ id: "cs-msy-21", status: "CLOSED", openingAmount: 40, expectedCashAmount: 19545, countedCashAmount: 21710, differenceAmount: 2165, cashFundClosedAmount: 10, expectedUsdAmount: 0, countedUsdAmount: null }] },
+      checklist: { items, attention: items.filter((i) => i.status === "ATTENTION"), ok: items.filter((i) => i.status === "OK") },
+    });
+  }
   if (path === "/api/master/finance/trend") return ok(res, { branchId: null, months: 12, points: [] });
   if (path === "/api/cashier/bank-accounts") return ok(res, [{ id: "ba-1", bankName: "BAC", accountAlias: "Operativa", accountNumber: "100200300", currencyCode: "NIO" }]);
   if (path === "/api/cashier/branch-people") return ok(res, [{ id: "u-2", fullName: "Elena Bermúdez", roleLabel: "Supervisora" }]);
@@ -777,6 +797,7 @@ const server = http.createServer(async (req, res) => {
       sales: {
         paidCount: 23,
         byMethod: [{ method: "CASH", count: 16 }, { method: "CARD", count: 5 }, { method: "TRANSFER", count: 2 }],
+        usdCount: 3,
         cancelledCount: 1,
       },
       pending: [{ key: "payments", count: 2 }, { key: "myDrafts", count: 1 }, { key: "dispatches", count: 3 }],
@@ -1205,12 +1226,13 @@ const server = http.createServer(async (req, res) => {
     return ok(res, {
       generatedAt: new Date().toISOString(),
       totals: {
-        salesToday: 0, openSessions: 0, pendingReviewSessions: 0, reconcilingSessions: 0,
+        salesToday: 24850, openSessions: 0, pendingReviewSessions: 0, reconcilingSessions: 0,
         closuresCompletedToday: 0, boxesActive: 0, boxesTotal: 0, usersOnline: 1, usersIdle: 0,
         usersOffline: 0, paidSalesCount: 0, pendingPaymentTotal: 0, pendingPaymentCount: 0,
-        openingCashTotal: 0, cashTenderNetTotal: 0, cashMovementsNet: 0, cashExpensesTotal: 0,
+        openingCashTotal: 0, cashTenderNetTotal: 18350, cashMovementsNet: 0, cashExpensesTotal: 0,
         cashOutflowsTotal: 0, expectedCashOnHand: 0, cashNetWithoutOpening: 0,
-        cardTenderTotal: 0, transferTenderTotal: 0, otherTenderTotal: 0,
+        cardTenderTotal: 4200, transferTenderTotal: 2300, otherTenderTotal: 0,
+        usdSales: { count: 3, usd: 120, nio: 4380 },
       },
       attention: {
         pendingApprovals: 0, criticalBrainDecisions: 0, openSecurityAlerts: 0,

@@ -1,6 +1,8 @@
 import { PaymentMethod, PaymentStatus, Prisma, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
+import { makeDecisionFingerprint } from "@/modules/brain/scoring";
+import { buildCloseDiscrepancySignal, syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
+import { raiseCashDiscrepancy } from "@/modules/treasury/discrepancy-signals";
 import { recordSaleTenderEntriesTx } from "@/modules/treasury/service";
 
 export const PAYMENT_METHOD_CORRECTED = "PAYMENT_METHOD_CORRECTED";
@@ -25,8 +27,11 @@ export function assertTenderCorrectable(
   payment: { status: string },
   orderStatus: string | null,
   input: Pick<CorrectMethodInput, "method" | "referenceNumber" | "bankAccountId" | "reason">,
+  dayConfirmed = false,
 ) {
   if (payment.status !== PaymentStatus.POSTED) throw new Error("PAYMENT_NOT_POSTED");
+  // Un día ya firmado no cambia por debajo: se reabre en Día operativo y se vuelve a firmar.
+  if (dayConfirmed) throw new Error("OPERATIONAL_DAY_ALREADY_CONFIRMED");
   if (orderStatus === SaleOrderStatus.CANCELLED) throw new Error("SALE_ORDER_CANCELLED");
   if (tender.method !== PaymentMethod.CASH) throw new Error("TENDER_NOT_CASH");
   if (tender.receivedUsdAmount != null) throw new Error("TENDER_IS_USD");
@@ -51,6 +56,8 @@ export async function correctTenderMethod(input: CorrectMethodInput) {
         payment: {
           select: {
             id: true, status: true, paidAt: true, cashSessionId: true,
+            operationalDay: { select: { reviewStatus: true } },
+            cashSession: { select: { operationalDay: { select: { reviewStatus: true } } } },
             tenders: { select: { id: true } },
             saleOrder: { select: { id: true, orderNumber: true, status: true, branchId: true } },
           },
@@ -59,7 +66,8 @@ export async function correctTenderMethod(input: CorrectMethodInput) {
     });
     const { payment } = tender;
     await tx.$queryRaw`SELECT id FROM "Payment" WHERE id = ${payment.id} FOR UPDATE`;
-    assertTenderCorrectable(tender, payment, payment.saleOrder?.status ?? null, input);
+    const dayConfirmed = [payment.operationalDay, payment.cashSession.operationalDay].some((d) => d?.reviewStatus === "CONFIRMED");
+    assertTenderCorrectable(tender, payment, payment.saleOrder?.status ?? null, input, dayConfirmed);
 
     const method = input.method === "CARD" ? PaymentMethod.CARD : PaymentMethod.TRANSFER;
     const updated = await tx.paymentTender.update({
@@ -77,7 +85,8 @@ export async function correctTenderMethod(input: CorrectMethodInput) {
       await tx.payment.update({ where: { id: payment.id }, data: { method, referenceNumber: input.referenceNumber.trim() } });
     }
     await recordSaleTenderEntriesTx(tx, { tenders: [updated], occurredAt: payment.paidAt ?? new Date(), createdByUserId: input.actorUserId });
-    if (payment.cashSessionId) await syncCashSessionSnapshotTx(tx, payment.cashSessionId);
+    await syncCashSessionSnapshotTx(tx, payment.cashSessionId);
+    await refreshCloseDiscrepancyTx(tx, payment.cashSessionId, input.actorUserId);
 
     await tx.auditLog.create({
       data: {
@@ -98,5 +107,40 @@ export async function correctTenderMethod(input: CorrectMethodInput) {
       },
     });
     return { paymentTenderId: tender.id, method, amount: Number(tender.amount) };
+  });
+}
+
+/**
+ * El aviso "Descuadre al cerrar caja" de Brain se escribió con la diferencia
+ * del cierre. Tras corregir un cobro la diferencia cambia: se reescribe con
+ * los números nuevos, o se cierra solo si ya quedó dentro del umbral.
+ */
+async function refreshCloseDiscrepancyTx(tx: Prisma.TransactionClient, cashSessionId: string, actorUserId: string) {
+  const fingerprint = makeDecisionFingerprint(["cash-session", "close-discrepancy", cashSessionId]);
+  const decision = await tx.brainDecision.findUnique({ where: { fingerprint }, select: { id: true, status: true, evidenceJson: true } });
+  if (!decision) return;
+  const session = await tx.cashSession.findUniqueOrThrow({
+    where: { id: cashSessionId },
+    select: { expectedCashAmount: true, countedCashAmount: true, differenceAmount: true, physicalCashBoxId: true, physicalCashBox: { select: { code: true, branchId: true } } },
+  });
+  const difference = Number(session.differenceAmount ?? 0);
+  const threshold = Number((decision.evidenceJson as { threshold?: number } | null)?.threshold ?? 0);
+  if (Math.abs(difference) > threshold) {
+    await raiseCashDiscrepancy(tx, buildCloseDiscrepancySignal({
+      physicalCashBoxCode: session.physicalCashBox.code,
+      physicalCashBoxId: session.physicalCashBoxId,
+      branchId: session.physicalCashBox.branchId,
+      cashSessionId,
+      expectedCash: Number(session.expectedCashAmount ?? 0),
+      countedCash: Number(session.countedCashAmount ?? 0),
+      difference,
+      threshold,
+    }));
+    return;
+  }
+  if (decision.status === "RESOLVED") return;
+  await tx.brainDecision.update({
+    where: { id: decision.id },
+    data: { status: "RESOLVED", resolvedAt: new Date(), resolvedByUserId: actorUserId, resolutionSource: "USER", resolutionNote: "Cuadró al corregir el método de un cobro." },
   });
 }

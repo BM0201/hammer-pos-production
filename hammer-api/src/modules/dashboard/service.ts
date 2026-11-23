@@ -92,6 +92,8 @@ export async function getBranchDayView(branchId: string, userId: string, access:
     sales: {
       paidCount: sales.paidSalesCount,
       byMethod: sales.paymentsByMethod.map((m) => ({ method: m.method, count: m.count })),
+      /** De los pagos en efectivo, cuántos fueron en dólares (sin montos, igual que el resto). */
+      usdCount: sales.usdSales?.count ?? 0,
       cancelledCount: sales.cancelledSalesCount,
     },
     pending: buildPendingList({ payments, myDrafts, dispatches, transports, approvals }, access),

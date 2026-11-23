@@ -48,6 +48,7 @@ type DayView = {
   sales: {
     paidCount: number;
     byMethod: Array<{ method: string; count: number }>;
+    usdCount?: number;
     cancelledCount: number;
   };
   pending: Array<{ key: PendingKey; count: number }>;
@@ -184,6 +185,9 @@ function SalesSection({ sales }: { sales: DayView["sales"] }) {
                 <span className="text-[var(--color-text-secondary)]">{METHOD_LABEL[m.method] ?? m.method}</span>
                 <span className="font-semibold tabular-nums text-[var(--color-text)]">{m.count}</span>
               </div>
+              {m.method === "CASH" && (sales.usdCount ?? 0) > 0 ? (
+                <p className="text-xs text-[var(--color-text-muted)]">de esos, {sales.usdCount} en dólares</p>
+              ) : null}
               <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-alt)]" aria-hidden>
                 <div className="h-full rounded-full bg-[var(--color-pay)]" style={{ width: `${(m.count / max) * 100}%` }} />
               </div>

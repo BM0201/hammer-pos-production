@@ -7,6 +7,7 @@ import {
   commandCenterPendingStatuses,
 } from "@/modules/dashboard/command-center-policy";
 import { getAllBranchesSalesRealtimeSummary } from "@/modules/sales/realtime-sales-summary";
+import { cashTenderTotalDecimal } from "@/modules/cash-session/expected-cash";
 
 /**
  * Centro de Comando (Command Center) snapshot.
@@ -207,7 +208,8 @@ export async function getCommandCenterSnapshot() {
       select: {
         method: true,
         amount: true,
-        changeAmount: true,
+        receivedAmount: true,
+        receivedUsdAmount: true,
         payment: { select: { saleOrder: { select: { branchId: true } } } },
       },
     }),
@@ -254,6 +256,7 @@ export async function getCommandCenterSnapshot() {
     {
       openingCashTotal: number;
       cashTenderNetTotal: number;
+      cashDrawerNioTotal: number;
       cashMovementsNet: number;
       cashExpensesTotal: number;
       cashOutflowsTotal: number;
@@ -270,6 +273,7 @@ export async function getCommandCenterSnapshot() {
     const initial = {
       openingCashTotal: 0,
       cashTenderNetTotal: 0,
+      cashDrawerNioTotal: 0,
       cashMovementsNet: 0,
       cashExpensesTotal: 0,
       cashOutflowsTotal: 0,
@@ -294,7 +298,10 @@ export async function getCommandCenterSnapshot() {
     const totals = cashTotalsFor(tender.payment.saleOrder.branchId);
     const amount = num(tender.amount);
     if (tender.method === PaymentMethod.CASH) {
-      totals.cashTenderNetTotal += amount - num(tender.changeAmount);
+      // Cobrado en efectivo: amount ya es neto del vuelto (igual que Mi día).
+      totals.cashTenderNetTotal += amount;
+      // C$ en gaveta, misma cuenta que la caja: un cobro en US$ deja en C$ solo −vuelto.
+      totals.cashDrawerNioTotal += cashTenderTotalDecimal([tender]).toNumber();
     } else if (tender.method === PaymentMethod.CARD) {
       totals.cardTenderTotal += amount;
     } else if (tender.method === PaymentMethod.TRANSFER) {
@@ -320,7 +327,7 @@ export async function getCommandCenterSnapshot() {
     const day = operationalDays.find((d) => d.branchId === branch.id) ?? null;
     const sales = salesSummaries.find((s) => s.branchId === branch.id);
     const cash = cashTotalsFor(branch.id);
-    const expectedCashOnHand = cash.openingCashTotal + cash.cashTenderNetTotal + cash.cashMovementsNet;
+    const expectedCashOnHand = cash.openingCashTotal + cash.cashDrawerNioTotal + cash.cashMovementsNet;
 
     let openCount = 0;
     let reconcilingCount = 0;
@@ -360,6 +367,8 @@ export async function getCommandCenterSnapshot() {
       estimatedGrossProfit: null,
       activeCashSessionIds: cash.activeCashSessionIds,
       lastSale: sales?.lastSale ?? null,
+      /** Cobros en dólares (ya dentro de Efectivo): su propio apartado. */
+      usdSales: sales?.usdSales ?? null,
       operationalDay: day
         ? {
             lifecycle: day.lifecycle,
@@ -395,6 +404,10 @@ export async function getCommandCenterSnapshot() {
     cardTenderTotal: byBranch.reduce((acc, b) => acc + b.cardTenderTotal, 0),
     transferTenderTotal: byBranch.reduce((acc, b) => acc + b.transferTenderTotal, 0),
     otherTenderTotal: byBranch.reduce((acc, b) => acc + b.otherTenderTotal, 0),
+    usdSales: byBranch.reduce<{ count: number; usd: number; nio: number } | null>(
+      (acc, b) => (b.usdSales ? { count: (acc?.count ?? 0) + b.usdSales.count, usd: (acc?.usd ?? 0) + b.usdSales.usd, nio: (acc?.nio ?? 0) + b.usdSales.nio } : acc),
+      null,
+    ),
     openSessions: byBranch.reduce((acc, b) => acc + b.openSessions, 0),
     pendingReviewSessions: byBranch.reduce((acc, b) => acc + b.pendingReviewSessions, 0),
     reconcilingSessions: byBranch.reduce((acc, b) => acc + b.reconcilingSessions, 0),

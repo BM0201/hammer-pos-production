@@ -8,6 +8,7 @@ import {
   BrainDecisionSeverity,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { summarizeUsdTenders } from "@/modules/payments/usd-tender";
 import type { ChecklistItem, OperationalDayChecklist } from "@/modules/operations/types";
 import { getSalesSummaryForOperationalDayTx } from "@/modules/sales/realtime-sales-summary";
 import {
@@ -111,6 +112,7 @@ export async function calculateOperationalSummaryTx(
         openedBy: { select: { id: true, username: true, fullName: true } },
         closedBy: { select: { id: true, username: true, fullName: true } },
         reviewedBy: { select: { id: true, username: true, fullName: true } },
+        destinationDeclaration: { select: { retainCashFundPortion: true } },
       },
       orderBy: { openedAt: "asc" },
     }),
@@ -256,6 +258,8 @@ export async function calculateOperationalSummaryTx(
     legacyFallbackCounts,
     warnings: summaryWarnings,
     totalsByPaymentMethod,
+    /** Cobros en dólares (ya incluidos en Efectivo): su propio apartado. */
+    usdSales: summarizeUsdTenders(effectiveTenders),
     changeAmountTotal: changeAmountTotalDecimal.toNumber(),
     refunds: refundsSummary,
     cashMovements: cashMovementsSummary,
@@ -302,6 +306,10 @@ export async function calculateOperationalSummaryTx(
       expectedCashAmount: n(session.expectedCashAmount),
       countedCashAmount: n(session.countedCashAmount),
       differenceAmount: n(session.differenceAmount),
+      /** Sencillo que quedó en la gaveta al cerrar (lo declarado); null si todavía no se declaró. */
+      cashFundClosedAmount: session.destinationDeclaration ? n(session.destinationDeclaration.retainCashFundPortion) : null,
+      expectedUsdAmount: session.expectedUsdAmount == null ? null : n(session.expectedUsdAmount),
+      countedUsdAmount: session.countedUsdAmount == null ? null : n(session.countedUsdAmount),
       requiresReview: session.requiresReview,
       autoClosedBySystem: session.autoClosedBySystem,
       physicalCashBox: session.physicalCashBox,
@@ -459,7 +467,7 @@ export function buildChecklist(
       key: "cash_difference",
       label: "Diferencia de caja",
       status: Math.abs(summary.cashDifferenceTotal) > cashDifferenceToleranceAmount ? "ATTENTION" : "OK",
-      message: `Diferencia acumulada: C$ ${summary.cashDifferenceTotal.toFixed(2)} (tolerancia: C$ ${cashDifferenceToleranceAmount.toFixed(2)})`,
+      message: cashDifferenceMessage(summary.cashDifferenceTotal, cashDifferenceToleranceAmount),
     },
   ];
   return {
@@ -841,4 +849,17 @@ export async function getLiveBlockers(): Promise<{
     computedAt: new Date().toISOString(),
     pendingReviewDaysCount,
   };
+}
+
+/**
+ * Qué decirle a Master de la diferencia del día: un sobrante entra como
+ * ingreso en Finanzas; un faltante suele ser un cobro de tarjeta o
+ * transferencia anotado como efectivo, que se corrige en Ventas → Pago.
+ */
+export function cashDifferenceMessage(difference: number, tolerance: number): string {
+  const amount = `C$ ${Math.abs(difference).toFixed(2)}`;
+  const tol = `(tolerancia: C$ ${tolerance.toFixed(2)})`;
+  if (difference > 0) return `Sobrante de ${amount} ${tol}: sobró dinero al contar. Entra como ingreso en Finanzas (Sobrante de caja).`;
+  if (difference < 0) return `Faltante de ${amount} ${tol}. Si un cobro con tarjeta o transferencia se anotó como efectivo, corrígelo en Ventas → Pago.`;
+  return `Cuadró ${tol}.`;
 }

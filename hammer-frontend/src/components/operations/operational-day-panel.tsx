@@ -19,6 +19,7 @@ import { CashSessionStatusList } from "@/components/operations/cash-session-stat
 import { OperationalDayChecklist, type DayChecklist } from "@/components/operations/operational-day-checklist";
 import { ConfirmDayDialog } from "@/components/operations/confirm-day-dialog";
 import { OperationalDayScanner } from "@/components/operations/operational-day-scanner";
+import { UsdSalesLine, type UsdSales } from "@/components/operations/usd-sales-line";
 
 type PaymentRow = { method: string; _sum: { amount: string | number | null }; _count: { _all: number } };
 
@@ -40,6 +41,7 @@ type DailyReport = {
     expectedCashTotal?: number;
     cashDifferenceTotal?: number;
     paidSalesCount?: number;
+    usdSales?: UsdSales | null;
   };
   summarySource?: "SNAPSHOT" | "LIVE";
   lateActivity?: {
@@ -328,6 +330,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
                   </div>
                 );
               })}
+              <UsdSalesLine usdSales={day.summaryJson?.usdSales} />
             </div>
           ) : (
             <div className="space-y-2 text-sm">
@@ -401,7 +404,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
 
           {/* Actividad que entró DESPUÉS de que el día dejó de estar en curso */}
           {(report.lateActivity?.count ?? 0) > 0 && (
-            <div className="mx-4 mt-3 rounded-lg border border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,white)] p-3">
+            <div className="mx-4 mt-3 rounded-lg border border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,var(--color-surface))] p-3">
               <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-[var(--color-warning-800)]">
                 <AlertTriangle style={{ width: "0.875rem", height: "0.875rem" }} />
                 Entró después (fuera del snapshot)
@@ -426,7 +429,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
           {/* Aviso de datos legacy sin operationalDayId (pendientes de backfill) */}
           {((report.legacyFallback?.ordersWithoutOperationalDay ?? 0) > 0 ||
             (report.legacyFallback?.paymentsWithoutOperationalDay ?? 0) > 0) && (
-            <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,white)] px-3 py-2">
+            <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,var(--color-surface))] px-3 py-2">
               <Info className="mt-0.5 flex-shrink-0 text-[var(--color-warning-700)]" style={{ width: "0.875rem", height: "0.875rem" }} />
               <p className="text-xs text-[var(--color-warning-800)]">
                 Hay {report.legacyFallback?.ordersWithoutOperationalDay ?? 0} órdenes y {report.legacyFallback?.paymentsWithoutOperationalDay ?? 0} pagos
@@ -461,6 +464,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
                 </table>
               </div>
             )}
+            {report.summary?.usdSales && <div className="mt-2"><UsdSalesLine usdSales={report.summary.usdSales} /></div>}
 
             {/* Orders status breakdown */}
             {report.orders.length > 0 && (

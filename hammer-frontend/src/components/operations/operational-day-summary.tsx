@@ -1,5 +1,6 @@
 "use client";
 
+import type { UsdSales } from "@/components/operations/usd-sales-line";
 import { Badge } from "@/components/ui/badge";
 import { Building2, Calendar, Clock, TrendingUp, Wallet, AlertTriangle, CheckCircle2, XCircle, Activity, Truck, Brain } from "lucide-react";
 import { money } from "@/lib/format";
@@ -33,6 +34,7 @@ export type OperationalDay = {
   cashSessions?: CashSessionRow[];
   summaryJson?: {
     paymentsByMethod?: Array<{ method: string; amount: number; count: number }>;
+    usdSales?: UsdSales | null;
     cashExpensesTotal?: number | string | null;
     cashOutflowsTotal?: number | string | null;
     sourceMode?: "OPERATIONAL_DAY_ID" | "MIXED" | "LEGACY_TIME_WINDOW";
@@ -65,6 +67,8 @@ export type CashSessionRow = {
   countedUsdRate?: string | number | null;
   /** US$ que debía haber (cobros en dólares). */
   expectedUsdAmount?: string | number | null;
+  /** Destino declarado al cerrar: con cuánto sencillo quedó la gaveta. */
+  destinationDeclaration?: { retainCashFundPortion: string | number | null } | null;
   openedAt: string;
   closedAt?: string | null;
   autoClosedAt?: string | null;
@@ -103,9 +107,9 @@ type KpiTileProps = {
 
 function KpiTile({ label, value, icon: Icon, tone = "default", subtext }: KpiTileProps) {
   const styles = {
-    ok:      { tile: "hm-kpi-tile border-[var(--color-success-100)] bg-[color-mix(in_srgb,var(--color-success-50)_25%,white)]", bar: "linear-gradient(90deg,var(--color-success-400),var(--color-success-600))", iconBg: "bg-[var(--color-success-50)] border border-[var(--color-success-100)]", iconColor: "text-[var(--color-success-600)]" },
-    alert:   { tile: "hm-kpi-tile border-[var(--color-danger-200)] bg-[color-mix(in_srgb,var(--color-danger-50)_35%,white)]",   bar: "linear-gradient(90deg,var(--color-danger-400),var(--color-danger-600))",  iconBg: "bg-[var(--color-danger-50)] border border-[var(--color-danger-100)]",   iconColor: "text-[var(--color-danger-600)]" },
-    warn:    { tile: "hm-kpi-tile border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,white)]", bar: "linear-gradient(90deg,var(--color-warning-400),var(--color-warning-600))", iconBg: "bg-[var(--color-warning-50)] border border-[var(--color-warning-100)]", iconColor: "text-[var(--color-warning-700)]" },
+    ok:      { tile: "hm-kpi-tile border-[var(--color-success-100)] bg-[color-mix(in_srgb,var(--color-success-50)_25%,var(--color-surface))]", bar: "linear-gradient(90deg,var(--color-success-400),var(--color-success-600))", iconBg: "bg-[var(--color-success-50)] border border-[var(--color-success-100)]", iconColor: "text-[var(--color-success-600)]" },
+    alert:   { tile: "hm-kpi-tile border-[var(--color-danger-200)] bg-[color-mix(in_srgb,var(--color-danger-50)_35%,var(--color-surface))]",   bar: "linear-gradient(90deg,var(--color-danger-400),var(--color-danger-600))",  iconBg: "bg-[var(--color-danger-50)] border border-[var(--color-danger-100)]",   iconColor: "text-[var(--color-danger-600)]" },
+    warn:    { tile: "hm-kpi-tile border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,var(--color-surface))]", bar: "linear-gradient(90deg,var(--color-warning-400),var(--color-warning-600))", iconBg: "bg-[var(--color-warning-50)] border border-[var(--color-warning-100)]", iconColor: "text-[var(--color-warning-700)]" },
     default: { tile: "hm-kpi-tile", bar: "linear-gradient(90deg,var(--color-info-400),var(--color-info-600))", iconBg: "bg-[var(--color-surface-alt)] border border-[var(--color-border)]", iconColor: "text-[var(--color-text-muted)]" },
   };
   const s = styles[tone];

@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SendDepositModal, type CashPosition, type CashIndicatorState } from "@/components/navigation/cash-indicator-panel";
 import { money } from "@/lib/format";
+import { UsdSalesLine, type UsdSales } from "@/components/operations/usd-sales-line";
 import toast from "react-hot-toast";
 
 /**
@@ -30,6 +31,7 @@ type BranchMoneySummary = {
   weekEnd: string;
   days: DayRow[];
   totals: MoneyByMethod;
+  usdSales?: UsdSales | null;
   previousWeekTotal: number;
   totalChangePercent: number | null;
   cashNow: CashPosition;
@@ -166,6 +168,7 @@ export default function BranchMoneyWeekPage() {
                 )}
               </div>
             </div>
+            {summary.usdSales && <div className="mt-3"><UsdSalesLine usdSales={summary.usdSales} /></div>}
             {hasOther && <p className="mt-2 text-[0.6875rem] text-[var(--color-text-soft)]">Incluye {money(summary.totals.other)} en otros métodos (crédito).</p>}
           </Card>
 

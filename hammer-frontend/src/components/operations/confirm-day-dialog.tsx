@@ -6,12 +6,44 @@ import { Button } from "@/components/ui/button";
 import type { DayChecklist } from "@/components/operations/operational-day-checklist";
 import { money } from "@/lib/format";
 
+type SummarySession = {
+  status: string;
+  openingAmount: number;
+  expectedCashAmount: number;
+  countedCashAmount: number;
+  cashFundClosedAmount?: number | null;
+  expectedUsdAmount?: number | null;
+  countedUsdAmount?: number | null;
+};
+
 type Summary = {
   salesTotal?: number | string | null;
   expectedCashTotal?: number | string | null;
   countedCashTotal?: number | string | null;
   cashDifferenceTotal?: number | string | null;
+  cashSessions?: SummarySession[];
 };
+
+/**
+ * La diferencia separada en sus dos partes: la venta en efectivo (esperado
+ * sin la apertura vs contado sin el sencillo que quedó) y el sencillo
+ * (abrió vs quedó). Solo cuando todas las cajas cerradas ya declararon su
+ * sencillo; si no, null y se muestra el total como antes.
+ */
+export function splitCashDifference(sessions: SummarySession[] | undefined) {
+  const closed = (sessions ?? []).filter((s) => s.status !== "OPEN" && s.status !== "RECONCILING");
+  if (closed.length === 0 || closed.some((s) => s.cashFundClosedAmount == null)) return null;
+  const sum = (f: (s: SummarySession) => number) => Math.round(closed.reduce((t, s) => t + f(s), 0) * 100) / 100;
+  const usdExpected = sum((s) => s.expectedUsdAmount ?? 0);
+  const usdCounted = sum((s) => s.countedUsdAmount ?? 0);
+  return {
+    salesExpected: sum((s) => s.expectedCashAmount - s.openingAmount),
+    salesCounted: sum((s) => s.countedCashAmount - (s.cashFundClosedAmount ?? 0)),
+    fundOpened: sum((s) => s.openingAmount),
+    fundClosed: sum((s) => s.cashFundClosedAmount ?? 0),
+    usd: usdExpected > 0 || usdCounted > 0 ? { expected: usdExpected, counted: usdCounted } : null,
+  };
+}
 
 type Props = {
   summary: Summary | null;
@@ -27,6 +59,8 @@ type Props = {
  * nota cuando el checklist tiene ítems en atención — la firma es siempre de
  * un usuario Master real (lo valida el backend, no este componente).
  */
+const signed = (value: number) => (Math.abs(value) < 0.005 ? "igual" : `${value > 0 ? "+" : "−"}${money(Math.abs(value))}`);
+
 export function ConfirmDayDialog({ summary, checklist, cashDifferenceTolerance = 100, onPreview, onConfirm }: Props) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<"preview" | "confirm" | null>(null);
@@ -40,6 +74,8 @@ export function ConfirmDayDialog({ summary, checklist, cashDifferenceTolerance =
   const confirmDisabled = !checklist || !noteOk;
   const diff = Number(summary?.cashDifferenceTotal ?? 0);
   const diffOverTolerance = Math.abs(diff) > cashDifferenceTolerance;
+  const split = splitCashDifference(summary?.cashSessions);
+  const diffLabel = diff > 0 ? "Sobrante" : diff < 0 ? "Faltante" : "Cuadró";
 
   async function previewNow() {
     setBusy("preview");
@@ -60,23 +96,56 @@ export function ConfirmDayDialog({ summary, checklist, cashDifferenceTolerance =
       <div className="space-y-4 p-4">
         {/* ── 1. Resumen ── */}
         {summary && (
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="space-y-2">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
               <p className="text-xs text-[var(--color-text-muted)]">Ventas pagadas</p>
               <p className="hm-num text-base font-bold text-[var(--color-text)]">{money(summary.salesTotal)}</p>
             </div>
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
-              <p className="text-xs text-[var(--color-text-muted)]">Efectivo esperado vs contado</p>
-              <p className="hm-num text-base font-bold text-[var(--color-text)]">
-                {money(summary.expectedCashTotal)} <span className="text-[var(--color-text-soft)]">→</span> {money(summary.countedCashTotal)}
-              </p>
-            </div>
+            {split ? (
+              <>
+                <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
+                  <p className="text-xs text-[var(--color-text-muted)]">Venta en efectivo: debía haber → contaron</p>
+                  <p className="hm-num text-base font-bold text-[var(--color-text)]">
+                    {money(split.salesExpected)} <span className="text-[var(--color-text-soft)]">→</span> {money(split.salesCounted)}
+                  </p>
+                  <p className="hm-num text-xs text-[var(--color-text-muted)]">{signed(split.salesCounted - split.salesExpected)}</p>
+                </div>
+                <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
+                  <p className="text-xs text-[var(--color-text-muted)]">Sencillo: abrió con → quedó</p>
+                  <p className="hm-num text-base font-bold text-[var(--color-text)]">
+                    {money(split.fundOpened)} <span className="text-[var(--color-text-soft)]">→</span> {money(split.fundClosed)}
+                  </p>
+                  <p className="hm-num text-xs text-[var(--color-text-muted)]">{signed(split.fundClosed - split.fundOpened)}</p>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3 xl:col-span-2">
+                <p className="text-xs text-[var(--color-text-muted)]">Efectivo esperado vs contado</p>
+                <p className="hm-num text-base font-bold text-[var(--color-text)]">
+                  {money(summary.expectedCashTotal)} <span className="text-[var(--color-text-soft)]">→</span> {money(summary.countedCashTotal)}
+                </p>
+              </div>
+            )}
             <div className="rounded-lg border p-3" style={{ borderColor: diffOverTolerance ? "var(--color-warning-200)" : "var(--color-border)" }}>
-              <p className="text-xs text-[var(--color-text-muted)]">Diferencia (tolerancia {money(cashDifferenceTolerance)})</p>
+              <p className="text-xs text-[var(--color-text-muted)]">{diffLabel} (tolerancia {money(cashDifferenceTolerance)})</p>
               <p className="hm-num text-base font-bold" style={{ color: diffOverTolerance ? "var(--color-warning-700)" : "var(--color-text)" }}>
-                {money(diff)}
+                {money(Math.abs(diff))}
               </p>
             </div>
+          </div>
+          {split?.usd && (
+            <p className="hm-num text-xs text-[var(--color-text-secondary)]">
+              Dólares aparte: debía haber US${split.usd.expected.toFixed(2)} → contaron US${split.usd.counted.toFixed(2)}
+            </p>
+          )}
+          {diff !== 0 && (
+            <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
+              {diff > 0
+                ? "Sobró dinero al contar: entra como ingreso en Finanzas (Sobrante de caja). Si un cobro en efectivo quedó anotado como tarjeta o transferencia, o el sencillo se contó con los billetes de venta, revísalo con quien cerró."
+                : "Falta dinero. Si un cobro con tarjeta o transferencia se anotó como efectivo, corrígelo en Ventas → Pago y la diferencia se recalcula sola."}
+            </p>
+          )}
           </div>
         )}
 
@@ -106,9 +175,9 @@ export function ConfirmDayDialog({ summary, checklist, cashDifferenceTolerance =
         </label>
 
         {!checklist && (
-          <div className="flex items-start gap-2.5 rounded-lg border border-[var(--color-info-200)] bg-[color-mix(in_srgb,var(--color-info-50)_30%,white)] px-3.5 py-2.5">
+          <div className="flex items-start gap-2.5 rounded-lg border border-[var(--color-info-200)] bg-[color-mix(in_srgb,var(--color-info-50)_30%,var(--color-surface))] px-3.5 py-2.5">
             <Info className="mt-0.5 flex-shrink-0 text-[var(--color-info-600)]" style={{ width: "0.875rem", height: "0.875rem" }} />
-            <p className="text-xs leading-relaxed text-[var(--color-info-800)]">Calcula el resumen primero para poder confirmar.</p>
+            <p className="text-xs leading-relaxed text-[var(--color-info-700)]">Calcula el resumen primero para poder confirmar.</p>
           </div>
         )}
 

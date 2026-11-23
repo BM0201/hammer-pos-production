@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PaymentMethod } from "@prisma/client";
-import { resolveUsdTenders } from "@/modules/payments/usd-tender";
+import { resolveUsdTenders, summarizeUsdTenders } from "@/modules/payments/usd-tender";
 
 const RATE = 36.6243;
 
@@ -37,4 +37,12 @@ test("dólares que no cubren lo aplicado se rechazan", () => {
 
 test("dólares solo en efectivo", () => {
   assert.throws(() => resolveUsdTenders([{ method: PaymentMethod.CARD, amount: 100, receivedUsdAmount: 5 }], RATE), /USD_TENDER_MUST_BE_CASH/);
+});
+
+test("resumen de dólares: solo los cobros con US$, en US$ y en los C$ que cubrieron", () => {
+  assert.equal(summarizeUsdTenders([{ amount: 500 }]), null);
+  assert.deepEqual(
+    summarizeUsdTenders([{ amount: 500 }, { amount: 1450, receivedUsdAmount: 40 }, { amount: "0.10", receivedUsdAmount: "0.20" }]),
+    { count: 2, usd: 40.2, nio: 1450.1 },
+  );
 });

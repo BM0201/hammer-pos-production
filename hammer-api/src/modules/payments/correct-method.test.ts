@@ -21,6 +21,10 @@ test("no corrige lo que no es efectivo, ni dólares, ni ventas anuladas o pagos 
   assert.throws(() => assertTenderCorrectable(cash, { status: "VOIDED" }, "PAID", ok), /PAYMENT_NOT_POSTED/);
 });
 
+test("un día ya confirmado no se corrige por debajo", () => {
+  assert.throws(() => assertTenderCorrectable(cash, posted, "PAID", ok, true), /OPERATIONAL_DAY_ALREADY_CONFIRMED/);
+});
+
 test("exige referencia, cuenta (transferencia) y motivo", () => {
   assert.throws(() => assertTenderCorrectable(cash, posted, "PAID", { ...ok, referenceNumber: " " }), /PAYMENT_REFERENCE_REQUIRED/);
   assert.throws(() => assertTenderCorrectable(cash, posted, "PAID", { ...ok, bankAccountId: null }), /PAYMENT_BANK_ACCOUNT_REQUIRED/);

@@ -34,3 +34,16 @@ export function resolveUsdTenders<T extends UsdTenderLike>(
     return { ...tender, receivedAmount: received.toNumber(), changeAmount: change.toNumber(), usdRate: rate };
   });
 }
+
+/** Cobros en dólares de un período: cuántos, US$ recibidos y C$ que cubrieron. Ya están dentro de "Efectivo". */
+export type UsdSales = { count: number; usd: number; nio: number };
+
+type Decimalish = { toString(): string } | number | string;
+
+export function summarizeUsdTenders(tenders: ReadonlyArray<{ amount: Decimalish; receivedUsdAmount?: Decimalish | null }>): UsdSales | null {
+  const usdTenders = tenders.filter((t) => t.receivedUsdAmount != null);
+  if (usdTenders.length === 0) return null;
+  const sum = (f: (t: (typeof usdTenders)[number]) => Decimalish) =>
+    usdTenders.reduce((acc, t) => acc.add(new Prisma.Decimal(f(t).toString())), new Prisma.Decimal(0)).toDecimalPlaces(2).toNumber();
+  return { count: usdTenders.length, usd: sum((t) => t.receivedUsdAmount!), nio: sum((t) => t.amount) };
+}

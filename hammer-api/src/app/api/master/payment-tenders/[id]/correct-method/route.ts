@@ -35,6 +35,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       TENDER_NOT_CASH: "Solo se corrige un cobro anotado como efectivo.",
       TENDER_IS_USD: "Un cobro en dólares no se corrige así.",
       CORRECTION_REASON_REQUIRED: "Escribe el motivo de la corrección.",
+      OPERATIONAL_DAY_ALREADY_CONFIRMED: "Ese día ya está confirmado. Reábrelo en Día operativo, corrige el cobro y vuelve a confirmarlo.",
     };
     if (messages[code]) return fail(code, messages[code], 400);
     return toHttpErrorResponse(error);

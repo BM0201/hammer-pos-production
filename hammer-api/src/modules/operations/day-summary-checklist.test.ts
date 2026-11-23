@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildChecklist } from "@/modules/operations/day-summary";
+import { buildChecklist, cashDifferenceMessage } from "@/modules/operations/day-summary";
 
 /**
  * prompt-brain-centro-decisiones.md Fase 4.1 — "critical_brain" ahora
@@ -64,4 +64,10 @@ test("escaneo reciente pero con críticas pendientes: ATTENTION por el conteo, n
   const item = criticalBrainItem(checklist.items);
   assert.equal(item.status, "ATTENTION");
   assert.equal(item.count, 3);
+});
+
+test("diferencia de caja: dice si es sobrante (ingreso) o faltante (revisar cobros)", () => {
+  assert.match(cashDifferenceMessage(2165, 100), /^Sobrante de C\$ 2165\.00 .*Finanzas/);
+  assert.match(cashDifferenceMessage(-1451.5, 100), /^Faltante de C\$ 1451\.50 .*Ventas → Pago/);
+  assert.match(cashDifferenceMessage(0, 100), /^Cuadró/);
 });

@@ -35,6 +35,7 @@ type TenderRow = {
   amount: number;
   receivedAmount?: number | null;
   changeAmount?: number | null;
+  receivedUsdAmount?: number | null;
 };
 
 function sum(values: number[]) {
@@ -123,6 +124,16 @@ function createRealtimeDb(input: { orders: OrderRow[]; payments: PaymentRow[]; t
       count: async ({ where }: any) => input.orders.filter((order) => matchesOrderWhere(order, where)).length,
     },
     paymentTender: {
+      aggregate: async ({ where }: any) => {
+        const rows = input.tenders.filter((tender) => {
+          const payment = paymentById.get(tender.paymentId);
+          return tender.receivedUsdAmount != null && (payment ? matchesPaymentWhere(payment, where.payment) : false);
+        });
+        return {
+          _sum: { amount: sum(rows.map((row) => row.amount)), receivedUsdAmount: sum(rows.map((row) => row.receivedUsdAmount ?? 0)) },
+          _count: { _all: rows.length },
+        };
+      },
       groupBy: async ({ where }: any) => {
         const rows = input.tenders.filter((tender) => {
           const payment = paymentById.get(tender.paymentId);
@@ -195,7 +206,7 @@ test("integration: mixed payments and cash change use Payment.amount for net sal
   const tenders: TenderRow[] = [
     { id: "t-mixed-cash", paymentId: "pay-mixed", method: PaymentMethod.CASH, amount: 600 },
     { id: "t-mixed-card", paymentId: "pay-mixed", method: PaymentMethod.CARD, amount: 400 },
-    { id: "t-change-cash", paymentId: "pay-change", method: PaymentMethod.CASH, amount: 300, receivedAmount: 500, changeAmount: 200 },
+    { id: "t-change-cash", paymentId: "pay-change", method: PaymentMethod.CASH, amount: 300, receivedAmount: 500, changeAmount: 200, receivedUsdAmount: 10 },
   ];
   const summary = await buildBranchRealtimeSalesSummary(createRealtimeDb({ orders, payments, tenders }), MSY, today);
 
@@ -204,6 +215,8 @@ test("integration: mixed payments and cash change use Payment.amount for net sal
     Object.fromEntries(summary.paymentsByMethod.map((item) => [item.method, item.amount])),
     { CASH: 900, CARD: 400 },
   );
+  // Dólares: su propio apartado, ya dentro de Efectivo.
+  assert.deepEqual(summary.usdSales, { count: 1, usd: 10, nio: 300 });
 });
 
 test("integration: manual invoice registration after payment and later cancellation stay out of net sales", async () => {

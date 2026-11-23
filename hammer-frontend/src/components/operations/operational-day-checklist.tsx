@@ -30,7 +30,7 @@ type RowConfig = {
 
 const ROW_CONFIG: Record<ChecklistItem["status"], RowConfig> = {
   ATTENTION: {
-    container: "border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,white)]",
+    container: "border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,var(--color-surface))]",
     icon: AlertTriangle,
     iconColor: "text-[var(--color-warning-600)]",
     labelColor: "text-[var(--color-text)]",

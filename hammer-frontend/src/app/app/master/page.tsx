@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { Route } from "next";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { UsdSalesLine, type UsdSales } from "@/components/operations/usd-sales-line";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -142,6 +143,7 @@ type CommandCenter = {
     cardTenderTotal: number;
     transferTenderTotal: number;
     otherTenderTotal: number;
+    usdSales?: UsdSales | null;
   };
   attention: {
     pendingApprovals: number;
@@ -577,7 +579,7 @@ function AttentionStrip({ items }: { items: AttentionItem[] }) {
 
 function PaymentMethodsStrip({ totals }: { totals: CommandCenter["totals"] }) {
   const segments: Array<{ label: string; value: number; color: string; warn?: boolean }> = [
-    { label: "Efectivo neto", value: totals.cashTenderNetTotal, color: "var(--color-success-600)" },
+    { label: "Efectivo", value: totals.cashTenderNetTotal, color: "var(--color-success-600)" },
     { label: "Tarjeta", value: totals.cardTenderTotal, color: "var(--color-master-600)" },
     { label: "Transferencia", value: totals.transferTenderTotal, color: "var(--color-info-600)" },
     { label: "Otros", value: totals.otherTenderTotal, color: "var(--color-text-soft)" },
@@ -627,6 +629,7 @@ function PaymentMethodsStrip({ totals }: { totals: CommandCenter["totals"] }) {
           </div>
         ))}
       </div>
+      {totals.usdSales ? <div className="mt-2.5"><UsdSalesLine usdSales={totals.usdSales} /></div> : null}
     </div>
   );
 }
@@ -1455,7 +1458,7 @@ function BranchCard({ branch: b, pct }: { branch: BranchBlock; pct: number }) {
         <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2">
           {([
             ["Apertura", money(b.openingCashTotal)],
-            ["Efectivo neto", money(b.cashTenderNetTotal)],
+            ["Efectivo", money(b.cashTenderNetTotal)],
             ["Movimientos", money(b.cashMovementsNet)],
             ["Egresos", b.cashOutflowsTotal > 0 ? `- ${money(b.cashOutflowsTotal)}` : money(0)],
             ["Tarjeta", money(b.cardTenderTotal)],

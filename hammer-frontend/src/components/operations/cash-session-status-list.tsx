@@ -66,8 +66,8 @@ const STATUS_HELP: Record<string, string> = {
 };
 
 const URGENCY_BORDER: Record<"hard" | "soft" | "ok", string> = {
-  hard:  "border-[var(--color-danger-300)] bg-[color-mix(in_srgb,var(--color-danger-50)_20%,white)]",
-  soft:  "border-[var(--color-warning-300)] bg-[color-mix(in_srgb,var(--color-warning-50)_20%,white)]",
+  hard:  "border-[var(--color-danger-300)] bg-[color-mix(in_srgb,var(--color-danger-50)_20%,var(--color-surface))]",
+  soft:  "border-[var(--color-warning-300)] bg-[color-mix(in_srgb,var(--color-warning-50)_20%,var(--color-surface))]",
   ok:    "border-[var(--color-border)] bg-[var(--color-surface-muted)]",
 };
 
@@ -169,6 +169,14 @@ export function CashSessionStatusList({ sessions, branchId, dayLifecycle }: Prop
                     </div>
                   </div>
 
+                  {session.destinationDeclaration?.retainCashFundPortion != null ? (
+                    <p className="border-t border-[var(--color-border)] px-3.5 py-2 text-xs text-[var(--color-text-secondary)]" data-testid="cash-session-fund">
+                      Sencillo: abrió con <strong className="tabular-nums">{money(session.openingAmount)}</strong> → quedó en{" "}
+                      <strong className="tabular-nums">{money(session.destinationDeclaration.retainCashFundPortion)}</strong>
+                      <span className="text-[var(--color-text-muted)]"> · va dentro de Contado</span>
+                    </p>
+                  ) : null}
+
                   {Number(session.countedUsdAmount ?? 0) > 0 || Number(session.expectedUsdAmount ?? 0) > 0 ? (
                     <p className="border-t border-[var(--color-border)] px-3.5 py-2 text-xs text-[var(--color-text-secondary)]" data-testid="cash-session-usd">
                       Dólares contados aparte: <strong className="tabular-nums">{usdMoney(session.countedUsdAmount)}</strong>
@@ -211,7 +219,7 @@ export function CashSessionStatusList({ sessions, branchId, dayLifecycle }: Prop
 
                   {/* CTA for sessions requiring action */}
                   {session.status === "AUTO_CLOSED_PENDING_REVIEW" && (
-                    <div className="flex flex-col gap-2 border-t border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_40%,white)] px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-col gap-2 border-t border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_40%,var(--color-surface))] px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
                       <span className="text-xs text-[var(--color-warning-800)] font-medium">Esta caja fue auto-cerrada y requiere revisión manual.</span>
                       {branchId && (
                         <Link
@@ -224,7 +232,7 @@ export function CashSessionStatusList({ sessions, branchId, dayLifecycle }: Prop
                     </div>
                   )}
                   {session.status === "RECONCILING" && (
-                    <div className="flex flex-col gap-2 border-t border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_40%,white)] px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-col gap-2 border-t border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_40%,var(--color-surface))] px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
                       <span className="text-xs text-[var(--color-warning-800)] font-medium">
                         Cierre a medias: el cajero pidió cerrar y está contando el efectivo, pero falta confirmar el monto final.
                         El cajero debe terminar el conteo; si no, Master puede forzar el cierre desde Operación Global.
@@ -240,7 +248,7 @@ export function CashSessionStatusList({ sessions, branchId, dayLifecycle }: Prop
                     </div>
                   )}
                   {session.status === "OPEN" && notActive && (
-                    <div className="flex flex-col gap-2 border-t border-[var(--color-danger-200)] bg-[color-mix(in_srgb,var(--color-danger-50)_30%,white)] px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-col gap-2 border-t border-[var(--color-danger-200)] bg-[color-mix(in_srgb,var(--color-danger-50)_30%,var(--color-surface))] px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
                       <span className="text-xs text-[var(--color-danger-800)] font-medium">Caja activa — el día ya no está en curso, revisar.</span>
                       {branchId && (
                         <Link
