@@ -60,6 +60,16 @@ export async function assignTripCodeTx(tx: Prisma.TransactionClient, tripId: str
   return tripCode;
 }
 
+/** Un viaje ingresado se puede corregir durante 24 h desde que se ingresó (decisión del dueño, 2026-11-23). */
+export const TRIP_CORRECTION_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** Hasta cuándo se puede corregir el viaje, o null si no está ingresado o ya pasó el plazo. */
+export function tripCorrectableUntil(trip: { status: string; confirmedAt: Date | null }, now: Date = new Date()): Date | null {
+  if (trip.status !== "TRANSFERRED" || !trip.confirmedAt) return null;
+  const until = new Date(trip.confirmedAt.getTime() + TRIP_CORRECTION_WINDOW_MS);
+  return until > now ? until : null;
+}
+
 /** Create a new timber trip with lines */
 export async function createTimberTrip(input: CreateTimberTripInput, userId?: string) {
   const pricing = await getPricingConfig(input.destinationBranchId);
@@ -144,15 +154,12 @@ export async function createTimberTrip(input: CreateTimberTripInput, userId?: st
   return { trip, calculation: calc };
 }
 
-/** Update a draft timber trip */
-export async function updateTimberTrip(id: string, input: UpdateTimberTripInput) {
-  const existing = await prisma.timberTrip.findUnique({
-    where: { id },
-    include: { lines: true },
-  });
-  if (!existing) throw new Error("TIMBER_TRIP_NOT_FOUND");
-  if (existing.status !== "DRAFT") throw new Error("TRIP_NOT_EDITABLE");
-
+/**
+ * Recalcula un viaje con los cambios pedidos (lo que no viene se toma del guardado) y arma los
+ * datos para guardarlo. Lo usan el borrador (updateTimberTrip) y la corrección de un viaje ya
+ * ingresado (correctTimberTrip), para que los dos calculen igual.
+ */
+export async function buildTimberTripRecalc(existing: Prisma.TimberTripGetPayload<{ include: { lines: true } }>, input: UpdateTimberTripInput) {
   const pricing = await getPricingConfig(existing.destinationBranchId);
   const tripPricing: TimberPricing = {
     costPerFoot: pricing.costPerFoot,
@@ -191,6 +198,64 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
     { costPerFootInput: input.costPerFoot, expenses, targetMarginPercent: pricing.targetMarginPercent, classification: pricing.classification },
   );
 
+  const data = {
+    woodTripTotalCost: new Decimal(calc.totals.woodTripTotalCost),
+    computedCostPerFoot: new Decimal(calc.totals.computedCostPerFoot),
+    freightAmount: new Decimal(expenses.freightAmount ?? 0),
+    fuelAmount: new Decimal(expenses.fuelAmount ?? 0),
+    perDiemAmount: new Decimal(expenses.perDiemAmount ?? 0),
+    permitsAmount: new Decimal(expenses.permitsAmount ?? 0),
+    otherExpensesAmount: new Decimal(expenses.otherExpensesAmount ?? 0),
+    sawingAmount: new Decimal(expenses.sawingAmount ?? 0),
+    tripExpensesTotal: new Decimal(calc.totals.tripExpensesTotal),
+    landedCostPerFoot: new Decimal(calc.totals.landedCostPerFoot),
+    invoicedFeet: input.invoicedFeet !== undefined ? (input.invoicedFeet != null ? new Decimal(input.invoicedFeet) : null) : undefined,
+    pricePolicy: input.pricePolicy ?? undefined,
+    pricePerInchTabla: new Decimal(tripPricing.pricePerInchTabla),
+    pricePerInchTablilla: new Decimal(tripPricing.pricePerInchTablilla),
+    pricePerInchCuadro: new Decimal(tripPricing.pricePerInchCuadro),
+    totalPieces: calc.totals.totalPieces,
+    totalFeet: new Decimal(calc.totals.totalFeet),
+    totalCost: new Decimal(calc.totals.totalCostFeet),
+    totalSale: new Decimal(calc.totals.totalSale),
+    totalProfit: new Decimal(calc.totals.totalProfit),
+    marginPercent: new Decimal(calc.totals.globalMarginPct),
+    supplierName: input.supplierName !== undefined ? input.supplierName : undefined,
+    origin: input.origin !== undefined ? input.origin : undefined,
+    notes: input.notes !== undefined ? input.notes : undefined,
+    lines: {
+      create: calc.lines.map((line) => ({
+        thicknessIn: line.dimensions.thickness,
+        widthIn: line.dimensions.width,
+        lengthIn: line.dimensions.length,
+        varaLength: line.varaLength,
+        priceGroup: line.priceGroup,
+        pieces: line.pieces,
+        calculatedFeet: new Decimal(line.calculatedFeet),
+        calculatedCostFeet: new Decimal(line.calculatedCostFeet),
+        calculatedCostPerPiece: new Decimal(line.calculatedCostPerPiece),
+        calculatedSalePricePerPiece: new Decimal(line.calculatedSalePricePerPiece),
+        calculatedSaleTotal: new Decimal(line.calculatedSaleTotal),
+        calculatedProfit: new Decimal(line.calculatedProfit),
+        calculatedMarginPct: new Decimal(line.calculatedMarginPct),
+      })),
+    },
+  } satisfies Prisma.TimberTripUpdateInput;
+
+  return { calc, data, pricing };
+}
+
+/** Update a draft timber trip */
+export async function updateTimberTrip(id: string, input: UpdateTimberTripInput) {
+  const existing = await prisma.timberTrip.findUnique({
+    where: { id },
+    include: { lines: true },
+  });
+  if (!existing) throw new Error("TIMBER_TRIP_NOT_FOUND");
+  if (existing.status !== "DRAFT") throw new Error("TRIP_NOT_EDITABLE");
+
+  const { calc, data, pricing } = await buildTimberTripRecalc(existing, input);
+
   const trip = await prisma.$transaction(async (tx) => {
     // El chequeo de DRAFT de arriba es fuera de la transacción: un
     // autoguardado que llega justo después de confirmar reemplazaba las
@@ -202,54 +267,7 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
     // Delete old lines
     await tx.timberTripLine.deleteMany({ where: { tripId: id } });
 
-    // Update trip
-    return tx.timberTrip.update({
-      where: { id },
-      data: {
-        woodTripTotalCost: new Decimal(calc.totals.woodTripTotalCost),
-        computedCostPerFoot: new Decimal(calc.totals.computedCostPerFoot),
-        freightAmount: new Decimal(expenses.freightAmount ?? 0),
-        fuelAmount: new Decimal(expenses.fuelAmount ?? 0),
-        perDiemAmount: new Decimal(expenses.perDiemAmount ?? 0),
-        permitsAmount: new Decimal(expenses.permitsAmount ?? 0),
-        otherExpensesAmount: new Decimal(expenses.otherExpensesAmount ?? 0),
-        sawingAmount: new Decimal(expenses.sawingAmount ?? 0),
-        tripExpensesTotal: new Decimal(calc.totals.tripExpensesTotal),
-        landedCostPerFoot: new Decimal(calc.totals.landedCostPerFoot),
-        invoicedFeet: input.invoicedFeet !== undefined ? (input.invoicedFeet != null ? new Decimal(input.invoicedFeet) : null) : undefined,
-        pricePolicy: input.pricePolicy ?? undefined,
-        pricePerInchTabla: new Decimal(tripPricing.pricePerInchTabla),
-        pricePerInchTablilla: new Decimal(tripPricing.pricePerInchTablilla),
-        pricePerInchCuadro: new Decimal(tripPricing.pricePerInchCuadro),
-        totalPieces: calc.totals.totalPieces,
-        totalFeet: new Decimal(calc.totals.totalFeet),
-        totalCost: new Decimal(calc.totals.totalCostFeet),
-        totalSale: new Decimal(calc.totals.totalSale),
-        totalProfit: new Decimal(calc.totals.totalProfit),
-        marginPercent: new Decimal(calc.totals.globalMarginPct),
-        supplierName: input.supplierName !== undefined ? input.supplierName : undefined,
-        origin: input.origin !== undefined ? input.origin : undefined,
-        notes: input.notes !== undefined ? input.notes : undefined,
-        lines: {
-          create: calc.lines.map((line) => ({
-            thicknessIn: line.dimensions.thickness,
-            widthIn: line.dimensions.width,
-            lengthIn: line.dimensions.length,
-            varaLength: line.varaLength,
-            priceGroup: line.priceGroup,
-            pieces: line.pieces,
-            calculatedFeet: new Decimal(line.calculatedFeet),
-            calculatedCostFeet: new Decimal(line.calculatedCostFeet),
-            calculatedCostPerPiece: new Decimal(line.calculatedCostPerPiece),
-            calculatedSalePricePerPiece: new Decimal(line.calculatedSalePricePerPiece),
-            calculatedSaleTotal: new Decimal(line.calculatedSaleTotal),
-            calculatedProfit: new Decimal(line.calculatedProfit),
-            calculatedMarginPct: new Decimal(line.calculatedMarginPct),
-          })),
-        },
-      },
-      include: { lines: true, destinationBranch: true },
-    });
+    return tx.timberTrip.update({ where: { id }, data, include: { lines: true, destinationBranch: true } });
   });
 
   // BUG FIX (crash en produccion): getTimberTrip adjunta `reconciliation` al
@@ -317,7 +335,12 @@ export async function getTimberTrip(id: string) {
     config.reconciliationTolerancePercent,
   );
 
-  return { ...trip, reconciliation, nextTripCode: trip.status === "DRAFT" ? await getNextTripCode() : null };
+  return {
+    ...trip,
+    reconciliation,
+    nextTripCode: trip.status === "DRAFT" ? await getNextTripCode() : null,
+    correctableUntil: tripCorrectableUntil(trip),
+  };
 }
 
 /** List timber trips with filtering */

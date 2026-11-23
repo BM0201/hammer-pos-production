@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EMPTY_EXPENSES, liveTripCost, mergeCubicationImport, tripReadiness, type InjectionPreviewLine, type Reconciliation } from "@/components/timber/trip-logic";
+import { correctionChanges, EMPTY_EXPENSES, liveTripCost, mergeCubicationImport, tripReadiness, type InjectionPreviewLine, type Reconciliation } from "@/components/timber/trip-logic";
 
 const ok: Reconciliation = { invoicedFeet: null, differenceFeet: 0, differencePercent: 0, tolerancePercent: 0.01, status: "NOT_APPLICABLE" };
 const line = { pieces: 10 } as never;
@@ -61,4 +61,22 @@ test("Excel: la medida que ya estaba se reemplaza, la nueva se agrega", () => {
     [{ thickness: 1, width: 12, length: 16, pieces: 30 }, { thickness: 2, width: 4, length: 16, pieces: 8 }],
   );
   assert.deepEqual(merged, [{ thickness: 1, width: 12, length: 16, pieces: 30 }, { thickness: 2, width: 4, length: 16, pieces: 8 }]);
+});
+
+test("corrección: solo lista las medidas que cambian de piezas", () => {
+  const saved = [
+    { thicknessIn: 1, widthIn: 12, lengthIn: 16, pieces: 100 },
+    { thicknessIn: 1, widthIn: 3, lengthIn: 13, pieces: 40 },
+    { thicknessIn: 2, widthIn: 4, lengthIn: 13, pieces: 8 },
+  ];
+  const edited = [
+    { thickness: 1, width: 12, length: 16, pieces: 90 },
+    { thickness: 2, width: 4, length: 13, pieces: 8 },
+    { thickness: 2, width: 2, length: 13, pieces: 20 },
+  ];
+  assert.deepEqual(correctionChanges(saved, edited), [
+    { measure: "1×12×16", before: 100, after: 90 },
+    { measure: "1×3×13", before: 40, after: 0 },
+    { measure: "2×2×13", before: 0, after: 20 },
+  ]);
 });

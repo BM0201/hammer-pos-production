@@ -7,6 +7,7 @@
  *   trips             → viajes: numeración, borrador, cancelar, ver, listar
  *   cubication-import → carga de la cubicación desde Excel (vista previa)
  *   injection         → ingresar el viaje al inventario (vista previa + confirmar)
+ *   correction        → corregir un viaje ya ingresado (24 h, por diferencia)
  */
 export * from "./catalog-link";
 export * from "./pricing-config";
@@ -15,3 +16,4 @@ export * from "./products";
 export * from "./trips";
 export * from "./cubication-import";
 export * from "./injection";
+export * from "./correction";

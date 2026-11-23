@@ -184,7 +184,10 @@ function TripSummaryView({ trip }: { trip: TripDetail }) {
       <div className={`rounded-xl border p-3.5 text-[12.5px] ${cancelled ? "border-[var(--color-border)] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]" : "border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]"}`}>
         {cancelled
           ? "Este viaje se canceló: nunca tocó el inventario."
-          : <>Ingresado al inventario de <b>{trip.destinationBranch.name}</b>{trip.confirmedAt && <> el {fmtDateTimeShort(trip.confirmedAt)}</>}.{trip.marginOverrideReason && <> Motivo de margen negativo: «{trip.marginOverrideReason}».</>}</>}
+          : <>Ingresado al inventario de <b>{trip.destinationBranch.name}</b>{trip.confirmedAt && <> el {fmtDateTimeShort(trip.confirmedAt)}</>}.{trip.marginOverrideReason && <> Motivo de margen negativo: «{trip.marginOverrideReason}».</>}
+              {trip.correctableUntil
+                ? <> Se puede corregir hasta el {fmtDateTimeShort(trip.correctableUntil)}.</>
+                : <> Pasaron más de 24 horas desde el ingreso: el viaje quedó cerrado y ya no se puede corregir. Si algo quedó mal, hacé un ajuste de inventario.</>}</>}
       </div>
       <Card noPadding>
         <div className="overflow-x-auto">

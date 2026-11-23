@@ -61,8 +61,17 @@ const SESSION_COOKIE = "__Host-hammer_session=dev-preview; Path=/; Secure; HttpO
 /* ── Madera: viajes con la aritmética real y un catálogo corto, nombres en varas como el real ── */
 
 type MockTripBody = { lines?: Array<{ thickness: number; width: number; length: number; pieces: number }>; woodTripTotalCost?: number; costPerFoot?: number; expenses?: Record<string, number>; invoicedFeet?: number | null; pricePolicy?: string; supplierName?: string | null; origin?: string | null };
-type MockTrip = { id: string; tripCode: string; status: string; destinationBranchId: string; createdAt: string; body: MockTripBody };
+type MockTrip = { id: string; tripCode: string; status: string; destinationBranchId: string; createdAt: string; confirmedAt?: string; body: MockTripBody };
 const mockTrips: MockTrip[] = [];
+// Dos viajes ya ingresados para ver la corrección: uno dentro de las 24 h y otro ya cerrado.
+// La REGLA 1X3X6 entró 10 y quedan 3 en bodega (mockWood): quitarla toda tiene que fallar.
+for (const [code, hoursAgo] of [["VJM-2026-001", 30], ["VJM-2026-002", 3]] as const) {
+  const confirmedAt = new Date(Date.now() - hoursAgo * 3_600_000).toISOString();
+  mockTrips.push({
+    id: `trip-${code.slice(-3)}`, tripCode: code, status: "TRANSFERRED", destinationBranchId: "br-central", createdAt: confirmedAt, confirmedAt,
+    body: { lines: [{ thickness: 1, width: 12, length: 16, pieces: 40 }, { thickness: 1, width: 3, length: 16, pieces: 10 }], costPerFoot: 22, expenses: { freightAmount: 1500 }, supplierName: "Aserrío El Pino" },
+  });
+}
 const mockWood = [
   { id: "wood-tabla", sku: "MAD-TAB-1126-0001", name: "TABLA 1X12X6", subtype: "TABLA", t: 1, w: 12, varas: 6, stock: 270, price: 1360, cost: 1150 },
   { id: "wood-regla", sku: "MAD-REG-136-0001", name: "REGLA 1X3X6", subtype: "REGLA", t: 1, w: 3, varas: 6, stock: 3, price: 300, cost: 260 },
@@ -95,6 +104,8 @@ function mockTripDetail(trip: MockTrip) {
     origin: trip.body.origin ?? null,
     reconciliation: calculateReconciliation(calc.totals.totalFeet, trip.body.invoicedFeet ?? null, 0.01),
     nextTripCode: trip.status === "DRAFT" ? mockNextTripCode() : null,
+    confirmedAt: trip.confirmedAt ?? null,
+    correctableUntil: trip.status === "TRANSFERRED" && trip.confirmedAt && Date.parse(trip.confirmedAt) + 86_400_000 > Date.now() ? new Date(Date.parse(trip.confirmedAt) + 86_400_000).toISOString() : null,
     lines: calc.lines.map((line, i) => ({ id: `line-${i}`, thicknessIn: line.dimensions.thickness, widthIn: line.dimensions.width, lengthIn: line.dimensions.length, ...line })),
   };
 }
@@ -1651,6 +1662,19 @@ const server = http.createServer(async (req, res) => {
       if (detail.reconciliation.status === "REVIEW" && body.acknowledgeReconciliation !== true) return send(res, 400, { ok: false, error: { code: "RECONCILIATION_REQUIRES_ACK", message: "Los pies no cuadran con la factura del aserradero: marcá que lo revisaste para continuar." } });
       mockTrip.tripCode = mockNextTripCode();
       mockTrip.status = "TRANSFERRED";
+      mockTrip.confirmedAt = new Date().toISOString();
+    }
+    if (body.action === "correct") {
+      // Mismas reglas que correctTimberTrip: 24 h y nunca dejar la bodega en negativo.
+      const changes = body.changes as MockTripBody;
+      if (!mockTripDetail(mockTrip).correctableUntil) return send(res, 409, { ok: false, error: { code: "TRIP_CORRECTION_WINDOW_CLOSED", message: "Ya pasaron las 24 horas desde que se ingresó este viaje: quedó cerrado y no se puede corregir. Si algo quedó mal, hacé un ajuste de inventario." } });
+      const piecesOf = (lines: MockTripBody["lines"], wood: (typeof mockWood)[number]) => (lines ?? []).filter((l) => l.thickness === wood.t && l.width === wood.w && l.length === MOCK_FEET_BY_VARAS[wood.varas]).reduce((sum, l) => sum + l.pieces, 0);
+      for (const wood of mockWood) {
+        const delta = piecesOf(changes?.lines, wood) - piecesOf(mockTrip.body.lines, wood);
+        if (wood.stock + delta < 0) return send(res, 409, { ok: false, error: { code: "TRIP_CORRECTION_STOCK_SOLD", message: `No se puede quitar ${-delta} piezas de ${wood.name}: solo quedan ${wood.stock} piezas en bodega (el resto ya se vendió o se movió). Dejá al menos ${-delta - wood.stock} piezas más en esa medida.` } });
+      }
+      for (const wood of mockWood) wood.stock += piecesOf(changes?.lines, wood) - piecesOf(mockTrip.body.lines, wood);
+      mockTrip.body = changes;
     }
     return ok(res, mockTripDetail(mockTrip));
   }

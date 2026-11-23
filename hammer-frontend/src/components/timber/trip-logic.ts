@@ -44,6 +44,8 @@ export type TripDetail = {
   totalPieces: number; totalFeet: Num; totalCost: Num; totalSale: Num; totalProfit: Num; marginPercent: Num;
   supplierName: string | null; origin: string | null; notes: string | null;
   confirmedAt?: string | null; marginOverrideReason?: string | null;
+  /** Hasta cuándo se puede corregir (24 h desde el ingreso); null = cerrado o no ingresado. */
+  correctableUntil?: string | null;
   reconciliation: Reconciliation;
   lines: TripLine[];
 };
@@ -160,4 +162,19 @@ export function addMeasureTo(lines: TripLineDraft[], measure: Omit<TripLineDraft
   const idx = lines.findIndex((l) => l.thickness === measure.thickness && l.width === measure.width && l.length === measure.length);
   if (idx >= 0) return lines.map((l, i) => (i === idx ? { ...l, pieces: l.pieces + pieces } : l));
   return [...lines, { ...measure, pieces }];
+}
+
+/** Corrección de un viaje ingresado: qué medidas cambian de piezas (lo que se suma o se saca del inventario). */
+export function correctionChanges(saved: Array<Pick<TripLine, "thicknessIn" | "widthIn" | "lengthIn" | "pieces">>, edited: TripLineDraft[]) {
+  const key = (m: { thickness: number; width: number; length: number }) => measureLabel(m);
+  const before = new Map<string, number>();
+  for (const l of saved) {
+    const k = key({ thickness: l.thicknessIn, width: l.widthIn, length: l.lengthIn });
+    before.set(k, (before.get(k) ?? 0) + l.pieces);
+  }
+  const after = new Map<string, number>();
+  for (const l of edited) after.set(key(l), (after.get(key(l)) ?? 0) + l.pieces);
+  return [...new Set([...before.keys(), ...after.keys()])]
+    .map((measure) => ({ measure, before: before.get(measure) ?? 0, after: after.get(measure) ?? 0 }))
+    .filter((change) => change.before !== change.after);
 }

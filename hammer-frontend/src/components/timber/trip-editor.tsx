@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, CloudOff, Loader2, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, CloudOff, Loader2, PencilLine, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { showToast } from "@/components/ui/toast";
+import { fmtDateTimeShort } from "@/lib/format";
 import { errorCode, errorMessage, timberRequest } from "./trip-api";
-import { EMPTY_EXPENSES, n, statusLabel, type TripDetail, type TripLineDraft } from "./trip-logic";
+import { correctionChanges, EMPTY_EXPENSES, n, statusLabel, type TripDetail, type TripLineDraft } from "./trip-logic";
 import { TripCubication } from "./trip-cubication";
 import { TripCostPanel, type TripCostForm } from "./trip-cost-panel";
 import { TripReview } from "./trip-review";
@@ -43,6 +44,10 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [askCancel, setAskCancel] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  // Viaje ya ingresado, dentro de las 24 h: se edita sin autoguardado y se aplica con un solo "Guardar corrección".
+  const [correcting, setCorrecting] = useState(false);
+  const [askCorrect, setAskCorrect] = useState(false);
+  const [savingCorrection, setSavingCorrection] = useState(false);
   const dirty = useRef(false);
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -56,6 +61,7 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
       setFormState(formFromTrip(t));
       setPricePolicy(t.pricePolicy);
       setLoadError(null);
+      setCorrecting(false);
       if (t.status !== "DRAFT" && t.status !== "CUBICADO") setStep(2);
     } catch (error) {
       setLoadError(errorMessage(error));
@@ -64,6 +70,19 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
   useEffect(() => { void load(); }, [load]);
 
   const isEditable = trip?.status === "DRAFT";
+  const canEditLines = isEditable || correcting;
+
+  /** Lo que se manda al guardar: igual para el borrador y para la corrección. */
+  const tripChanges = useCallback((policy: string) => form && ({
+    lines: lines.filter((l) => l.pieces > 0),
+    woodTripTotalCost: form.costMode === "TOTAL" ? Number(form.woodTripTotalCost || 0) : 0,
+    costPerFoot: form.costMode === "PER_FOOT" && Number(form.costPerFoot) > 0 ? Number(form.costPerFoot) : undefined,
+    expenses: form.expenses,
+    invoicedFeet: form.invoicedFeet === "" || Number(form.invoicedFeet) <= 0 ? null : Number(form.invoicedFeet),
+    pricePolicy: policy,
+    supplierName: form.supplierName.trim() || null,
+    origin: form.origin.trim() || null,
+  }), [form, lines]);
 
   const save = useCallback(async (policy = pricePolicy): Promise<boolean> => {
     if (!isEditable || !form) return true;
@@ -73,16 +92,7 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
     try {
       const data = await timberRequest<{ trip: TripDetail }>(`/api/timber/trips/${tripId}`, {
         method: "PUT",
-        body: {
-          lines: lines.filter((l) => l.pieces > 0),
-          woodTripTotalCost: form.costMode === "TOTAL" ? Number(form.woodTripTotalCost || 0) : 0,
-          costPerFoot: form.costMode === "PER_FOOT" && Number(form.costPerFoot) > 0 ? Number(form.costPerFoot) : undefined,
-          expenses: form.expenses,
-          invoicedFeet: form.invoicedFeet === "" || Number(form.invoicedFeet) <= 0 ? null : Number(form.invoicedFeet),
-          pricePolicy: policy,
-          supplierName: form.supplierName.trim() || null,
-          origin: form.origin.trim() || null,
-        },
+        body: tripChanges(policy),
       });
       setTrip(data.trip);
       setSaveState("saved");
@@ -93,7 +103,7 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
       if (errorCode(error) === "TRIP_NOT_EDITABLE") await load();
       return false;
     }
-  }, [isEditable, form, lines, pricePolicy, tripId, load]);
+  }, [isEditable, form, tripChanges, pricePolicy, tripId, load]);
 
   // Autoguardado: solo después de una edición, no al cargar.
   useEffect(() => {
@@ -114,6 +124,28 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
   async function changePolicy(policy: string) {
     setPricePolicy(policy);
     return save(policy);
+  }
+
+  async function saveCorrection() {
+    setSavingCorrection(true);
+    try {
+      const corrected = await timberRequest<TripDetail>(`/api/timber/trips/${tripId}`, { method: "PATCH", body: { action: "correct", changes: tripChanges(pricePolicy) } });
+      showToast("success", `Viaje ${corrected.tripCode} corregido: el inventario quedó ajustado.`);
+      setAskCorrect(false);
+      await load();
+    } catch (error) {
+      showToast("error", errorMessage(error));
+      setAskCorrect(false);
+      const code = errorCode(error);
+      if (code === "TRIP_CORRECTION_WINDOW_CLOSED" || code === "TRIP_CHANGED_WHILE_CORRECTING" || code === "TRIP_NOT_CORRECTABLE") await load();
+    } finally {
+      setSavingCorrection(false);
+    }
+  }
+
+  function startCorrection() {
+    setCorrecting(true);
+    setStep(1);
   }
 
   async function cancelTrip() {
@@ -145,6 +177,7 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
 
   const status = statusLabel(trip.status);
   const hasPieces = lines.some((l) => l.pieces > 0);
+  const changes = correcting ? correctionChanges(trip.lines, lines.filter((l) => l.pieces > 0)) : [];
 
   return (
     <div className="space-y-4">
@@ -154,7 +187,7 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
         </button>
         <div className="min-w-0">
           <h2 className="text-lg font-bold tracking-tight text-[var(--color-text)]">
-            {isEditable ? "Viaje en borrador" : <>Viaje <span className="font-mono">{trip.tripCode}</span></>}
+            {isEditable ? "Viaje en borrador" : <>{correcting ? "Corrigiendo viaje" : "Viaje"} <span className="font-mono">{trip.tripCode}</span></>}
           </h2>
           <p className="text-sm text-[var(--color-text-muted)]">
             {trip.destinationBranch.code} — {trip.destinationBranch.name}
@@ -164,6 +197,11 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
         <Badge variant={status.variant}>{status.label}</Badge>
         <span className="flex-1" />
         {isEditable && <SaveIndicator state={saveState} onRetry={() => void save()} />}
+        {trip.correctableUntil && !correcting && (
+          <Button variant="secondary" icon={<PencilLine className="h-4 w-4" />} onClick={startCorrection}>
+            Corregir viaje
+          </Button>
+        )}
         {isEditable && (
           // Destructivo: color de peligro propio, separado del botón principal (ghost pisaba el color del texto).
           <button type="button" onClick={() => setAskCancel(true)} className="inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-[var(--color-danger-200)] px-3 text-sm font-semibold text-[var(--color-danger-700)] transition-colors hover:bg-[var(--color-danger-50)]">
@@ -197,11 +235,21 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
         </div>
       )}
 
+      {correcting && trip.correctableUntil && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3.5 text-[12.5px] text-[var(--color-warning-700)]">
+          <span className="min-w-[14rem] flex-1">
+            Estás corrigiendo un viaje que ya está en el inventario. Nada cambia hasta que pulses <b>Guardar corrección</b>: ahí se ajustan piezas, costos y precios. Se puede corregir hasta el <b>{fmtDateTimeShort(trip.correctableUntil)}</b>.
+          </span>
+          <Button variant="ghost" disabled={savingCorrection} onClick={() => void load()}>Descartar cambios</Button>
+          <Button variant="primary" disabled={!hasPieces} onClick={() => setAskCorrect(true)}>Guardar corrección</Button>
+        </div>
+      )}
+
       {step === 1 ? (
         <div className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr] [&>*]:min-w-0">
-            <TripCubication tripId={trip.id} lines={lines} setLines={setLines} isEditable={isEditable} />
-            <TripCostPanel form={form} setForm={setForm} lines={lines} reconciliation={trip.reconciliation} isEditable={isEditable} />
+            <TripCubication tripId={trip.id} lines={lines} setLines={setLines} isEditable={canEditLines} />
+            <TripCostPanel form={form} setForm={setForm} lines={lines} reconciliation={trip.reconciliation} isEditable={canEditLines} />
           </div>
           {isEditable && (
             <div className="flex justify-end">
@@ -213,6 +261,34 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
         </div>
       ) : (
         <TripReview key={trip.status} trip={trip} onPolicyChange={changePolicy} onConfirmed={() => void load()} />
+      )}
+
+      {askCorrect && (
+        <ConfirmDialog
+          title={`¿Guardar la corrección de ${trip.tripCode}?`}
+          tone="primary"
+          message={
+            <div className="space-y-2">
+              {changes.length > 0 ? (
+                <ul className="space-y-1">
+                  {changes.map((c) => (
+                    <li key={c.measure} className="font-mono text-[13px] text-[var(--color-text)]">
+                      {c.measure}: {c.before} → {c.after} <b>({c.after > c.before ? "+" : ""}{c.after - c.before} piezas)</b>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>Las piezas no cambian.</p>
+              )}
+              <p>Se recalculan costos y precios de las medidas con la política del viaje. El número del viaje se mantiene y el cambio queda en la bitácora.</p>
+            </div>
+          }
+          confirmLabel="Sí, guardar corrección"
+          cancelLabel="Seguir editando"
+          busy={savingCorrection}
+          onConfirm={() => void saveCorrection()}
+          onCancel={() => setAskCorrect(false)}
+        />
       )}
 
       {askCancel && (
