@@ -34,7 +34,7 @@ test("Parte A: la barra de filtros no usa .hm-input directo sin envolver — el 
   // El bug: .hm-input declara width:100% (globals.css), así que un select
   // sin envolver ocupa la fila entera. La barra de filtros envuelve
   // buscar/categoría cada uno en su propio div w-[NNNpx].
-  assert.match(c, /<div className="w-\[170px\]">\s*<label htmlFor="cat-category"/, "categoría envuelta en div de ancho fijo, con label");
+  assert.match(c, /<div className="w-\[200px\]">\s*<label htmlFor="cat-category"/, "categoría envuelta en div de ancho fijo, con label");
 });
 
 test("Parte A.2: el select que queda (categoría) tiene label real (htmlFor/id)", () => {

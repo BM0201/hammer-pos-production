@@ -823,7 +823,7 @@ export function CatalogInventoryAdmin() {
             </button>
           </span>
         ) : null}
-        <div className="w-[170px]">
+        <div className="w-[200px]">
           <label htmlFor="cat-category" className="sr-only">Categoría</label>
           <select id="cat-category" className="hm-input h-9" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}>
             <option value="">Todas las categorías</option>

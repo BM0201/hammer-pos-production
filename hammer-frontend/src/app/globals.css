@@ -603,6 +603,12 @@ select.hm-input {
   color: var(--color-text);
   transition: border-color 0.2s var(--ease-smooth), box-shadow 0.2s var(--ease-smooth), background-color 0.2s;
 }
+/* Con alto fijo chico (h-7…h-10) el padding vertical de arriba dejaba sin
+   espacio al texto y se cortaba ("Mes", "Pagado"); el campo ya lo centra solo. */
+.hm-input:is(.h-7, .h-8, .h-9, .h-10) {
+  padding-top: 0;
+  padding-bottom: 0;
+}
 .hm-input:hover:not(:focus):not(:disabled) {
   border-color: var(--color-border-strong);
 }
