@@ -526,6 +526,7 @@ const mockAssignments = new Set<string>();
 const mockStandardPrices = new Map<string, number>([["p-varilla", 185], ["p-quintal", 2450], ["p-pintura", 360], ["p-plywood", 300]]);
 const MOCK_USD_RATE = 36.6243;
 let mockRivasTender = { method: "CASH", referenceNumber: "" };
+const mockExchangeRates: Array<Record<string, unknown>> = [];
 function mockRivasSummary() {
   return { id: "so-riv-1", orderNumber: "SO-RIV-MWPGCFFO", status: "PAID", grandTotal: 7600, commercialDate: "2026-11-20", createdAt: "2026-11-20T20:51:00Z",
     branch: { id: "br-central", code: "RIV", name: "Rivas" }, customerName: null, createdByName: "Cajera Rivas", linesCount: 1, cancellable: true,
@@ -652,6 +653,14 @@ const server = http.createServer(async (req, res) => {
   if (path === "/api/cashier/cash-boxes") {
     const branchId = url.searchParams.get("branchId") ?? "";
     return ok(res, [{ id: `cb-${branchId}`, code: "CAJA-01", description: branchId === "br-central" ? "Caja principal Central" : "Caja principal" }]);
+  }
+  // Tipo de cambio (Configuración y Tesorería): arranca vacío, como producción; guardar agrega al histórico.
+  if (path === "/api/master/treasury/exchange-rates" && method === "GET") return ok(res, mockExchangeRates);
+  if (path === "/api/master/treasury/exchange-rates" && method === "POST") {
+    const body = await readJson(req);
+    const row = { id: `xr-${mockExchangeRates.length + 1}`, fromCurrency: "USD", toCurrency: "NIO", rate: String(body.rate), effectiveAt: new Date().toISOString(), source: "MANUAL", createdBy: { fullName: "Master Demo", username: "master" } };
+    mockExchangeRates.unshift(row);
+    return ok(res, row);
   }
   // Cuentas a las que puede entrar una transferencia (cobro): una en córdobas y una en dólares.
   if (path === "/api/master/treasury/bank-accounts") return ok(res, [

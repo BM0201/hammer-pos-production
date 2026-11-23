@@ -116,6 +116,11 @@ type TabKey = (typeof NAV_ITEMS)[number][0];
 export default function MasterOperationsPage() {
   const [activeTab, setActiveTab] = useState<TabKey>("operacion");
   const [branches, setBranches] = useState<Branch[]>([]);
+  // Configuración enlaza aquí con ?tab=ajustes.
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    if (NAV_ITEMS.some(([key]) => key === tab)) setActiveTab(tab as TabKey);
+  }, []);
 
   // Estado en vivo + Hoy
   const [liveData, setLiveData] = useState<LiveBlockersResponse | null>(null);

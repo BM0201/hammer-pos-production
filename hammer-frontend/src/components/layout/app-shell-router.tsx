@@ -57,7 +57,7 @@ const SECTION_META: Record<string, { title: string; subtitle: string }> = {
   dispatch: { title: "Despacho", subtitle: "Preparacion, carga, ruta y entrega de ordenes." },
   payments: { title: "Pagos", subtitle: "Ordenes pendientes y confirmacion de cobro." },
   orders: { title: "Ventas", subtitle: "Ordenes, tickets y seguimiento comercial." },
-  settings: { title: "Configuracion", subtitle: "Preferencias del sistema y operaciones." },
+  settings: { title: "Configuración", subtitle: "Ajustes globales del sistema." },
   "module-config": { title: "Modulos", subtitle: "Capacidades disponibles para la operacion." },
   "role-config": { title: "Roles y permisos", subtitle: "Matriz de acceso por perfil y modulo." },
 };

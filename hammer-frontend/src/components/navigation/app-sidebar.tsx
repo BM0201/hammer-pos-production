@@ -43,8 +43,6 @@ import {
   Shield,
   Settings,
   Brain,
-  Printer,
-  ScanBarcode,
   Factory,
   History,
   Merge,
@@ -54,7 +52,6 @@ import {
   PiggyBank,
   DollarSign,
   Calculator,
-  Receipt,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -134,9 +131,8 @@ const MASTER_NAV: NavSection[] = [
       { href: "/app/master/security", label: "Security Center", icon: Shield, capabilities: [CAPABILITIES.MASTER_ACCESS] },
       { href: "/app/master/cameras", label: "Cámaras", icon: Camera, capabilities: [CAPABILITIES.MASTER_CAMERAS_VIEW] },
       { href: "/app/master/audit", label: "Auditoría", icon: ScrollText, capabilities: [CAPABILITIES.AUDIT_VIEW] },
-      { href: "/app/master/settings/print", label: "Impresión", icon: Printer },
-      { href: "/app/master/settings/payroll", label: "Nómina", icon: Receipt },
-      { href: "/app/master/settings/scanner-test", label: "Prueba de Escáner", icon: ScanBarcode, capabilities: [CAPABILITIES.MASTER_ACCESS] },
+      // Tipo de cambio, sencillo, tolerancia, precios, nómina, impresión… todo lo global está aquí.
+      { href: "/app/master/settings", label: "Configuración", icon: Settings },
     ],
   },
   {
