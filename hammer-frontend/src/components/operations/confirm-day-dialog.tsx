@@ -22,6 +22,8 @@ type Summary = {
   countedCashTotal?: number | string | null;
   cashDifferenceTotal?: number | string | null;
   cashSessions?: SummarySession[];
+  /** Gastos del día registrados sin salida de gaveta: motivo probable de un faltante. */
+  expensesOffDrawer?: { count: number; total: number; items: Array<{ description: string; amount: number }> } | null;
 };
 
 /**
@@ -76,6 +78,7 @@ export function ConfirmDayDialog({ summary, checklist, cashDifferenceTolerance =
   const diffOverTolerance = Math.abs(diff) > cashDifferenceTolerance;
   const split = splitCashDifference(summary?.cashSessions);
   const diffLabel = diff > 0 ? "Sobrante" : diff < 0 ? "Faltante" : "Cuadró";
+  const offDrawer = diff < 0 && summary?.expensesOffDrawer && summary.expensesOffDrawer.total > 0 ? summary.expensesOffDrawer : null;
 
   async function previewNow() {
     setBusy("preview");
@@ -132,6 +135,9 @@ export function ConfirmDayDialog({ summary, checklist, cashDifferenceTolerance =
               <p className="hm-num text-base font-bold" style={{ color: diffOverTolerance ? "var(--color-warning-700)" : "var(--color-text)" }}>
                 {money(Math.abs(diff))}
               </p>
+              {offDrawer && (
+                <p className="text-xs font-semibold text-[var(--color-warning-700)]">Motivo probable: gastos ingresados ({money(offDrawer.total)})</p>
+              )}
             </div>
           </div>
           {split?.usd && (
@@ -143,7 +149,9 @@ export function ConfirmDayDialog({ summary, checklist, cashDifferenceTolerance =
             <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
               {diff > 0
                 ? "Sobró dinero al contar: entra como ingreso en Finanzas (Sobrante de caja). Si un cobro en efectivo quedó anotado como tarjeta o transferencia, o el sencillo se contó con los billetes de venta, revísalo con quien cerró."
-                : "Falta dinero. Si un cobro con tarjeta o transferencia se anotó como efectivo, corrígelo en Ventas → Pago y la diferencia se recalcula sola."}
+                : offDrawer
+                  ? `Falta dinero, y ese día se ingresaron gastos que no salieron de la caja en el sistema (se registraron sin caja abierta): ${offDrawer.items.map((e) => `${e.description} ${money(e.amount)}`).join(", ")}. Si se pagaron con dinero de la gaveta, explican ${money(Math.min(offDrawer.total, Math.abs(diff)))} del faltante.`
+                  : "Falta dinero. Si un cobro con tarjeta o transferencia se anotó como efectivo, corrígelo en Ventas → Pago y la diferencia se recalcula sola."}
             </p>
           )}
           </div>

@@ -66,6 +66,7 @@ export async function calculateOperationalSummaryTx(
     cashSessions,
     dayTenders,
     cashMovements,
+    offDrawerExpenses,
   ] = await Promise.all([
     tx.cashSession.count({ where: { operationalDayId: day.id, status: CashSessionStatus.OPEN } }),
     tx.cashSession.count({ where: { operationalDayId: day.id, status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW, requiresReview: true } }),
@@ -132,6 +133,19 @@ export async function calculateOperationalSummaryTx(
     tx.cashMovement.findMany({
       where: { cashSession: { operationalDayId: day.id } },
       select: { type: true, amount: true },
+    }),
+    // Gastos pagados ese día que NO salieron de la gaveta en el sistema (se
+    // registraron sin caja abierta): si el dinero sí salió de la gaveta, son
+    // el motivo probable de un faltante.
+    tx.operatingExpense.findMany({
+      where: {
+        branchId: day.branchId,
+        kind: "PAID",
+        cashMovementId: null,
+        isActive: true,
+        OR: [{ paidAt: { gte: start, lt: end } }, { effectiveFrom: { gte: start, lt: end } }],
+      },
+      select: { amount: true, description: true },
     }),
   ]);
 
@@ -260,6 +274,14 @@ export async function calculateOperationalSummaryTx(
     totalsByPaymentMethod,
     /** Cobros en dólares (ya incluidos en Efectivo): su propio apartado. */
     usdSales: summarizeUsdTenders(effectiveTenders),
+    /** Gastos del día registrados sin salida de gaveta: motivo probable de un faltante. */
+    expensesOffDrawer: offDrawerExpenses.length
+      ? {
+          count: offDrawerExpenses.length,
+          total: offDrawerExpenses.reduce((acc, e) => acc.add(e.amount), new Prisma.Decimal(0)).toNumber(),
+          items: offDrawerExpenses.map((e) => ({ description: e.description, amount: d(e.amount).toNumber() })),
+        }
+      : null,
     changeAmountTotal: changeAmountTotalDecimal.toNumber(),
     refunds: refundsSummary,
     cashMovements: cashMovementsSummary,
@@ -410,7 +432,7 @@ const BRAIN_STALE_HOURS = 2;
 type ChecklistSummaryInput = Pick<
   Awaited<ReturnType<typeof calculateOperationalSummaryTx>>,
   "openCashSessionsCount" | "autoClosedPendingReviewCount" | "pendingPaymentTotal" | "pendingDispatchCount" | "criticalBrainDecisionCount" | "cashDifferenceTotal" | "brainLastScanFinishedAt"
->;
+> & Partial<Pick<Awaited<ReturnType<typeof calculateOperationalSummaryTx>>, "expensesOffDrawer">>;
 
 export function buildChecklist(
   summary: ChecklistSummaryInput,
@@ -467,7 +489,7 @@ export function buildChecklist(
       key: "cash_difference",
       label: "Diferencia de caja",
       status: Math.abs(summary.cashDifferenceTotal) > cashDifferenceToleranceAmount ? "ATTENTION" : "OK",
-      message: cashDifferenceMessage(summary.cashDifferenceTotal, cashDifferenceToleranceAmount),
+      message: cashDifferenceMessage(summary.cashDifferenceTotal, cashDifferenceToleranceAmount, summary.expensesOffDrawer?.total ?? 0),
     },
   ];
   return {
@@ -856,10 +878,14 @@ export async function getLiveBlockers(): Promise<{
  * ingreso en Finanzas; un faltante suele ser un cobro de tarjeta o
  * transferencia anotado como efectivo, que se corrige en Ventas → Pago.
  */
-export function cashDifferenceMessage(difference: number, tolerance: number): string {
+export function cashDifferenceMessage(difference: number, tolerance: number, expensesOffDrawer = 0): string {
   const amount = `C$ ${Math.abs(difference).toFixed(2)}`;
   const tol = `(tolerancia: C$ ${tolerance.toFixed(2)})`;
   if (difference > 0) return `Sobrante de ${amount} ${tol}: sobró dinero al contar. Entra como ingreso en Finanzas (Sobrante de caja).`;
+  if (difference < 0 && expensesOffDrawer > 0) {
+    const explained = Math.min(expensesOffDrawer, Math.abs(difference));
+    return `Faltante de ${amount} ${tol}. Motivo probable: gastos ingresados sin salir de la caja (C$ ${expensesOffDrawer.toFixed(2)}). Si se pagaron con la gaveta, explican C$ ${explained.toFixed(2)} del faltante.`;
+  }
   if (difference < 0) return `Faltante de ${amount} ${tol}. Si un cobro con tarjeta o transferencia se anotó como efectivo, corrígelo en Ventas → Pago.`;
   return `Cuadró ${tol}.`;
 }

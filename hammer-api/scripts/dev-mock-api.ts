@@ -674,7 +674,21 @@ const server = http.createServer(async (req, res) => {
   // Día operativo: Masaya del 21-nov tal como quedó en la base (sobrante C$2,165, sencillo 40 → 10).
   if (path === "/api/master/operations/pending-review") return ok(res, [
     { id: "day-msy-21", branchId: "br-central", branchCode: "MSY", branchName: "Masaya", businessDate: "2026-11-21", daysWaiting: 2, salesTotal: 19505, expectedCashTotal: 19545, attention: { autoClosedPendingReviewCount: 0, openOrReconcilingCashSessionsCount: 0 } },
+    { id: "day-gasto-22", branchId: "br-demo", branchCode: "RIV", branchName: "Rivas", businessDate: "2026-11-22", daysWaiting: 1, salesTotal: 12000, expectedCashTotal: 12000, attention: { autoClosedPendingReviewCount: 0, openOrReconcilingCashSessionsCount: 0 } },
   ]);
+  // Faltante explicado por un gasto registrado sin caja abierta: debían 12,000, contaron 11,000.
+  if (path === "/api/branch/operations/day-gasto-22/close-preview") {
+    const items = [
+      { key: "open_cash_sessions", label: "Cajas abiertas o en conciliacion", status: "OK", count: 0 },
+      { key: "cash_difference", label: "Diferencia de caja", status: "ATTENTION", message: cashDifferenceMessage(-1000, 100, 1000) },
+    ];
+    return ok(res, {
+      summary: { salesTotal: 12000, expectedCashTotal: 12000, countedCashTotal: 11000, cashDifferenceTotal: -1000,
+        expensesOffDrawer: { count: 1, total: 1000, items: [{ description: "Pago de flete", amount: 1000 }] },
+        cashSessions: [{ id: "cs-gasto-22", status: "CLOSED", openingAmount: 0, expectedCashAmount: 12000, countedCashAmount: 11000, differenceAmount: -1000, cashFundClosedAmount: 0, expectedUsdAmount: 0, countedUsdAmount: null }] },
+      checklist: { items, attention: items.filter((i) => i.status === "ATTENTION"), ok: items.filter((i) => i.status === "OK") },
+    });
+  }
   if (path === "/api/branch/operations/day-msy-21/close-preview") {
     const items = [
       { key: "open_cash_sessions", label: "Cajas abiertas o en conciliacion", status: "OK", count: 0 },

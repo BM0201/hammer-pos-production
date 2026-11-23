@@ -71,3 +71,12 @@ test("diferencia de caja: dice si es sobrante (ingreso) o faltante (revisar cobr
   assert.match(cashDifferenceMessage(-1451.5, 100), /^Faltante de C\$ 1451\.50 .*Ventas → Pago/);
   assert.match(cashDifferenceMessage(0, 100), /^Cuadró/);
 });
+
+test("faltante con gasto ingresado sin salir de la caja: lo nombra como motivo probable", () => {
+  // Gasto de C$1,000 registrado sin caja abierta: debían haber 12,000, contaron 11,000.
+  assert.match(cashDifferenceMessage(-1000, 100, 1000), /^Faltante de C\$ 1000\.00 .*Motivo probable: gastos ingresados .*explican C\$ 1000\.00 del faltante/);
+  // El gasto explica solo una parte.
+  assert.match(cashDifferenceMessage(-1500, 100, 1000), /explican C\$ 1000\.00 del faltante/);
+  // No toca el mensaje de un sobrante.
+  assert.match(cashDifferenceMessage(300, 100, 1000), /^Sobrante/);
+});
