@@ -417,9 +417,9 @@ h2 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
 h3 { font-size: 1.0625rem; font-weight: 600; letter-spacing: -0.01em; }
 p { text-wrap: pretty; }
 
-button, input, select, textarea {
-  font: inherit;
-}
+/* `font: inherit` en botones y campos ya lo pone el preflight de Tailwind (capa base).
+   Repetirlo aquí fuera de capa le ganaba a text-xs/text-sm/font-semibold de cada botón:
+   todos salían a 16 px y en peso normal. */
 
 select,
 textarea {

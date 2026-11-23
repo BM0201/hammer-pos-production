@@ -58,6 +58,8 @@ function KpiCard({ label, value, hint, tone = "default" }: { label: string; valu
   );
 }
 
+const HALF_LABEL: Record<string, string> = { FIRST_HALF: "1ra quincena", SECOND_HALF: "2da quincena" };
+
 function deltaTone(delta: number): "ok" | "warn" | "default" {
   if (delta > 0.5) return "warn"; // más gasto = advertencia
   if (delta < -0.5) return "ok";
@@ -242,7 +244,8 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-1.5 flex-wrap">
           <select
-            className="hm-input h-8 text-xs"
+            className="hm-input"
+            style={{ width: "auto" }}
             value={urlState.kind}
             onChange={(e) => navigate({ kind: e.target.value as PeriodKind, date: null })}
             aria-label="Tipo de período"
@@ -253,18 +256,18 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
             <>
               <button
                 onClick={() => navigate({ date: isoDateOnly(report.period.previous.start) })}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border transition-colors hover:bg-[var(--color-surface-alt)]"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border transition-colors hover:bg-[var(--color-surface-alt)]"
                 style={{ borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}
                 aria-label="Período anterior"
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
-              <span className="min-w-[11rem] text-center text-sm font-bold" style={{ color: "var(--color-text)" }}>
+              <span className="min-w-[10rem] text-center font-bold" style={{ color: "var(--color-text)" }}>
                 {report.period.label}
               </span>
               <button
                 onClick={() => navigate({ date: isoDateOnly(report.period.next.start) })}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border transition-colors hover:bg-[var(--color-surface-alt)]"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border transition-colors hover:bg-[var(--color-surface-alt)]"
                 style={{ borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}
                 aria-label="Período siguiente"
               >
@@ -273,9 +276,10 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
             </>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <select
-            className="hm-input h-8 text-xs"
+            className="hm-input"
+            style={{ width: "auto" }}
             value={urlState.basis}
             onChange={(e) => navigate({ basis: e.target.value as ExpensePeriodBasis })}
             aria-label="Base: pagado o devengado"
@@ -287,7 +291,8 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
             <div className="flex items-center gap-1.5">
               <Building2 className="h-3.5 w-3.5" style={{ color: "var(--color-text-muted)" }} />
               <select
-                className="hm-input h-8 text-xs"
+                className="hm-input"
+                style={{ width: "auto" }}
                 value={urlState.branchId ?? ""}
                 onChange={(e) => navigate({ branchId: e.target.value || null })}
                 aria-label="Filtrar por sucursal"
@@ -343,13 +348,13 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
             <KpiCard
               label="Presupuesto ejecutado"
               value={report.budget.executedPercent != null ? `${report.budget.executedPercent.toFixed(0)}%` : "—"}
-              hint={money(report.budget.totalProrated)}
+              hint={report.budget.totalProrated > 0 ? `de ${money(report.budget.totalProrated)} presupuestado` : "Sin presupuesto definido"}
               tone={report.budget.executedPercent != null && report.budget.executedPercent > 110 ? "warn" : "default"}
             />
             <KpiCard
               label="Planilla del período"
               value={report.payroll ? money(report.payroll.netPaid) : "—"}
-              hint={report.payroll?.halvesPaid.length ? report.payroll.halvesPaid.join(", ") : undefined}
+              hint={report.payroll?.halvesPaid.length ? report.payroll.halvesPaid.map((h) => HALF_LABEL[h] ?? h).join(" y ") : undefined}
             />
           </div>
 

@@ -723,6 +723,23 @@ const server = http.createServer(async (req, res) => {
       checklist: { items, attention: items.filter((i) => i.status === "ATTENTION"), ok: items.filter((i) => i.status === "OK") },
     });
   }
+  // Gastos operativos (Finanzas): noviembre con alertas, presupuesto pasado y quincena pagada.
+  if (path === "/api/master/finance/expenses/period") return ok(res, {
+    period: { kind: "MONTH", start: "2026-11-01T06:00:00Z", end: "2026-12-01T05:59:59Z", label: "Noviembre 2026", previous: { start: "2026-10-01T06:00:00Z", end: "2026-11-01T05:59:59Z", label: "Octubre 2026" }, next: { start: "2026-12-01T06:00:00Z", end: "2027-01-01T05:59:59Z", label: "Diciembre 2026" } },
+    basis: "PAID", branchId: null,
+    totals: { expenseTotal: 49288.52, netSales: 616000, cogs: 496078.3, grossProfit: 119921.7, operatingProfit: 70633.18, expenseToSalesPercent: 8 },
+    byCategory: [
+      { category: "PAYROLL", total: 32044.52, previousTotal: 15000, average4: 14969.6, deltaPercent: 114, budgetProrated: 30000, budgetExecutedPercent: 107, byConcept: [{ conceptId: null, conceptName: null, total: 32044.52 }] },
+      { category: "OTHER", total: 8333, previousTotal: 5000, average4: 5369.25, deltaPercent: 55, budgetProrated: 0, budgetExecutedPercent: null, byConcept: [{ conceptId: null, conceptName: null, total: 8333 }] },
+    ],
+    byBranch: [], bySource: [], byDay: [],
+    comparison: { previousTotal: 29000, average4Total: 28000 },
+    budget: { totalProrated: 44109.97, executedPercent: 112 },
+    payroll: { netPaid: 15500, inssPatronal: 3332.5, inatec: 310, provisions: 0, pending: 0, halvesPaid: ["FIRST_HALF"] },
+    alerts: [{ code: "CATEGORY_SPIKE", message: "Otro subió 55% vs el promedio (C$5,369.25 → C$8,333.00).", category: "OTHER", href: null }, { code: "NO_RECEIPT", message: "8 gastos sin recibo por más de C$1,000.00 (C$48,268.52 en total).", category: null, href: null }],
+    informative: { purchasesPaid: 120000, internalFreightCost: 0, internalFreightOverlapWarning: null },
+    rows: { items: [], total: 0, limit: 200, offset: 0 },
+  });
   if (path === "/api/master/finance/trend") return ok(res, { branchId: null, months: 12, points: [] });
   if (path === "/api/cashier/bank-accounts") return ok(res, [{ id: "ba-1", bankName: "BAC", accountAlias: "Operativa", accountNumber: "100200300", currencyCode: "NIO" }]);
   if (path === "/api/cashier/branch-people") return ok(res, [{ id: "u-2", fullName: "Elena Bermúdez", roleLabel: "Supervisora" }]);
