@@ -44,6 +44,8 @@ export const MOVEMENT_TYPE_GROUP: Record<InventoryMovementType, MovementGroup> =
   PURCHASE_IN: "ingresos",
   PACKAGE_IN: "ingresos",
   TIMBER_INTAKE_IN: "ingresos",
+  // Corrección de un viaje ya ingresado: resta del ingreso de madera, para que el grupo cuadre con el viaje.
+  TIMBER_INTAKE_CORRECTION_OUT: "ingresos",
   PRODUCTION_OUTPUT: "ingresos",
   RETURN_IN: "ingresos",
   RETURN_IN_DAMAGED: "ingresos",
@@ -88,7 +90,7 @@ export function resolveMovementGroup(type: InventoryMovementType): MovementGroup
  */
 const OUTFLOW_TYPES = new Set<InventoryMovementType>([
   "SALE_OUT", "PACKAGE_SALE_OUT", "LOOSE_UNIT_SALE_OUT",
-  "ADJUSTMENT_OUT", "TRANSFER_OUT", "RETURN_OUT",
+  "ADJUSTMENT_OUT", "TRANSFER_OUT", "RETURN_OUT", "TIMBER_INTAKE_CORRECTION_OUT",
   "PRODUCTION_CONSUME", "PRODUCTION_WASTE", "PRODUCTION_REVERSAL_OUT",
 ]);
 

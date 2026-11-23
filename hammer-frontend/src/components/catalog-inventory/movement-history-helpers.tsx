@@ -17,6 +17,7 @@ export function movementLabel(type: string) {
     TRANSFER_IN: { label: "Transfer. Entrada", color: "success" },
     TRANSFER_OUT: { label: "Transfer. Salida", color: "warning" },
     TIMBER_INTAKE_IN: { label: "Entrada madera", color: "info" },
+    TIMBER_INTAKE_CORRECTION_OUT: { label: "Corrección madera −", color: "warning" },
     // prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados.
     PRODUCT_MERGE_IN: { label: "Unificación — entrada", color: "info" },
     PRODUCT_MERGE_OUT: { label: "Unificación — salida", color: "warning" },

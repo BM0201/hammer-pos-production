@@ -81,3 +81,10 @@ test("signedMovementQuantity: las salidas son negativas, las entradas positivas,
   assert.equal(signedMovementQuantity("ADJUSTMENT_OUT", 3), -3);
   assert.equal(signedMovementQuantity("ADJUSTMENT_IN", 3), 3);
 });
+
+test("movement-groups: la corrección de un viaje de madera resta dentro de Ingresos (cuadra con el viaje)", () => {
+  assert.equal(resolveMovementGroup("TIMBER_INTAKE_CORRECTION_OUT"), "ingresos");
+  // VJM-2026-001: entró 321 de TABLA 1X12X5 y la corrección dejó 10 → el grupo Ingresos suma 10, no 321 con un ajuste aparte.
+  const ingresos = signedMovementQuantity("TIMBER_INTAKE_IN", 321) + signedMovementQuantity("TIMBER_INTAKE_CORRECTION_OUT", 311);
+  assert.equal(ingresos, 10);
+});

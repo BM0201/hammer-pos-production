@@ -530,7 +530,7 @@ export async function getInventoryCategoriesTree(branchId: string): Promise<Inve
 }
 
 const DAILY_FLOW_IN_TYPES = ["PURCHASE_IN", "RETURN_IN", "RETURN_IN_DAMAGED", "ADJUSTMENT_IN", "TRANSFER_IN", "PACKAGE_IN", "LOOSE_UNIT_RETURN_IN", "TIMBER_INTAKE_IN"] as const;
-const DAILY_FLOW_OUT_TYPES = ["SALE_OUT", "RETURN_OUT", "ADJUSTMENT_OUT", "TRANSFER_OUT", "PACKAGE_SALE_OUT", "LOOSE_UNIT_SALE_OUT"] as const;
+const DAILY_FLOW_OUT_TYPES = ["SALE_OUT", "RETURN_OUT", "ADJUSTMENT_OUT", "TIMBER_INTAKE_CORRECTION_OUT", "TRANSFER_OUT", "PACKAGE_SALE_OUT", "LOOSE_UNIT_SALE_OUT"] as const;
 
 export type InventoryDailyFlowPoint = { date: string; unitsIn: number; unitsOut: number };
 

@@ -124,7 +124,8 @@ export async function correctTimberTrip(id: string, userId: string, input: Updat
           actorUserId: userId,
           branchId: updated.destinationBranchId,
           productId: delta.productId,
-          movementType: delta.pieces > 0 ? "TIMBER_INTAKE_IN" : "ADJUSTMENT_OUT",
+          // Sube: entrada de madera que suma. Baja: corrección que resta del ingreso del viaje (no un ajuste de conteo).
+          movementType: delta.pieces > 0 ? "TIMBER_INTAKE_IN" : "TIMBER_INTAKE_CORRECTION_OUT",
           quantity: Math.abs(delta.pieces),
           unitCost: delta.unitCost,
           referenceType: "TIMBER_TRIP",

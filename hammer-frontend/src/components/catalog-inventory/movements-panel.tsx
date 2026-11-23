@@ -41,6 +41,7 @@ const MOV_LABELS: Record<string, { label: string; color: string; bg: string }> =
   TRANSFER_IN:        { label: "Traslado +",       color: "#7c3aed", bg: "#f5f3ff" },
   TRANSFER_OUT:       { label: "Traslado −",       color: "#7c3aed", bg: "#f5f3ff" },
   TIMBER_INTAKE_IN:   { label: "Entrada madera",   color: "#92400e", bg: "#fffbeb" },
+  TIMBER_INTAKE_CORRECTION_OUT: { label: "Corrección madera −", color: "#92400e", bg: "#fffbeb" },
   PRODUCTION_CONSUME: { label: "Consumo prod.",    color: "#dc2626", bg: "#fef2f2" },
   PRODUCTION_OUTPUT:  { label: "Salida prod.",     color: "#16a34a", bg: "#f0fdf4" },
   PRODUCTION_WASTE:   { label: "Merma prod.",      color: "#ea580c", bg: "#fff7ed" },

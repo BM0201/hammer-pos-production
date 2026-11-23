@@ -172,6 +172,9 @@ enum InventoryMovementType {
   LOOSE_ADJUSTMENT
   PACKAGE_ADJUSTMENT
   TIMBER_INTAKE_IN
+  /// Corrección de un viaje de madera ya ingresado que baja piezas: resta del ingreso del viaje
+  /// (grupo "ingresos" del reporte), no es un ajuste de conteo ni merma.
+  TIMBER_INTAKE_CORRECTION_OUT
   PRODUCTION_CONSUME
   PRODUCTION_OUTPUT
   PRODUCTION_WASTE
