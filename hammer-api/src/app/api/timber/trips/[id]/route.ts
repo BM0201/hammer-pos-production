@@ -81,7 +81,9 @@ export async function PATCH(
     if (action === "correct") {
       const parsed = updateTimberTripSchema.safeParse(body.changes);
       if (!parsed.success) return timberValidationFail(parsed.error.issues);
-      return ok(await correctTimberTrip(id, session.userId, parsed.data));
+      return ok(await correctTimberTrip(id, session.userId, parsed.data, {
+        marginOverrideReason: typeof body.marginOverrideReason === "string" ? body.marginOverrideReason : undefined,
+      }));
     }
     return fail("VALIDATION_ERROR", "Acción no válida: usá \"confirm\", \"cancel\" o \"correct\".", 400);
   } catch (err: unknown) {

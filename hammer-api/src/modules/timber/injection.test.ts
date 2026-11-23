@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
-import { applyTimberCostsTx, applyTimberSalePriceRecalcRowsTx, catalogSliceForCombinedPage, hasNegativeMarginInPreview, recalcTimberSalePrice, resolveSellingPriceForPolicy, type TimberSalePriceRecalcRow } from "@/modules/timber/service";
+import { applyTimberCostsTx, applyTimberSalePriceRecalcRowsTx, catalogSliceForCombinedPage, hasNegativeMarginInPreview, recalcTimberSalePrice, resolveSellingPriceForPolicy, resolveTripSellingPrice, type TimberSalePriceRecalcRow } from "@/modules/timber/service";
 
 /**
  * Madera v2 Fase 2 — el bug a matar: resolveTimberProductForLineTx retornaba
@@ -373,6 +373,25 @@ test("COST_ONLY: 'los precios de venta quedan como están' — el precio propio 
   assert.equal(getProduct().standardSalePrice.toNumber(), 640.8);
   assert.equal(getTimberProduct().sellingPrice.toNumber(), 640.8);
   assert.equal(result.after.branchPrice, 700);
+});
+
+test("COST_ONLY con precio de relleno (C$1): no lo conserva, pone el de margen objetivo solo en esta sucursal", async () => {
+  // VJM-2026-001: TABLA 2X12X5 nunca se había vendido, tenía C$1 y entró con costo C$1,204.
+  const { tx, getProduct, getTimberProduct, getBranchSetting } = createTimberFakeTx({
+    baseCost: 1, sellingPrice: 1, standardSalePrice: 1, branchCost: null, branchPrice: 1,
+  });
+  const result = await applyTimberCostsTx(tx, { ...BASE_INPUT, costPerPiece: 1204, pricePolicy: "COST_ONLY" });
+  assert.equal(getBranchSetting()?.branchPrice?.toNumber(), 2007, "1204 / (1 − 40%) = 2006.67 → 2007");
+  assert.equal(result.after.branchPrice, 2007);
+  assert.equal(getProduct().standardSalePrice.toNumber(), 1, "el general no se toca: COST_ONLY nunca escribe el precio de las demás sucursales");
+  assert.equal(getTimberProduct().sellingPrice.toNumber(), 1);
+});
+
+test("resolveTripSellingPrice COST_ONLY: conserva un precio real, reemplaza un relleno de C$2 o menos", () => {
+  const base = { pricePolicy: "COST_ONLY", recalculatedSellingPrice: 1068, costPerPiece: 1204, targetMarginPercent: 0.4, targetMarginRoundingMultiple: 1 };
+  assert.equal(resolveTripSellingPrice({ ...base, current: { branchPrice: 2300, standardSalePrice: 1, sellingPrice: 1 } }), 2300);
+  assert.equal(resolveTripSellingPrice({ ...base, current: { branchPrice: 2, standardSalePrice: 1, sellingPrice: 1 } }), 2007);
+  assert.equal(resolveTripSellingPrice({ ...base, current: { branchPrice: null, standardSalePrice: null, sellingPrice: null } }), 2007, "sin precio: margen objetivo, no el por pulgada (1068) que queda bajo costo");
 });
 
 test("precio de una sucursal con config propia (updateGlobalPrice=false): se escribe en esa sucursal, NO en el precio general que heredan las demás", async () => {

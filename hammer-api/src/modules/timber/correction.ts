@@ -2,7 +2,7 @@
 import { prisma } from "@/lib/prisma";
 import { calculateReconciliation, type TimberPriceGroup } from "./calculator";
 import { buildTimberTripRecalc, tripCorrectableUntil } from "./trips";
-import { applyTimberCostsTx, resolveTimberProductIdentityTx } from "./catalog-link";
+import { applyTimberCostsTx, currentBranchSellingPrice, resolveTimberProductIdentityTx } from "./catalog-link";
 import type { UpdateTimberTripInput } from "./validators";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { isInboundMovement } from "@/modules/inventory/wac";
@@ -42,6 +42,15 @@ export function tripCorrectionStockError(productName: string, toRemove: number, 
   );
 }
 
+/** Igual que al ingresar: alguna medida queda vendiéndose bajo su costo → hay que escribir el motivo. */
+export function tripCorrectionNegativeMarginError(lines: Array<{ productName: string; costPerPiece: number; sellingPrice: number }>) {
+  const money = (value: number) => `C$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  const detail = lines.map((line) => `${line.productName} queda a ${money(line.sellingPrice)} con costo ${money(line.costPerPiece)}`).join("; ");
+  return Object.assign(new Error(`Al menos una medida queda vendiéndose bajo su costo: ${detail}. Escribí el motivo para guardar igual, o cambiá la política de precio.`), {
+    code: "NEGATIVE_MARGIN_REQUIRES_OVERRIDE",
+  });
+}
+
 /**
  * Corrige un viaje YA ingresado dentro de las 24 h del ingreso. En una sola transacción:
  * recalcula el viaje con los cambios, vuelve a escribir costo/precio de cada medida con la
@@ -49,7 +58,14 @@ export function tripCorrectionStockError(productName: string, toRemove: number, 
  * que el viaje ya había metido. Conserva número, estado y hora de ingreso (el plazo no se
  * reinicia con cada corrección). Queda en la bitácora con el antes → después.
  */
-export async function correctTimberTrip(id: string, userId: string, input: UpdateTimberTripInput, now: Date = new Date()) {
+export async function correctTimberTrip(
+  id: string,
+  userId: string,
+  input: UpdateTimberTripInput,
+  options: { marginOverrideReason?: string } = {},
+  now: Date = new Date(),
+) {
+  const marginOverrideReason = options.marginOverrideReason?.trim() || null;
   const existing = await prisma.timberTrip.findUnique({ where: { id }, include: { lines: true } });
   if (!existing) throw new Error("TIMBER_TRIP_NOT_FOUND");
   if (existing.status !== "TRANSFERRED") throw new Error("TRIP_NOT_CORRECTABLE");
@@ -84,11 +100,12 @@ export async function correctTimberTrip(id: string, userId: string, input: Updat
 
     const updateGlobalPrice = updated.pricePolicy === "RECALC_FROM_PRICE_PER_INCH" && !config.isBranchOverride;
     const next: TripStockEffect[] = [];
+    const belowCost: Array<{ productId: string; costPerPiece: number; sellingPrice: number }> = [];
     for (const line of updated.lines) {
       if (line.pieces <= 0) continue;
       const { productId, timberProductId } = await resolveTimberProductIdentityTx(tx, line);
       const unitCost = line.calculatedCostPerPiece.gt(0) ? line.calculatedCostPerPiece.toNumber() : line.calculatedCostFeet.toNumber() / line.pieces;
-      await applyTimberCostsTx(tx, {
+      const { after } = await applyTimberCostsTx(tx, {
         actorUserId: userId,
         branchId: updated.destinationBranchId,
         productId,
@@ -106,7 +123,18 @@ export async function correctTimberTrip(id: string, userId: string, input: Updat
       });
       await tx.timberTripLine.update({ where: { id: line.id }, data: { timberProductId } });
       next.push({ productId, pieces: line.pieces, unitCost });
+      const sellingPrice = currentBranchSellingPrice(after);
+      if (sellingPrice !== null && sellingPrice < unitCost) belowCost.push({ productId, costPerPiece: unitCost, sellingPrice });
     }
+
+    // Misma regla que confirmar: margen negativo solo pasa con motivo escrito (queda en el viaje y la bitácora).
+    if (config.blockNegativeMargin && belowCost.length > 0 && !marginOverrideReason) {
+      const names = new Map((await tx.product.findMany({ where: { id: { in: belowCost.map((l) => l.productId) } }, select: { id: true, name: true } })).map((p) => [p.id, p.name]));
+      throw tripCorrectionNegativeMarginError(belowCost.map((l) => ({ ...l, productName: names.get(l.productId) ?? l.productId })));
+    }
+    const finalTrip = belowCost.length > 0
+      ? await tx.timberTrip.update({ where: { id }, data: { marginOverrideReason }, include: { lines: true, destinationBranch: true } })
+      : updated;
 
     const deltas = planTripCorrection(prior, next);
     for (const delta of deltas) {
@@ -157,7 +185,14 @@ export async function correctTimberTrip(id: string, userId: string, input: Updat
         action: "TIMBER_TRIP_CORRECTED",
         entityType: "TimberTrip",
         entityId: id,
-        metadataJson: { tripCode: updated.tripCode, before: snapshot(existing), after: snapshot(updated), stockDeltas: deltas },
+        metadataJson: {
+          tripCode: updated.tripCode,
+          before: snapshot(existing),
+          after: snapshot(updated),
+          stockDeltas: deltas,
+          belowCostLines: belowCost,
+          marginOverrideReason: belowCost.length > 0 ? marginOverrideReason : null,
+        },
       },
     });
 
@@ -167,7 +202,7 @@ export async function correctTimberTrip(id: string, userId: string, input: Updat
       updated.invoicedFeet != null ? updated.invoicedFeet.toNumber() : null,
       config.reconciliationTolerancePercent,
     );
-    return { ...updated, reconciliation, correctableUntil: tripCorrectableUntil(updated, now) };
+    return { ...finalTrip, reconciliation, correctableUntil: tripCorrectableUntil(finalTrip, now) };
     // Igual que confirmar: la hoja real trae ~50 medidas y cada una son ~20 consultas.
   }, { timeout: 60000, maxWait: 10000 });
 }

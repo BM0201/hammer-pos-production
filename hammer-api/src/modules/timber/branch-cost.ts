@@ -5,7 +5,7 @@ import { Prisma as PrismaRuntime } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { calculateBoardFeet, roundFeet, roundMoney, type CubicationRow } from "./calculator";
 import { getPricingConfig, updatePricingConfig } from "./pricing-config";
-import { WOOD_CATEGORY_WHERE } from "./catalog-link";
+import { TIMBER_PLACEHOLDER_PRICE_FLOOR, WOOD_CATEGORY_WHERE } from "./catalog-link";
 import { parseWoodDimensions } from "@/modules/catalog/sku-generator";
 import { getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
 import { branchProductScopeFilter, excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
@@ -35,9 +35,6 @@ export function woodMeasureOf(product: WoodMeasureSource, cubicationTable: Cubic
   const lengthFeet = registered ? registered.length.toNumber() : catalogLengthFeet(varaLength, cubicationTable);
   return { thickness, width, varaLength, lengthFeet, boardFeet: calculateBoardFeet({ thickness, width, length: lengthFeet }) };
 }
-
-/** Precio <= C$2 = relleno ("algo hay que poner"), no un precio real: mismo piso que inventory/wac.ts. */
-export const TIMBER_PLACEHOLDER_PRICE_FLOOR = 2;
 
 export type TimberBranchCostRow = {
   productId: string;

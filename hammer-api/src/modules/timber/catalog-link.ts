@@ -198,12 +198,25 @@ export function resolveSellingPriceForPolicy(input: {
   }
 }
 
+/** Precio <= C$2 = relleno ("algo hay que poner", p. ej. una medida que nunca se vendió), no un precio real: mismo piso que inventory/wac.ts. */
+export const TIMBER_PLACEHOLDER_PRICE_FLOOR = 2;
+
 /** Precio vigente EN la sucursal destino: el propio, si no el general, si no el último de madera. */
 export function currentBranchSellingPrice(current: Pick<TimberCostInjectionSnapshot, "branchPrice" | "standardSalePrice" | "sellingPrice">): number | null {
   return current.branchPrice ?? current.standardSalePrice ?? current.sellingPrice;
 }
 
-/** El precio que deja un viaje — misma regla para la vista previa y para applyTimberCostsTx. COST_ONLY = el vigente en ESTA sucursal. */
+/** "Solo actualizar costos" conserva el precio de la sucursal, salvo que sea un relleno de C$2 o menos: ese no es un precio. */
+export function keepsCurrentPrice(pricePolicy: string, current: Pick<TimberCostInjectionSnapshot, "branchPrice" | "standardSalePrice" | "sellingPrice">): boolean {
+  const price = currentBranchSellingPrice(current);
+  return pricePolicy === "COST_ONLY" && price !== null && price > TIMBER_PLACEHOLDER_PRICE_FLOOR;
+}
+
+/**
+ * El precio que deja un viaje — misma regla para la vista previa y para applyTimberCostsTx.
+ * COST_ONLY = el vigente en ESTA sucursal; si ese es un relleno (VJM-2026-001: tablas 2X12 a C$1
+ * contra costo C$946–1,376), se calcula con el margen objetivo en vez de dejarlo bajo costo.
+ */
 export function resolveTripSellingPrice(input: {
   pricePolicy: string;
   recalculatedSellingPrice: number;
@@ -212,9 +225,9 @@ export function resolveTripSellingPrice(input: {
   targetMarginPercent: number;
   targetMarginRoundingMultiple: number;
 }): number {
-  if (input.pricePolicy === "COST_ONLY") return currentBranchSellingPrice(input.current) ?? input.recalculatedSellingPrice;
+  if (keepsCurrentPrice(input.pricePolicy, input.current)) return currentBranchSellingPrice(input.current) as number;
   return resolveSellingPriceForPolicy({
-    pricePolicy: input.pricePolicy,
+    pricePolicy: input.pricePolicy === "COST_ONLY" ? "TARGET_MARGIN" : input.pricePolicy,
     recalculatedSellingPrice: input.recalculatedSellingPrice,
     existingSellingPrice: input.current.sellingPrice,
     costPerPiece: input.costPerPiece,
@@ -278,6 +291,8 @@ export async function applyTimberCostsTx(
   // tomaba TimberProduct.sellingPrice (puede venir del viaje de otra
   // sucursal) y lo escribía como branchPrice, pisando el precio propio.
   const costOnly = input.pricePolicy === "COST_ONLY";
+  // Con un precio de relleno no hay nada que conservar: se escribe el de margen objetivo en esta sucursal.
+  const keepsPrice = keepsCurrentPrice(input.pricePolicy, before);
   const sellingPrice = resolveTripSellingPrice({
     pricePolicy: input.pricePolicy,
     recalculatedSellingPrice: input.recalculatedSellingPrice,
@@ -320,7 +335,7 @@ export async function applyTimberCostsTx(
     enteredCost: input.costPerPiece,
     conversion: timberConversion,
   });
-  const priceFields = costOnly
+  const priceFields = keepsPrice
     ? {}
     : { branchPrice: new Decimal(sellingPrice), priceSource: "TIMBER_TRIP", lastPriceUpdateAt: new Date(), priceUpdatedByUserId: input.actorUserId };
   const costFields = timberCostTarget.redirected ? {} : { branchCost: new Decimal(timberCostTarget.costForTarget) };
@@ -343,7 +358,7 @@ export async function applyTimberCostsTx(
     sellingPrice: writeGlobalPrice ? sellingPrice : before.sellingPrice,
     standardSalePrice: writeGlobalPrice ? sellingPrice : before.standardSalePrice,
     branchCost: input.costPerPiece,
-    branchPrice: costOnly ? before.branchPrice : sellingPrice,
+    branchPrice: keepsPrice ? before.branchPrice : sellingPrice,
   };
 
   await tx.auditLog.create({

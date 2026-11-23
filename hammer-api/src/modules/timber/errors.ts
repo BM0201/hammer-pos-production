@@ -31,7 +31,10 @@ export function timberErrorResponse(err: unknown) {
   const known = err instanceof Error ? TIMBER_ERRORS[err.message] : undefined;
   if (known && err instanceof Error) return fail(err.message, known.message, known.status);
   // Mensaje armado con la medida y las piezas que quedan (correction.ts).
-  if (err instanceof Error && (err as { code?: string }).code === "TRIP_CORRECTION_STOCK_SOLD") return fail("TRIP_CORRECTION_STOCK_SOLD", err.message, 409);
+  const code = err instanceof Error ? (err as { code?: string }).code : undefined;
+  if (err instanceof Error && code === "TRIP_CORRECTION_STOCK_SOLD") return fail(code, err.message, 409);
+  // Margen negativo al corregir: el mensaje nombra la medida, el precio y el costo (correction.ts).
+  if (err instanceof Error && code === "NEGATIVE_MARGIN_REQUIRES_OVERRIDE") return fail(code, err.message, 400);
   return toHttpErrorResponse(err);
 }
 

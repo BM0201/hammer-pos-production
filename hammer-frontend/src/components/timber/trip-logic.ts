@@ -65,7 +65,7 @@ export type CubicationImportPreview = { tripId: string; tripCode: string; recogn
 
 export const PRICE_POLICIES = [
   ["RECALC_FROM_PRICE_PER_INCH", "Precio por pulgada", "El precio sale del precio por pulgada de la sucursal"],
-  ["COST_ONLY", "Solo actualizar costos", "Los precios de venta quedan como están"],
+  ["COST_ONLY", "Solo actualizar costos", "Los precios de venta quedan como están. Una medida sin precio (C$2 o menos) toma el del margen objetivo"],
   ["TARGET_MARGIN", "Margen objetivo", "El precio se calcula para dejar el margen configurado"],
 ] as const;
 

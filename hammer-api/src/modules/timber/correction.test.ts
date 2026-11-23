@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planTripCorrection, tripCorrectableUntil, tripCorrectionStockError, TRIP_CORRECTION_WINDOW_MS } from "@/modules/timber/service";
+import { planTripCorrection, tripCorrectableUntil, tripCorrectionNegativeMarginError, tripCorrectionStockError, TRIP_CORRECTION_WINDOW_MS } from "@/modules/timber/service";
+
+test("corrección con margen negativo: el mensaje dice qué medida, a qué precio y con qué costo", () => {
+  const error = tripCorrectionNegativeMarginError([{ productName: "TABLA 2X12X6", sellingPrice: 1, costPerPiece: 1376 }]);
+  assert.equal((error as Error & { code: string }).code, "NEGATIVE_MARGIN_REQUIRES_OVERRIDE");
+  assert.match(error.message, /TABLA 2X12X6 queda a C\$1 con costo C\$1,376/);
+});
 
 const confirmedAt = new Date("2026-11-23T16:00:00Z"); // 10:00 en Managua
 

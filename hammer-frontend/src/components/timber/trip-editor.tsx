@@ -48,6 +48,9 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
   const [correcting, setCorrecting] = useState(false);
   const [askCorrect, setAskCorrect] = useState(false);
   const [savingCorrection, setSavingCorrection] = useState(false);
+  // El servidor rechazó por margen negativo: el diálogo sigue abierto, dice qué medida y pide el motivo.
+  const [marginError, setMarginError] = useState<string | null>(null);
+  const [marginReason, setMarginReason] = useState("");
   const dirty = useRef(false);
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -129,18 +132,28 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
   async function saveCorrection() {
     setSavingCorrection(true);
     try {
-      const corrected = await timberRequest<TripDetail>(`/api/timber/trips/${tripId}`, { method: "PATCH", body: { action: "correct", changes: tripChanges(pricePolicy) } });
+      const corrected = await timberRequest<TripDetail>(`/api/timber/trips/${tripId}`, {
+        method: "PATCH",
+        body: { action: "correct", changes: tripChanges(pricePolicy), marginOverrideReason: marginError ? marginReason.trim() : undefined },
+      });
       showToast("success", `Viaje ${corrected.tripCode} corregido: el inventario quedó ajustado.`);
-      setAskCorrect(false);
+      closeCorrectDialog();
       await load();
     } catch (error) {
-      showToast("error", errorMessage(error));
-      setAskCorrect(false);
       const code = errorCode(error);
+      if (code === "NEGATIVE_MARGIN_REQUIRES_OVERRIDE") { setMarginError(errorMessage(error)); return; }
+      showToast("error", errorMessage(error));
+      closeCorrectDialog();
       if (code === "TRIP_CORRECTION_WINDOW_CLOSED" || code === "TRIP_CHANGED_WHILE_CORRECTING" || code === "TRIP_NOT_CORRECTABLE") await load();
     } finally {
       setSavingCorrection(false);
     }
+  }
+
+  function closeCorrectDialog() {
+    setAskCorrect(false);
+    setMarginError(null);
+    setMarginReason("");
   }
 
   function startCorrection() {
@@ -281,13 +294,22 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
                 <p>Las piezas no cambian.</p>
               )}
               <p>Se recalculan costos y precios de las medidas con la política del viaje. El número del viaje se mantiene y el cambio queda en la bitácora.</p>
+              {marginError && (
+                <div role="alert" className="space-y-2 rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-2.5 text-[12.5px] text-[var(--color-danger-700)]">
+                  <p>{marginError}</p>
+                  <label className="block font-semibold">
+                    Motivo para vender bajo costo
+                    <input autoFocus value={marginReason} onChange={(e) => setMarginReason(e.target.value)} placeholder="Ej: precio de lanzamiento, madera de segunda…" className="mt-1 min-h-11 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-sm font-normal text-[var(--color-text)]" />
+                  </label>
+                </div>
+              )}
             </div>
           }
-          confirmLabel="Sí, guardar corrección"
+          confirmLabel={marginError ? "Guardar con este motivo" : "Sí, guardar corrección"}
           cancelLabel="Seguir editando"
           busy={savingCorrection}
-          onConfirm={() => void saveCorrection()}
-          onCancel={() => setAskCorrect(false)}
+          onConfirm={() => { if (!marginError || marginReason.trim()) void saveCorrection(); }}
+          onCancel={closeCorrectDialog}
         />
       )}
 
