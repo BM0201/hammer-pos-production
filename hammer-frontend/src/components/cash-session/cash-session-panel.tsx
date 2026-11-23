@@ -31,7 +31,7 @@ type ActiveSession = {
   usdToNioRate?: number | null;
 };
 
-type CloseResult = { counted: number; expected: number; difference: number; sales: number; cashFund: number; opening: number | null; usd: number; expectedUsd: number };
+type CloseResult = { counted: number; expected: number; difference: number; sales: number; cashFund: number; opening: number | null; usd: number; expectedUsd: number; usdRate: number | null };
 type LastCashFund = { amount: number; note: string | null; declaredAt: string; setByMaster?: boolean };
 type Declaration = { cashSessionId: string; countedAmount: number; cashFund?: { amount: number; note: string } | null };
 
@@ -279,14 +279,15 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
       setBusyAction(null);
       return;
     }
-    const data = unwrapApiData(result.json) as { status?: string; expectedCash?: number; expectedUsd?: number; openingAmount?: number | string } | null;
+    const data = unwrapApiData(result.json) as { status?: string; expectedCash?: number; expectedUsd?: number; difference?: number; countedUsdRate?: number | string | null; openingAmount?: number | string } | null;
     if (data?.status === "AUTO_CLOSED_PENDING_REVIEW") {
       setNotice({ tone: "info", text: "La caja quedó pendiente de revisión por Master." });
     } else {
       setDeclaration({ cashSessionId: sessionId, countedAmount: counted, cashFund: { amount: count.cashFund, note: count.cashFundNote } });
       const expectedCash = Number(data?.expectedCash ?? counted);
       const opening = data?.openingAmount != null ? Number(data.openingAmount) : null;
-      setCloseResult({ counted, expected: expectedCash, difference: countDifference(counted, expectedCash), sales: count.sales, cashFund: count.cashFund, opening, usd: count.usd, expectedUsd: Number(data?.expectedUsd ?? 0) });
+      // La diferencia la da el servidor: ya trae los dólares a la tasa.
+      setCloseResult({ counted, expected: expectedCash, difference: data?.difference ?? countDifference(counted, expectedCash), sales: count.sales, cashFund: count.cashFund, opening, usd: count.usd, expectedUsd: Number(data?.expectedUsd ?? 0), usdRate: data?.countedUsdRate != null ? Number(data.countedUsdRate) : null });
       setOpeningAmount(count.cashFund > 0 ? count.cashFund.toFixed(2) : "0");
     }
     await refresh().catch(() => undefined);
@@ -496,7 +497,7 @@ export function CashSessionPanel({ branchId }: { branchId: string }) {
 
 /** Lo contado contra lo que debía haber: se ve recién después de cerrar. */
 function CloseResultCard({ result }: { result: CloseResult }) {
-  const { counted, expected, difference, sales, cashFund, opening, usd, expectedUsd } = result;
+  const { counted, expected, difference, sales, cashFund, opening, usd, expectedUsd, usdRate } = result;
   const usdDifference = countDifference(usd, expectedUsd);
   const tone = difference === 0 ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-700)]";
   return (
@@ -521,7 +522,11 @@ function CloseResultCard({ result }: { result: CloseResult }) {
       <p className="text-xs text-[var(--color-text-muted)]" data-testid="cash-close-split">
         Venta {money(sales)} + sencillo {money(cashFund)}
         {opening !== null ? `. El sencillo abrió con ${money(opening)}${cashFund !== opening ? ` y cierra con ${money(cashFund)} (${cashFund > opening ? "+" : "−"}${money(Math.abs(countDifference(cashFund, opening)))})` : " y cierra igual"}` : ""}.
-        {usd > 0 && expectedUsd === 0 ? ` Dólares aparte: ${usdMoney(usd)}.` : ""}
+        {usd > 0 && expectedUsd === 0
+          ? usdRate
+            ? ` Dólares: ${usdMoney(usd)} = ${money(usd * usdRate)}, ya sumados en la diferencia.`
+            : ` Dólares: ${usdMoney(usd)}, sin tipo de cambio: no entran en la diferencia.`
+          : ""}
       </p>
       {expectedUsd > 0 ? (
         <p className="text-xs text-[var(--color-text-secondary)]" data-testid="cash-close-usd">

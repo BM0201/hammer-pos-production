@@ -4,7 +4,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
 import { resolveOperationalDayForOperationTx, refreshOperationalDaySummaryTx, getOperationalWindowForNow, businessDateFromNow } from "@/modules/operations/service";
 import { resolveAutoCloseReview } from "@/modules/cash-session/review-policy";
-import { cashMovementsNetTotal, computeExpectedCash } from "@/modules/cash-session/expected-cash";
+import { cashCloseDifference, cashMovementsNetTotal, computeExpectedCash } from "@/modules/cash-session/expected-cash";
 import { createAutoDefaultedDeclarationTx } from "@/modules/treasury/service";
 import { raiseCashDiscrepancy } from "@/modules/treasury/discrepancy-signals";
 
@@ -91,17 +91,32 @@ export async function syncCashSessionSnapshotTx(
       status: true,
       openingAmount: true,
       countedCashAmount: true,
+      countedUsdAmount: true,
+      countedUsdRate: true,
       operationalDayId: true,
     },
   });
   const snapshot = await calculateExpectedCashForSessionTx(tx, session.id, session.openingAmount);
   const countedCash = session.countedCashAmount == null ? null : Number(session.countedCashAmount);
+  const countedUsd = session.countedUsdAmount == null ? 0 : Number(session.countedUsdAmount);
+  // Dólares contados sin tasa al cerrar (no había tasa en Tesorería): se valoran con la vigente al recalcular.
+  const missingRate = session.countedUsdRate == null && (countedUsd > 0 || snapshot.expectedUsd > 0);
+  const usdRate = missingRate ? await latestUsdRate(tx) : session.countedUsdRate;
   await tx.cashSession.update({
     where: { id: session.id },
     data: {
       expectedCashAmount: toDecimal(snapshot.expectedCash),
       ...(countedCash !== null && session.status !== CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW
-        ? { differenceAmount: toDecimal(countedCash - snapshot.expectedCash) }
+        ? {
+            differenceAmount: toDecimal(cashCloseDifference({
+              countedCash,
+              expectedCash: snapshot.expectedCash,
+              countedUsd,
+              expectedUsd: snapshot.expectedUsd,
+              usdRate: usdRate == null ? null : Number(usdRate),
+            })),
+            ...(missingRate && usdRate != null && countedUsd > 0 ? { countedUsdRate: usdRate } : {}),
+          }
         : {}),
     },
   });
@@ -564,10 +579,14 @@ export function buildCloseDiscrepancySignal(input: {
 }
 
 /** Dólares contados con la tasa vigente de Tesorería (la misma del "equivale a" en pantalla); nada si no se contaron. */
+async function latestUsdRate(tx: Prisma.TransactionClient) {
+  const rate = await tx.exchangeRate.findFirst({ where: { fromCurrency: "USD", toCurrency: "NIO" }, orderBy: { effectiveAt: "desc" }, select: { rate: true } });
+  return rate?.rate ?? null;
+}
+
 async function usdCountData(tx: Prisma.TransactionClient, usd: number | null | undefined) {
   if (!usd || usd <= 0) return {};
-  const rate = await tx.exchangeRate.findFirst({ where: { fromCurrency: "USD", toCurrency: "NIO" }, orderBy: { effectiveAt: "desc" }, select: { rate: true } });
-  return { countedUsdAmount: toDecimal(usd), countedUsdRate: rate?.rate ?? null };
+  return { countedUsdAmount: toDecimal(usd), countedUsdRate: await latestUsdRate(tx) };
 }
 
 export async function closeCashSession(input: {
@@ -634,7 +653,15 @@ export async function closeCashSession(input: {
     const { openingAmount, postedCashPayments, refundsOrWithdrawals, cashChange, expectedCash, expectedUsd } =
       await calculateExpectedCashForSessionTx(tx, session.id, session.openingAmount);
     const countedCash = Number(input.closingAmount);
-    const difference = countedCash - expectedCash;
+    const usdData = await usdCountData(tx, input.countedUsdAmount);
+    const usdRate = usdData.countedUsdRate ?? (expectedUsd > 0 ? await latestUsdRate(tx) : null);
+    const difference = cashCloseDifference({
+      countedCash,
+      expectedCash,
+      countedUsd: input.countedUsdAmount,
+      expectedUsd,
+      usdRate: usdRate == null ? null : Number(usdRate),
+    });
     const threshold = input.allowedThreshold ?? 0;
 
     if (Math.abs(difference) > threshold) {
@@ -699,7 +726,7 @@ export async function closeCashSession(input: {
         expectedCashAmount: toDecimal(expectedCash),
         countedCashAmount: toDecimal(countedCash),
         differenceAmount: toDecimal(difference),
-        ...(await usdCountData(tx, input.countedUsdAmount)),
+        ...usdData,
         expectedUsdAmount: expectedUsd > 0 ? toDecimal(expectedUsd) : null,
         requiresReview: false,
         notes: input.notes ?? session.notes,
@@ -896,4 +923,24 @@ export async function logCashSessionDenied(input: {
       ...(input.metadata ?? {}),
     },
   });
+}
+
+/**
+ * Al fijar una tasa USD→NIO en Tesorería: las cajas cerradas que contaron
+ * dólares sin tasa (no había ninguna) se recalculan, así esos dólares entran
+ * en la diferencia. Solo días aún sin confirmar: un día firmado no cambia.
+ */
+export async function applyUsdRateToUnratedSessions() {
+  const sessions = await prisma.cashSession.findMany({
+    where: {
+      countedUsdAmount: { gt: 0 },
+      countedUsdRate: null,
+      countedCashAmount: { not: null },
+      status: { not: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW },
+      OR: [{ operationalDayId: null }, { operationalDay: { reviewStatus: { not: "CONFIRMED" } } }],
+    },
+    select: { id: true },
+  });
+  for (const s of sessions) await prisma.$transaction((tx) => syncCashSessionSnapshotTx(tx, s.id));
+  return sessions.length;
 }

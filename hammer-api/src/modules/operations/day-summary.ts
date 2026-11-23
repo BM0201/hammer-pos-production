@@ -275,6 +275,8 @@ export async function calculateOperationalSummaryTx(
     /** Cobros en dólares (ya incluidos en Efectivo): su propio apartado. */
     usdSales: summarizeUsdTenders(effectiveTenders),
     /** Gastos del día registrados sin salida de gaveta: motivo probable de un faltante. */
+    /** US$ contados en cierres sin tasa: no pudieron entrar en la diferencia. */
+    usdCountedWithoutRate: cashSessions.reduce((acc, s) => (s.countedUsdRate == null ? acc + n(s.countedUsdAmount) : acc), 0),
     expensesOffDrawer: offDrawerExpenses.length
       ? {
           count: offDrawerExpenses.length,
@@ -332,6 +334,7 @@ export async function calculateOperationalSummaryTx(
       cashFundClosedAmount: session.destinationDeclaration ? n(session.destinationDeclaration.retainCashFundPortion) : null,
       expectedUsdAmount: session.expectedUsdAmount == null ? null : n(session.expectedUsdAmount),
       countedUsdAmount: session.countedUsdAmount == null ? null : n(session.countedUsdAmount),
+      countedUsdRate: session.countedUsdRate == null ? null : n(session.countedUsdRate),
       requiresReview: session.requiresReview,
       autoClosedBySystem: session.autoClosedBySystem,
       physicalCashBox: session.physicalCashBox,
@@ -432,7 +435,7 @@ const BRAIN_STALE_HOURS = 2;
 type ChecklistSummaryInput = Pick<
   Awaited<ReturnType<typeof calculateOperationalSummaryTx>>,
   "openCashSessionsCount" | "autoClosedPendingReviewCount" | "pendingPaymentTotal" | "pendingDispatchCount" | "criticalBrainDecisionCount" | "cashDifferenceTotal" | "brainLastScanFinishedAt"
-> & Partial<Pick<Awaited<ReturnType<typeof calculateOperationalSummaryTx>>, "expensesOffDrawer">>;
+> & Partial<Pick<Awaited<ReturnType<typeof calculateOperationalSummaryTx>>, "expensesOffDrawer" | "usdCountedWithoutRate">>;
 
 export function buildChecklist(
   summary: ChecklistSummaryInput,
@@ -489,7 +492,7 @@ export function buildChecklist(
       key: "cash_difference",
       label: "Diferencia de caja",
       status: Math.abs(summary.cashDifferenceTotal) > cashDifferenceToleranceAmount ? "ATTENTION" : "OK",
-      message: cashDifferenceMessage(summary.cashDifferenceTotal, cashDifferenceToleranceAmount, summary.expensesOffDrawer?.total ?? 0),
+      message: cashDifferenceMessage(summary.cashDifferenceTotal, cashDifferenceToleranceAmount, summary.expensesOffDrawer?.total ?? 0, summary.usdCountedWithoutRate ?? 0),
     },
   ];
   return {
@@ -878,10 +881,13 @@ export async function getLiveBlockers(): Promise<{
  * ingreso en Finanzas; un faltante suele ser un cobro de tarjeta o
  * transferencia anotado como efectivo, que se corrige en Ventas → Pago.
  */
-export function cashDifferenceMessage(difference: number, tolerance: number, expensesOffDrawer = 0): string {
+export function cashDifferenceMessage(difference: number, tolerance: number, expensesOffDrawer = 0, usdWithoutRate = 0): string {
   const amount = `C$ ${Math.abs(difference).toFixed(2)}`;
   const tol = `(tolerancia: C$ ${tolerance.toFixed(2)})`;
   if (difference > 0) return `Sobrante de ${amount} ${tol}: sobró dinero al contar. Entra como ingreso en Finanzas (Sobrante de caja).`;
+  if (difference < 0 && usdWithoutRate > 0) {
+    return `Faltante de ${amount} ${tol}. Motivo probable: se contaron US$ ${usdWithoutRate.toFixed(2)} sin tipo de cambio y no entran en la diferencia. Fija la tasa en Tesorería y se recalcula.`;
+  }
   if (difference < 0 && expensesOffDrawer > 0) {
     const explained = Math.min(expensesOffDrawer, Math.abs(difference));
     return `Faltante de ${amount} ${tol}. Motivo probable: gastos ingresados sin salir de la caja (C$ ${expensesOffDrawer.toFixed(2)}). Si se pagaron con la gaveta, explican C$ ${explained.toFixed(2)} del faltante.`;

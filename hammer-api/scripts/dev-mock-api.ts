@@ -674,8 +674,18 @@ const server = http.createServer(async (req, res) => {
   // Día operativo: Masaya del 21-nov tal como quedó en la base (sobrante C$2,165, sencillo 40 → 10).
   if (path === "/api/master/operations/pending-review") return ok(res, [
     { id: "day-msy-21", branchId: "br-central", branchCode: "MSY", branchName: "Masaya", businessDate: "2026-11-21", daysWaiting: 2, salesTotal: 19505, expectedCashTotal: 19545, attention: { autoClosedPendingReviewCount: 0, openOrReconcilingCashSessionsCount: 0 } },
+    { id: "day-riv-21", branchId: "br-demo", branchCode: "RIV", branchName: "Rivas", businessDate: "2026-11-21", daysWaiting: 2, salesTotal: 34880.5, expectedCashTotal: 16615.5, attention: { autoClosedPendingReviewCount: 0, openOrReconcilingCashSessionsCount: 0 } },
     { id: "day-gasto-22", branchId: "br-demo", branchCode: "RIV", branchName: "Rivas", businessDate: "2026-11-22", daysWaiting: 1, salesTotal: 12000, expectedCashTotal: 12000, attention: { autoClosedPendingReviewCount: 0, openOrReconcilingCashSessionsCount: 0 } },
   ]);
+  // Rivas 21-nov tal como está en la base: US$40 contados sin tasa (no había tasa en Tesorería).
+  if (path === "/api/branch/operations/day-riv-21/close-preview") {
+    const items = [{ key: "cash_difference", label: "Diferencia de caja", status: "ATTENTION", message: cashDifferenceMessage(-1451.5, 100, 0, 40) }];
+    return ok(res, {
+      summary: { salesTotal: 34880.5, expectedCashTotal: 16615.5, countedCashTotal: 15164, cashDifferenceTotal: -1451.5,
+        cashSessions: [{ id: "cs-riv-21", status: "CLOSED", openingAmount: 485, expectedCashAmount: 16615.5, countedCashAmount: 15164, differenceAmount: -1451.5, cashFundClosedAmount: 464, expectedUsdAmount: null, countedUsdAmount: 40, countedUsdRate: null }] },
+      checklist: { items, attention: items, ok: [] },
+    });
+  }
   // Faltante explicado por un gasto registrado sin caja abierta: debían 12,000, contaron 11,000.
   if (path === "/api/branch/operations/day-gasto-22/close-preview") {
     const items = [

@@ -80,3 +80,7 @@ test("faltante con gasto ingresado sin salir de la caja: lo nombra como motivo p
   // No toca el mensaje de un sobrante.
   assert.match(cashDifferenceMessage(300, 100, 1000), /^Sobrante/);
 });
+
+test("faltante con dólares contados sin tasa: lo nombra como motivo probable (Rivas 21-nov)", () => {
+  assert.match(cashDifferenceMessage(-1451.5, 100, 0, 40), /^Faltante de C\$ 1451\.50 .*Motivo probable: se contaron US\$ 40\.00 sin tipo de cambio/);
+});

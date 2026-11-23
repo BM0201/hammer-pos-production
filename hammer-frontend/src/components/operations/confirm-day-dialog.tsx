@@ -14,6 +14,7 @@ type SummarySession = {
   cashFundClosedAmount?: number | null;
   expectedUsdAmount?: number | null;
   countedUsdAmount?: number | null;
+  countedUsdRate?: number | null;
 };
 
 type Summary = {
@@ -38,12 +39,15 @@ export function splitCashDifference(sessions: SummarySession[] | undefined) {
   const sum = (f: (s: SummarySession) => number) => Math.round(closed.reduce((t, s) => t + f(s), 0) * 100) / 100;
   const usdExpected = sum((s) => s.expectedUsdAmount ?? 0);
   const usdCounted = sum((s) => s.countedUsdAmount ?? 0);
+  const usdDelta = (s: SummarySession) => (s.countedUsdAmount ?? 0) - (s.expectedUsdAmount ?? 0);
+  // C$ que los dólares suman a la diferencia (igual que el servidor); null si alguno no tiene tasa.
+  const usdNio = closed.some((s) => usdDelta(s) !== 0 && !s.countedUsdRate) ? null : sum((s) => usdDelta(s) * (s.countedUsdRate ?? 0));
   return {
     salesExpected: sum((s) => s.expectedCashAmount - s.openingAmount),
     salesCounted: sum((s) => s.countedCashAmount - (s.cashFundClosedAmount ?? 0)),
     fundOpened: sum((s) => s.openingAmount),
     fundClosed: sum((s) => s.cashFundClosedAmount ?? 0),
-    usd: usdExpected > 0 || usdCounted > 0 ? { expected: usdExpected, counted: usdCounted } : null,
+    usd: usdExpected > 0 || usdCounted > 0 ? { expected: usdExpected, counted: usdCounted, nio: usdNio } : null,
   };
 }
 
@@ -138,19 +142,29 @@ export function ConfirmDayDialog({ summary, checklist, cashDifferenceTolerance =
               {offDrawer && (
                 <p className="text-xs font-semibold text-[var(--color-warning-700)]">Motivo probable: gastos ingresados ({money(offDrawer.total)})</p>
               )}
+              {split?.usd?.nio === null && (
+                <p className="text-xs font-semibold text-[var(--color-warning-700)]">Motivo probable: dólares contados sin tipo de cambio</p>
+              )}
             </div>
           </div>
           {split?.usd && (
             <p className="hm-num text-xs text-[var(--color-text-secondary)]">
-              Dólares aparte: debía haber US${split.usd.expected.toFixed(2)} → contaron US${split.usd.counted.toFixed(2)}
+              Dólares: debía haber US${split.usd.expected.toFixed(2)} → contaron US${split.usd.counted.toFixed(2)}
+              {split.usd.nio === null
+                ? <span className="font-semibold text-[var(--color-warning-700)]"> · sin tipo de cambio: no entran en la diferencia. Fija la tasa en Tesorería y se recalcula.</span>
+                : split.usd.nio !== 0
+                  ? <> · equivalen a {signed(split.usd.nio)}, ya sumados en la diferencia</>
+                  : null}
             </p>
           )}
           {diff !== 0 && (
             <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
               {diff > 0
                 ? "Sobró dinero al contar: entra como ingreso en Finanzas (Sobrante de caja). Si un cobro en efectivo quedó anotado como tarjeta o transferencia, o el sencillo se contó con los billetes de venta, revísalo con quien cerró."
-                : offDrawer
-                  ? `Falta dinero, y ese día se ingresaron gastos que no salieron de la caja en el sistema (se registraron sin caja abierta): ${offDrawer.items.map((e) => `${e.description} ${money(e.amount)}`).join(", ")}. Si se pagaron con dinero de la gaveta, explican ${money(Math.min(offDrawer.total, Math.abs(diff)))} del faltante.`
+                : split?.usd?.nio === null
+                  ? `Falta dinero, pero se contaron US$${split.usd.counted.toFixed(2)} sin tipo de cambio y no están en la diferencia. Fija la tasa en Tesorería: la caja se recalcula sola.`
+                  : offDrawer
+                  ?`Falta dinero, y ese día se ingresaron gastos que no salieron de la caja en el sistema (se registraron sin caja abierta): ${offDrawer.items.map((e) => `${e.description} ${money(e.amount)}`).join(", ")}. Si se pagaron con dinero de la gaveta, explican ${money(Math.min(offDrawer.total, Math.abs(diff)))} del faltante.`
                   : "Falta dinero. Si un cobro con tarjeta o transferencia se anotó como efectivo, corrígelo en Ventas → Pago y la diferencia se recalcula sola."}
             </p>
           )}

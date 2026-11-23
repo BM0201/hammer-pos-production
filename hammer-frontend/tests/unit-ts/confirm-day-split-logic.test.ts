@@ -20,5 +20,8 @@ test("sin sencillo declarado en alguna caja cerrada no inventa el desglose; las 
 });
 
 test("dólares aparte cuando hubo", () => {
-  assert.deepEqual(splitCashDifference([{ ...msy, expectedUsdAmount: 40, countedUsdAmount: 40 }])?.usd, { expected: 40, counted: 40 });
+  assert.deepEqual(splitCashDifference([{ ...msy, expectedUsdAmount: 40, countedUsdAmount: 40 }])?.usd, { expected: 40, counted: 40, nio: 0 });
+  // Rivas 21-nov: US$40 contados sin cobros en dólares. Sin tasa no se pueden sumar; con tasa, sí.
+  assert.equal(splitCashDifference([{ ...msy, countedUsdAmount: 40 }])?.usd?.nio, null);
+  assert.equal(splitCashDifference([{ ...msy, countedUsdAmount: 40, countedUsdRate: 36.6 }])?.usd?.nio, 1464);
 });

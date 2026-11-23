@@ -181,8 +181,8 @@ export function CashSessionStatusList({ sessions, branchId, dayLifecycle }: Prop
                     <p className="border-t border-[var(--color-border)] px-3.5 py-2 text-xs text-[var(--color-text-secondary)]" data-testid="cash-session-usd">
                       Dólares contados aparte: <strong className="tabular-nums">{usdMoney(session.countedUsdAmount)}</strong>
                       {session.countedUsdRate != null
-                        ? <> · equivale a <strong className="tabular-nums">{money(Number(session.countedUsdAmount) * Number(session.countedUsdRate))}</strong> (tipo de cambio {numFixed(session.countedUsdRate, 4)})</>
-                        : " · sin tipo de cambio registrado"}
+                        ? <> · equivale a <strong className="tabular-nums">{money(Number(session.countedUsdAmount) * Number(session.countedUsdRate))}</strong> (tipo de cambio {numFixed(session.countedUsdRate, 4)}), ya en la diferencia</>
+                        : <strong className="text-[var(--color-warning-700)]"> · sin tipo de cambio: no entran en la diferencia</strong>}
                       {Number(session.expectedUsdAmount ?? 0) > 0 ? (
                         <> · debía haber <strong className="tabular-nums">{usdMoney(session.expectedUsdAmount)}</strong>{" "}
                           <strong className={diffColor(Number(session.countedUsdAmount ?? 0) - Number(session.expectedUsdAmount))}>

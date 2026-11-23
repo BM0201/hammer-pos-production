@@ -5,6 +5,7 @@ import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
 import { createExchangeRateSchema } from "@/modules/treasury/validators";
 import { createExchangeRate, listExchangeRates } from "@/modules/treasury/service";
+import { applyUsdRateToUnratedSessions } from "@/modules/cash-session/service";
 import type { CurrencyCode } from "@prisma/client";
 
 /** Histórico de tasas registradas, más recientes primero. */
@@ -37,6 +38,8 @@ export async function POST(request: Request) {
     if (!parsed.success) return fail("VALIDATION_ERROR", "Payload invalido.", 400, parsed.error.flatten());
 
     const rate = await createExchangeRate({ ...parsed.data, createdByUserId: session.userId });
+    // Dólares contados en cierres sin tasa: con la tasa nueva entran en la diferencia.
+    if (rate.fromCurrency === "USD" && rate.toCurrency === "NIO") await applyUsdRateToUnratedSessions();
     return created(rate);
   } catch (error) {
     return toHttpErrorResponse(error);

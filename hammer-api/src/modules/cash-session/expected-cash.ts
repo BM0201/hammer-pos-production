@@ -166,3 +166,21 @@ export function computeExpectedCashDecimal(input: {
 }): Prisma.Decimal {
   return new Prisma.Decimal(input.openingAmount).add(input.postedCashPayments).add(input.cashMovementsNet);
 }
+
+/**
+ * Diferencia del cierre en C$, con los dólares adentro: los US$ contados de
+ * más (o de menos) contra los esperados valen su equivalente a la tasa. Sin
+ * tasa no se pueden convertir y quedan fuera (la pantalla lo avisa). Rivas
+ * 21-nov: US$40 contados sin cobros en dólares quedaban como faltante.
+ */
+export function cashCloseDifference(input: {
+  countedCash: number;
+  expectedCash: number;
+  countedUsd?: number | null;
+  expectedUsd?: number | null;
+  usdRate?: number | null;
+}): number {
+  const usdDelta = (input.countedUsd ?? 0) - (input.expectedUsd ?? 0);
+  const usdInNio = input.usdRate ? usdDelta * input.usdRate : 0;
+  return Math.round((input.countedCash - input.expectedCash + usdInNio) * 100) / 100;
+}

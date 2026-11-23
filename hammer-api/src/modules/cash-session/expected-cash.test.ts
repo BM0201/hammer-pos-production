@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { CashMovementType, PaymentMethod } from "@prisma/client";
 import {
+  cashCloseDifference,
   cashMovementsNetTotal,
   cashTenderTotal,
   cashTenderTotalDecimal,
@@ -107,4 +108,16 @@ it("cobro en dólares: en córdobas deja −vuelto, en dólares deja lo entregad
   ];
   assert.equal(cashTenderTotalDecimal(tenders).toNumber(), 850 - 129.97);
   assert.equal(usdTenderTotalDecimal(tenders).toNumber(), 40);
+});
+
+describe("cashCloseDifference — los dólares contados cuentan en la diferencia", () => {
+  it("Rivas 21-nov: US$40 sin cobros en dólares tapan el faltante a la tasa", () => {
+    assert.equal(cashCloseDifference({ countedCash: 15164, expectedCash: 16615.5, countedUsd: 40, expectedUsd: 0, usdRate: 36.6 }), 12.5);
+  });
+  it("sin tasa los dólares no se pueden convertir y quedan fuera", () => {
+    assert.equal(cashCloseDifference({ countedCash: 15164, expectedCash: 16615.5, countedUsd: 40, usdRate: null }), -1451.5);
+  });
+  it("faltan dólares cobrados: restan a la tasa", () => {
+    assert.equal(cashCloseDifference({ countedCash: 1000, expectedCash: 1000, countedUsd: 0, expectedUsd: 20, usdRate: 36.5 }), -730);
+  });
 });
