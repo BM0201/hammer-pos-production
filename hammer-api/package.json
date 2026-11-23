@@ -11,7 +11,7 @@
     "build": "npm run prisma:generate && next build",
     "vercel-build": "npx prisma generate && npx prisma migrate deploy && next build",
     "start": "next start --port 4000",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test": "node --import tsx --import ./scripts/test-no-db.mjs --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "knip": "knip",
     "prisma:format": "prisma format",
