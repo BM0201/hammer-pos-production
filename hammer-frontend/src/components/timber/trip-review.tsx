@@ -214,6 +214,12 @@ function TripSummaryView({ trip }: { trip: TripDetail }) {
           <span><span className="text-[var(--color-text-muted)]">Aserrado </span><b className="font-mono">C$ {fmt(n(trip.sawingAmount))}</b></span>
           <span><span className="text-[var(--color-text-muted)]">Otros gastos </span><b className="font-mono">C$ {fmt(n(trip.tripExpensesTotal) - n(trip.sawingAmount))}</b></span>
         </div>
+        {/* Referencia: a cuánto se compró y a cuánto se puso la pulgada en este viaje. */}
+        <div className="grid gap-x-6 gap-y-1 border-t border-[var(--color-border)] px-3.5 py-2.5 text-[12.5px] sm:grid-cols-3">
+          <span><span className="text-[var(--color-text-muted)]">Compra </span><b className="font-mono">C$ {fmt(trip.computedCostPerFoot, 4)}/pie</b></span>
+          <span><span className="text-[var(--color-text-muted)]">Costo final con gastos </span><b className="font-mono">C$ {fmt(trip.landedCostPerFoot, 4)}/pie</b></span>
+          <span><span className="text-[var(--color-text-muted)]">Venta por pulgada </span><b className="font-mono">Tabla {fmt(trip.pricePerInchTabla)} · Tablilla {fmt(trip.pricePerInchTablilla)} · Cuadro {fmt(trip.pricePerInchCuadro)}</b></span>
+        </div>
       </Card>
     </div>
   );

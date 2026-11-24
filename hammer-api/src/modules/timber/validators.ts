@@ -138,7 +138,17 @@ export const timberBranchCostSchema = z.object({
   costPerFoot: z.number().positive("El costo por pie debe ser mayor a 0").max(10000),
 });
 
+/** Un movimiento de la cuenta con el proveedor del viaje (mismos valores que TIMBER_PAYMENT_KINDS en payments.ts). */
+export const createTimberTripPaymentSchema = z.object({
+  kind: z.enum(["ADELANTO", "ABONO", "OTRO_ABONO", "RESTA"], { message: "Elegí qué es: adelanto, abono, otro abono o resta." }),
+  amount: z.number().positive("El monto debe ser mayor a 0").max(100_000_000),
+  method: z.enum(["EFECTIVO", "DEPOSITO", "TRANSFERENCIA", "OTRO"]).nullable().optional(),
+  occurredAt: z.coerce.date().optional(),
+  notes: z.string().max(500).nullable().optional(),
+});
+
 export type CreateTimberProductInput = z.infer<typeof createTimberProductSchema>;
+export type CreateTimberTripPaymentInput = z.infer<typeof createTimberTripPaymentSchema>;
 export type UpdateTimberProductInput = z.infer<typeof updateTimberProductSchema>;
 export type CreateTimberTripInput = z.infer<typeof createTimberTripSchema>;
 export type UpdateTimberTripInput = z.infer<typeof updateTimberTripSchema>;

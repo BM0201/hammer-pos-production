@@ -44,6 +44,8 @@ export type TripDetail = {
   totalPieces: number; totalFeet: Num; totalCost: Num; totalSale: Num; totalProfit: Num; marginPercent: Num;
   supplierName: string | null; origin: string | null; notes: string | null;
   confirmedAt?: string | null; marginOverrideReason?: string | null;
+  /** Precio de venta por pulgada que se usó en el viaje (referencia). */
+  pricePerInchTabla?: Num; pricePerInchTablilla?: Num; pricePerInchCuadro?: Num;
   /** Hasta cuándo se puede corregir (24 h desde el ingreso); null = cerrado o no ingresado. */
   correctableUntil?: string | null;
   reconciliation: Reconciliation;

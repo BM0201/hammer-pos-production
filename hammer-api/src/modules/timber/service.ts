@@ -8,6 +8,7 @@
  *   cubication-import → carga de la cubicación desde Excel (vista previa)
  *   injection         → ingresar el viaje al inventario (vista previa + confirmar)
  *   correction        → corregir un viaje ya ingresado (24 h, por diferencia)
+ *   payments          → cuenta con el proveedor: adelantos, abonos, restas y saldo
  */
 export * from "./catalog-link";
 export * from "./pricing-config";
@@ -17,3 +18,4 @@ export * from "./trips";
 export * from "./cubication-import";
 export * from "./injection";
 export * from "./correction";
+export * from "./payments";

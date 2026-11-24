@@ -49,6 +49,7 @@ import {
 } from "../src/modules/payroll/prestaciones-sociales";
 import { checkOutlier, computeCategoryStats } from "../src/modules/finance/expense-intelligence";
 import { calculateReconciliation, calculateTimber, calculateTimberTrip, DEFAULT_CLASSIFICATION_CONFIG, DEFAULT_PRICING } from "../src/modules/timber/calculator";
+import { timberTripAccount } from "../src/modules/timber/payments";
 import { buildCatalogExportWorkbookFromRows } from "../src/modules/catalog-inventory/export-service";
 import { calculatePricingSuggestion } from "../src/modules/pricing/calculator";
 import { branchPriceSpread } from "../src/modules/pricing/branch-comparison-service";
@@ -63,6 +64,7 @@ const SESSION_COOKIE = "__Host-hammer_session=dev-preview; Path=/; Secure; HttpO
 type MockTripBody = { lines?: Array<{ thickness: number; width: number; length: number; pieces: number }>; woodTripTotalCost?: number; costPerFoot?: number; expenses?: Record<string, number>; invoicedFeet?: number | null; pricePolicy?: string; supplierName?: string | null; origin?: string | null };
 type MockTrip = { id: string; tripCode: string; status: string; destinationBranchId: string; createdAt: string; confirmedAt?: string; body: MockTripBody };
 const mockTrips: MockTrip[] = [];
+const mockTripPayments = new Map<string, Array<{ id: string; kind: string; amount: number; method: string | null; occurredAt: string; notes: string | null }>>();
 // Dos viajes ya ingresados para ver la corrección: uno dentro de las 24 h y otro ya cerrado.
 // La REGLA 1X3X6 entró 10 y quedan 3 en bodega (mockWood): quitarla toda tiene que fallar.
 for (const [code, hoursAgo] of [["VJM-2026-001", 30], ["VJM-2026-002", 3]] as const) {
@@ -105,6 +107,7 @@ function mockTripDetail(trip: MockTrip) {
     reconciliation: calculateReconciliation(calc.totals.totalFeet, trip.body.invoicedFeet ?? null, 0.01),
     nextTripCode: trip.status === "DRAFT" ? mockNextTripCode() : null,
     confirmedAt: trip.confirmedAt ?? null,
+    pricePerInchTabla: DEFAULT_PRICING.pricePerInchTabla, pricePerInchTablilla: DEFAULT_PRICING.pricePerInchTablilla, pricePerInchCuadro: DEFAULT_PRICING.pricePerInchCuadro,
     correctableUntil: trip.status === "TRANSFERRED" && trip.confirmedAt && Date.parse(trip.confirmedAt) + 86_400_000 > Date.now() ? new Date(Date.parse(trip.confirmedAt) + 86_400_000).toISOString() : null,
     lines: calc.lines.map((line, i) => ({ id: `line-${i}`, thicknessIn: line.dimensions.thickness, widthIn: line.dimensions.width, lengthIn: line.dimensions.length, ...line })),
   };
@@ -1641,6 +1644,27 @@ const server = http.createServer(async (req, res) => {
     const trip: MockTrip = { id: `trip-${randomUUID().slice(0, 8)}`, tripCode: `BOR-${randomUUID().slice(0, 8).toUpperCase()}`, status: "DRAFT", destinationBranchId: String(body.destinationBranchId), createdAt: new Date().toISOString(), body: { lines: [] } };
     mockTrips.push(trip);
     return ok(res, { trip: mockTripDetail(trip) });
+  }
+  // Cuenta con el proveedor (payments.ts): mismo saldo que el real.
+  const paymentsMatch = path.match(/^\/api\/timber\/trips\/([^/]+)\/payments(?:\/([^/]+))?$/);
+  if (paymentsMatch) {
+    const trip = mockTrips.find((t) => t.id === paymentsMatch[1]);
+    if (!trip) return send(res, 404, { ok: false, error: { code: "TIMBER_TRIP_NOT_FOUND", message: "No se encontró el viaje." } });
+    const list = mockTripPayments.get(trip.id) ?? [];
+    mockTripPayments.set(trip.id, list);
+    if (method === "POST") {
+      const body = await readJson(req);
+      if (trip.status === "CANCELLED") return send(res, 409, { ok: false, error: { code: "TRIP_CANCELLED_NO_PAYMENTS", message: "El viaje está cancelado: no se le anotan pagos." } });
+      if (!(Number(body.amount) > 0)) return send(res, 400, { ok: false, error: { code: "VALIDATION_ERROR", message: "El monto debe ser mayor que cero." } });
+      list.push({ id: `pay-${randomUUID().slice(0, 8)}`, kind: String(body.kind), amount: Number(body.amount), method: body.kind === "RESTA" ? null : (body.method as string | null) ?? null, occurredAt: new Date(String(body.occurredAt ?? Date.now())).toISOString(), notes: (body.notes as string | null) ?? null });
+      list.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
+    }
+    if (method === "DELETE") {
+      const index = list.findIndex((p) => p.id === paymentsMatch[2]);
+      if (index < 0) return send(res, 404, { ok: false, error: { code: "TIMBER_PAYMENT_NOT_FOUND", message: "Ese movimiento ya no está. Se recargó la cuenta del viaje." } });
+      list.splice(index, 1);
+    }
+    return ok(res, { payments: list, account: timberTripAccount(mockTripDetail(trip).woodTripTotalCost, list) });
   }
   const tripMatch = path.match(/^\/api\/timber\/trips\/([^/]+)(\/injection-preview)?$/);
   const mockTrip = tripMatch ? mockTrips.find((t) => t.id === tripMatch[1]) : undefined;

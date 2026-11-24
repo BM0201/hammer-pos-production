@@ -1421,10 +1421,32 @@ model TimberTrip {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lines TimberTripLine[]
+  lines    TimberTripLine[]
+  payments TimberTripPayment[]
 
   @@index([status])
   @@index([destinationBranchId])
+}
+
+/// Cuenta con el proveedor de un viaje: adelantos, abonos, otros abonos (pago de más, otros
+/// negocios) y restas (madera mala o faltante). Solo se anota acá: no mueve Tesorería.
+model TimberTripPayment {
+  id     String     @id @default(cuid())
+  tripId String
+  trip   TimberTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  /// ADELANTO · ABONO · OTRO_ABONO · RESTA
+  kind       String
+  amount     Decimal  @db.Decimal(14, 2)
+  /// EFECTIVO · DEPOSITO · TRANSFERENCIA · OTRO (en una RESTA no aplica)
+  method     String?
+  occurredAt DateTime
+  notes      String?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([tripId])
 }
 
 /// A line in a timber trip — represents a specific measure/dimension with piece count

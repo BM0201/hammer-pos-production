@@ -12,6 +12,7 @@ import { correctionChanges, EMPTY_EXPENSES, n, statusLabel, type TripDetail, typ
 import { TripCubication } from "./trip-cubication";
 import { TripCostPanel, type TripCostForm } from "./trip-cost-panel";
 import { TripReview } from "./trip-review";
+import { TripAccount } from "./trip-account";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -275,6 +276,8 @@ export function TripEditor({ tripId, onBack }: { tripId: string; onBack: () => v
       ) : (
         <TripReview key={trip.status} trip={trip} onPolicyChange={changePolicy} onConfirmed={() => void load()} />
       )}
+
+      {trip.status !== "CANCELLED" && <TripAccount tripId={trip.id} woodTotal={trip.woodTripTotalCost} canAdd />}
 
       {askCorrect && (
         <ConfirmDialog
