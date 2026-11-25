@@ -6,6 +6,7 @@ import {
   AREA_BY_CATEGORY, AREA_LABELS, type DecisionArea,
 } from "@/modules/brain/decision-catalog";
 import { buildDecisionSuggestion, type SuggestionOption } from "@/modules/brain/suggestions";
+import { learningKey, loadLearningSafe, verdictForScope, type LearningLevel } from "@/modules/brain/learning";
 
 /**
  * Parte A 1.1 — "red de seguridad": una decisión sin `proposedActionType`
@@ -130,12 +131,16 @@ export type InboxGroup = {
   productIds: string[];
   /** Ayuda corta de qué hacer con este tipo (suggestions.ts). */
   help: string;
+  /** learning.ts — qué aprendió Brain de tus respuestas a este tipo. */
+  learning: { level: LearningLevel; text: string };
 };
+
+const LEARNING_ORDER: Record<LearningLevel, number> = { USEFUL: 2, NORMAL: 1, LEARNING: 1, NOT_USEFUL: 0 };
 
 export async function getBrainInbox(filters: InboxFilters, db: Db = prisma): Promise<{ groups: InboxGroup[]; areas: Array<{ area: DecisionArea; count: number; criticalCount: number }> }> {
   const where = buildWhere(filters);
 
-  const [bySeverity, branchRows, productRows, reappearedRows] = await Promise.all([
+  const [bySeverity, branchRows, productRows, reappearedRows, learningBook] = await Promise.all([
     db.brainDecision.groupBy({
       by: ["proposedActionType", "category", "severity"],
       where,
@@ -160,6 +165,7 @@ export async function getBrainInbox(filters: InboxFilters, db: Db = prisma): Pro
       distinct: ["decisionId"],
       select: { decision: { select: { proposedActionType: true, category: true } } },
     }),
+    loadLearningSafe(db),
   ]);
 
   const reappearedKeys = new Set(reappearedRows.map((r) => groupKeyFor(r.decision.proposedActionType, r.decision.category)));
@@ -226,9 +232,11 @@ export async function getBrainInbox(filters: InboxFilters, db: Db = prisma): Pro
         hasReappeared: reappearedKeys.has(acc.key),
         productIds: [...(productIdsByKey.get(acc.key) ?? [])],
         help: buildDecisionSuggestion({ proposedActionType: isUnknown ? null : acc.proposedActionType, category: acc.category, status: "CLOSED", href: null, evidence: {}, action: {} }).help,
+        learning: (({ level, text }) => ({ level, text }))(verdictForScope(learningBook, learningKey(acc.proposedActionType, acc.category), filters.branchId)),
       };
     })
-    .sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || b.impactAmount - a.impactAmount || b.count - a.count);
+    // Misma gravedad: primero lo que te suele servir (learning.ts), después el monto.
+    .sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || LEARNING_ORDER[b.learning.level] - LEARNING_ORDER[a.learning.level] || b.impactAmount - a.impactAmount || b.count - a.count);
 
   const areaTotals = new Map<DecisionArea, { count: number; criticalCount: number }>();
   for (const group of groups) {

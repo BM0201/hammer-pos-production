@@ -13,6 +13,7 @@ import { getDecisionCatalogEntry, formatEvidence, labelForActionLog } from "@/mo
 import { buildDecisionSuggestion } from "@/modules/brain/suggestions";
 import { KNOWN_DETECTOR_KEYS } from "@/modules/brain/detector-registry";
 import type { BrainDecisionDraft, BrainScanResult, BrainDetectorLimits, BrainScanScope } from "@/modules/brain/types";
+import { adjustPriority, EMPTY_LEARNING, learningKey, loadLearningSafe, verdictForScope } from "@/modules/brain/learning";
 
 /**
  * prompt-brain-centro-decisiones.md Fase 1 — mismo patrón que
@@ -100,22 +101,24 @@ function enrichDecision(decision: DecisionWithRelations) {
   };
 }
 
-function normalizeDraft(draft: BrainDecisionDraft) {
+function normalizeDraft(draft: BrainDecisionDraft, learnedFactor = 1) {
   const confidenceScore = draft.confidenceScore === null ? null : normalizeConfidence(draft.confidenceScore);
   const riskScore = draft.riskScore ?? riskScoreFor(draft.severity, confidenceScore ?? 75);
-  const priorityScore = draft.priorityScore ?? priorityScoreFor({
+  const basePriority = draft.priorityScore ?? priorityScoreFor({
     severity: draft.severity,
     riskScore,
     confidenceScore: confidenceScore ?? 75,
     impactAmount: draft.impactAmount,
     expiresAt: draft.expiresAt,
   });
+  // learning.ts — lo que casi nunca te sirve baja, lo que casi siempre te sirve sube.
+  const priorityScore = adjustPriority(basePriority, draft.severity, learnedFactor);
 
   return { confidenceScore, riskScore, priorityScore };
 }
 
-function draftData(draft: BrainDecisionDraft, fingerprint: string, idempotencyKey: string): Prisma.BrainDecisionCreateInput {
-  const scores = normalizeDraft(draft);
+function draftData(draft: BrainDecisionDraft, fingerprint: string, idempotencyKey: string, learnedFactor = 1): Prisma.BrainDecisionCreateInput {
+  const scores = normalizeDraft(draft, learnedFactor);
   const targetUserId = draft.targetUserId ?? draft.userId ?? null;
   return {
     category: draft.category,
@@ -144,8 +147,8 @@ function draftData(draft: BrainDecisionDraft, fingerprint: string, idempotencyKe
   };
 }
 
-function updateData(draft: BrainDecisionDraft): Prisma.BrainDecisionUpdateInput {
-  const scores = normalizeDraft(draft);
+function updateData(draft: BrainDecisionDraft, learnedFactor = 1): Prisma.BrainDecisionUpdateInput {
+  const scores = normalizeDraft(draft, learnedFactor);
   const targetUserId = draft.targetUserId ?? draft.userId ?? null;
   return {
     category: draft.category,
@@ -411,11 +414,13 @@ export async function persistBrainDecisions(
     ? await db.brainDecision.findMany({ where: { fingerprint: { in: fingerprints } } })
     : [];
   const existingByFingerprint = new Map(existingDecisions.map((d) => [d.fingerprint, d]));
+  const learning = options.dryRun ? EMPTY_LEARNING : await loadLearningSafe(db);
 
   for (const draft of drafts) {
     byCategory[draft.category] = (byCategory[draft.category] ?? 0) + 1;
     const fingerprint = fingerprintByDraft.get(draft) as string;
     const idempotencyKey = makeIdempotencyKey(["decision", ...draft.fingerprintParts]);
+    const learnedFactor = verdictForScope(learning, learningKey(draft.proposedActionType ?? null, draft.category), draft.branchId).priorityFactor;
 
     try {
       const existing = existingByFingerprint.get(fingerprint);
@@ -426,7 +431,7 @@ export async function persistBrainDecisions(
       }
 
       if (!existing) {
-        const decision = await db.brainDecision.create({ data: draftData(draft, fingerprint, idempotencyKey) });
+        const decision = await db.brainDecision.create({ data: draftData(draft, fingerprint, idempotencyKey, learnedFactor) });
         await writeActionLog({
           decisionId: decision.id,
           actorUserId,
@@ -460,7 +465,7 @@ export async function persistBrainDecisions(
 
       await db.brainDecision.update({
         where: { id: existing.id },
-        data: { ...updateData(draft), status: nextStatus, ...reopenFields },
+        data: { ...updateData(draft, learnedFactor), status: nextStatus, ...reopenFields },
       });
 
       const severityUnchanged = existing.severity === draft.severity;

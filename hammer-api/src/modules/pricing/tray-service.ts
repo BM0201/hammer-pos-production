@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { writeActionLog } from "@/modules/brain/service";
+import { KEPT_PRICE_NOTE_PREFIX } from "@/modules/brain/learning";
 import { assertPriceApplicable, applySuggestedPriceTx, applyPriceAcrossBranches, marginForAppliedPrice, type ApplyPriceBranchResult } from "@/modules/pricing/service";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { setBranchPriceTx } from "@/modules/pricing/branch-price-exception-service";
@@ -552,7 +553,7 @@ export async function keepOneTrayPriceTx(
     },
   });
 
-  const resolutionNote = `Precio mantenido: ${input.note}`;
+  const resolutionNote = `${KEPT_PRICE_NOTE_PREFIX} ${input.note}`;
   const updated = await tx.brainDecision.updateMany({
     where: { id: decisionId, status: "OPEN" },
     data: {

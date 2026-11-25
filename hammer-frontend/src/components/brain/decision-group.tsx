@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, AlertTriangle, RefreshCcw, ClipboardList, MoreHorizontal, Lightbulb } from "lucide-react";
+import { ChevronDown, ChevronRight, AlertTriangle, RefreshCcw, ClipboardList, MoreHorizontal, Lightbulb, Brain } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { money } from "@/lib/format";
 import { formatTimeAgo, actionsForDecision, ACTION_LABELS, type DecisionAction, type SuggestionOption } from "@/lib/brain-ui";
@@ -22,6 +22,13 @@ export type DecisionGroupData = {
   hasReappeared: boolean;
   productIds: string[];
   help: string;
+  /** Lo que Brain aprendió de tus respuestas a este tipo (brain/learning.ts). */
+  learning?: { level: "LEARNING" | "USEFUL" | "NORMAL" | "NOT_USEFUL"; text: string };
+};
+
+const LEARNING_CHIP: Partial<Record<NonNullable<DecisionGroupData["learning"]>["level"], { label: string; className: string }>> = {
+  USEFUL: { label: "Te sirve", className: "text-[var(--color-success-700)]" },
+  NOT_USEFUL: { label: "Casi nunca te sirve", className: "text-[var(--color-text-muted)]" },
 };
 
 export type InboxItem = {
@@ -75,6 +82,7 @@ export function DecisionGroupRow({
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const badge = SEVERITY_BADGE[group.severity];
+  const learningChip = group.learning ? LEARNING_CHIP[group.learning.level] : undefined;
 
   function toggleItem(id: string) {
     setSelected((prev) => {
@@ -103,6 +111,7 @@ export function DecisionGroupRow({
         <span className="min-w-0 flex-1 font-medium text-[var(--color-text)]">
           {group.typeLabel} · <span className="text-[var(--color-text-muted)]">{group.count}</span>
           {group.hasReappeared && <span className="ml-2 text-xs font-normal text-[var(--color-warning-700)]">Volvió a aparecer</span>}
+          {learningChip && <span className={`ml-2 text-xs font-normal ${learningChip.className}`}>{learningChip.label}</span>}
         </span>
         <span className="w-full pl-7 text-xs text-[var(--color-text-muted)] sm:w-auto sm:shrink-0 sm:pl-0">
           {group.branches.length > 0 && `${group.branches.map((b) => b.code).join(", ")} · `}
@@ -117,6 +126,12 @@ export function DecisionGroupRow({
             <p className="flex items-start gap-1.5 pl-7 text-sm text-[var(--color-text-secondary)]">
               <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-primary-700)]" aria-hidden="true" />
               <span><strong className="text-[var(--color-text)]">Qué hacer:</strong> {group.help}</span>
+            </p>
+          )}
+          {group.learning && (
+            <p className="flex items-start gap-1.5 pl-7 text-sm text-[var(--color-text-secondary)]">
+              <Brain className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-primary-700)]" aria-hidden="true" />
+              <span><strong className="text-[var(--color-text)]">Lo que Brain aprendió:</strong> {group.learning.text}</span>
             </p>
           )}
           <div className="flex flex-wrap gap-2 pl-7">
