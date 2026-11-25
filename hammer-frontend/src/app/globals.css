@@ -2276,3 +2276,17 @@ a:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .hm-kpi-filter, .hm-row-dense { transition-duration: 0.01ms !important; }
 }
+
+/* ══════════════════════════════════════════════════════════════
+   Gráficas de Finanzas (.fin-viz) — colores por rol, paleta validada
+   (scripts/validate_palette.js del skill dataviz) contra #FFFFFF y #232120.
+   viz-1..3 = series; up/down = suma/resta (azul ↔ rojo); total = tinta neutra.
+   ══════════════════════════════════════════════════════════════ */
+.fin-viz {
+  --viz-1: #2a78d6; --viz-2: #eb6834; --viz-3: #1baf7a;
+  --viz-up: #2a78d6; --viz-down: #e34948; --viz-total: #52514e; --viz-muted: #898781;
+}
+[data-theme="dark"] .fin-viz {
+  --viz-1: #3987e5; --viz-2: #d95926; --viz-3: #199e70;
+  --viz-up: #3987e5; --viz-down: #e66767; --viz-total: #c3c2b7; --viz-muted: #898781;
+}

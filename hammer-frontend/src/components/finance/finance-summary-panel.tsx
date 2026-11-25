@@ -1,13 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
 import { TrendingUp, TrendingDown, Wallet, Receipt, Users, Landmark, Info, ChevronLeft, ChevronRight, RefreshCw, Building2 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { showToast } from "@/components/ui/toast";
 import { money, fmtDateTimeShort } from "@/lib/format";
+import { BranchProfitChart, ExpenseMixChart, PnlWaterfallChart, SalesProfitTrendChart, Sparkline } from "@/components/finance/finance-charts";
 
 /* ── Tipos del endpoint oficial: /api/master/finance/summary (finance/service.ts) ── */
 
@@ -96,6 +94,8 @@ type TrendPoint = {
   retainedCashExpenses: number;
   payrollPaid: number;
   cashOverages: number;
+  cardFees?: number;
+  cashShortages?: number;
   operatingProfit: number;
 };
 
@@ -275,6 +275,9 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
     const monthsWithSales = last6.filter((p) => p.netSales > 0).length;
     return {
       netSales6, profit6,
+      netSalesSeries: last6.map((p) => p.netSales),
+      profitSeries: last6.map((p) => p.operatingProfit),
+      marginSeries: last6.map((p) => (p.netSales > 0 ? (p.operatingProfit / p.netSales) * 100 : 0)),
       netSalesDelta: delta(netSales6, prevNet),
       profitDelta: delta(profit6, prevProfit),
       marginPercent: netSales6 > 0 ? Math.round((profit6 / netSales6) * 1000) / 10 : null,
@@ -392,6 +395,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                       {Math.abs(exec.netSalesDelta).toFixed(1)}% vs semestre anterior
                     </span>
                   )}
+                  <Sparkline values={exec.netSalesSeries} label="Ingresos netos" />
                 </div>
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Utilidad operativa (6m)</p>
@@ -405,6 +409,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                       {Math.abs(exec.profitDelta).toFixed(1)}% vs semestre anterior
                     </span>
                   )}
+                  <Sparkline values={exec.profitSeries} label="Utilidad operativa" />
                 </div>
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Margen operativo (6m)</p>
@@ -412,6 +417,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                     {exec.marginPercent != null ? `${exec.marginPercent.toFixed(1)}%` : "—"}
                   </p>
                   <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>Utilidad operativa / ingresos netos</p>
+                  <Sparkline values={exec.marginSeries} label="Margen operativo" />
                 </div>
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Meses con venta</p>
@@ -422,41 +428,12 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
             </section>
           )}
 
-          {/* ── 0b. TRAYECTORIA — ingresos y utilidad, 6 meses ── */}
+          {/* ── 0b. TRAYECTORIA — ingresos/utilidad y a dónde se van los gastos, 6 meses ── */}
           {chartData.some((p) => p.netSales !== 0 || p.operatingProfit !== 0) && (
-            <section className="rounded-xl p-4 space-y-3" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <p className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
-                  <TrendingUp className="h-3.5 w-3.5" /> Trayectoria de ingresos y utilidad — 6 meses
-                </p>
-                <span className="text-[10px] rounded px-2 py-0.5" style={{ background: "var(--color-info-100)", color: "var(--color-info-700)" }}>
-                  Real, base caja — mismas reglas que el estado de resultados
-                </span>
-              </div>
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--color-text-muted)" }} />
-                    <YAxis
-                      tick={{ fontSize: 10, fill: "var(--color-text-muted)" }}
-                      tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(v))}
-                      width={48}
-                    />
-                    <Tooltip
-                      formatter={(value, name) => [money(Number(value ?? 0)), String(name ?? "")]}
-                      contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--color-border)", background: "var(--color-surface)" }}
-                    />
-                    <Bar dataKey="netSales" name="Ingresos netos" fill="var(--color-info-500)" opacity={0.55} radius={[4, 4, 0, 0]} />
-                    <Line type="monotone" dataKey="operatingProfit" name="Utilidad operativa" stroke="var(--color-success-600)" strokeWidth={2.5} dot={{ r: 3 }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-              <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                Barras = ingresos netos cobrados · línea = utilidad operativa real (ingresos − COGS − gastos de caja − banco − efectivo retenido − planilla pagada + sobrante de caja).
-                El mes en curso se ve parcial hasta cerrarlo.
-              </p>
-            </section>
+            <div className="grid gap-4 xl:grid-cols-2">
+              <SalesProfitTrendChart points={chartData} />
+              <ExpenseMixChart points={chartData} />
+            </div>
           )}
 
           {/* ── 1. DESEMPEÑO REAL — la verdad primero ── */}
@@ -571,6 +548,12 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
               El presupuesto mensual configurado se compara aparte, no se resta.
             </p>
           </section>
+
+          {/* ── 1b. Gráficas del mes: cascada del estado de resultados y utilidad por sucursal ── */}
+          <div className={`grid gap-4 ${perf.byBranch.length + (perf.central.operatingExpenses > 0 ? 1 : 0) >= 2 ? "xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]" : ""}`}>
+            <PnlWaterfallChart pnl={perf} />
+            <BranchProfitChart byBranch={perf.byBranch} centralExpenses={perf.central.operatingExpenses} />
+          </div>
 
           {/* ── 2. Costos del período: real vs presupuesto ── */}
           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

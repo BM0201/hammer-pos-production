@@ -763,7 +763,21 @@ const server = http.createServer(async (req, res) => {
     informative: { purchasesPaid: 120000, internalFreightCost: 0, internalFreightOverlapWarning: null },
     rows: { items: [], total: 0, limit: 200, offset: 0 },
   });
-  if (path === "/api/master/finance/trend") return ok(res, { branchId: null, months: 12, points: [] });
+  if (path === "/api/master/finance/trend") {
+    // 12 meses de ejemplo (dic-2025 → nov-2026) para ver las gráficas del Resumen.
+    const points = Array.from({ length: 12 }, (_, i) => {
+      const month = ((11 + i) % 12) + 1;
+      const year = i < 1 ? 2025 : 2026;
+      const netSales = Math.round(330000 + i * 8000 + Math.sin(i * 1.3) * 25000);
+      const cogs = Math.round(netSales * 0.745);
+      const cashExpenses = 11000 + (i % 3) * 900, bankExpenses = 6000 + (i % 4) * 400, retainedCashExpenses = 1200;
+      const payrollPaid = 45000, cardFees = i >= 9 ? 900 + (i - 9) * 300 : 300, cashOverages = 150, cashShortages = i % 5 === 0 ? 400 : 0;
+      const operatingProfit = netSales - cogs - cashExpenses - bankExpenses - retainedCashExpenses - payrollPaid - cardFees + cashOverages - cashShortages;
+      return { year, month, grossSales: netSales + 2000, refunds: 2000, netSales, cogs, grossProfit: netSales - cogs, grossMarginPercent: 25.5,
+        cashExpenses, bankExpenses, retainedCashExpenses, payrollPaid, cardFees, cashOverages, cashShortages, operatingProfit };
+    });
+    return ok(res, { branchId: null, months: 12, points });
+  }
   if (path === "/api/cashier/bank-accounts") return ok(res, [{ id: "ba-1", bankName: "BAC", accountAlias: "Operativa", accountNumber: "100200300", currencyCode: "NIO" }]);
   if (path === "/api/cashier/branch-people") return ok(res, [{ id: "u-2", fullName: "Elena Bermúdez", roleLabel: "Supervisora" }]);
   if (path === "/api/cashier/cash-sessions/active") {
