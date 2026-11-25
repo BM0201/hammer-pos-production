@@ -6,7 +6,7 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
 import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { CATEGORY_LABELS } from "@/components/expenses/expense-manager.types";
-import { AlertTriangle, Banknote, BrickWall, Bus, CheckCircle2, Landmark, Lightbulb, Package, Pencil, SprayCan, Utensils, Wrench, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, Banknote, BrickWall, Bus, Camera, CheckCircle2, Hammer, Landmark, Lightbulb, Package, Pencil, SprayCan, UserRound, Utensils, Wrench, X, type LucideIcon } from "lucide-react";
 import { money } from "@/lib/format";
 
 /**
@@ -25,7 +25,7 @@ import { money } from "@/lib/format";
 
 type ExpenseConceptOption = { id: string; name: string };
 
-type ExpenseItemKey = "UTILITIES" | "TAXES" | "TRANSPORT" | "CASUAL_LABOR" | "FOOD" | "SUPPLIES" | "MAINTENANCE" | "OTHER";
+type ExpenseItemKey = "UTILITIES" | "TAXES" | "TRANSPORT" | "CASUAL_LABOR" | "FOOD" | "SUPPLIES" | "MAINTENANCE" | "EQUIPMENT" | "OWNER_PERSONAL" | "OTHER";
 
 type ExpenseItemDef = { key: ExpenseItemKey; icon: LucideIcon; examples: string };
 
@@ -34,16 +34,19 @@ const EXPENSE_ITEMS: ExpenseItemDef[] = [
   { key: "UTILITIES", icon: Lightbulb, examples: "luz, agua, internet" },
   { key: "TAXES", icon: Landmark, examples: "Alcaldía, basura, DGI" },
   { key: "TRANSPORT", icon: Bus, examples: "pasajes, combustible, taxi" },
-  { key: "CASUAL_LABOR", icon: Package, examples: "pago a ayudantes por carga/descarga" },
+  { key: "CASUAL_LABOR", icon: Package, examples: "ayudantes de carga y descarga" },
   { key: "FOOD", icon: Utensils, examples: "desayuno, almuerzo, cena" },
   { key: "SUPPLIES", icon: SprayCan, examples: "bolsas, papel, limpieza" },
   { key: "MAINTENANCE", icon: Wrench, examples: "reparaciones del local" },
+  // 2026-11-26 — salen de caja, pero no son gasto de operar (no restan de la utilidad).
+  { key: "EQUIPMENT", icon: Hammer, examples: "balanza, herramienta, techo" },
+  { key: "OWNER_PERSONAL", icon: UserRound, examples: "compras o mandados del dueño" },
   { key: "OTHER", icon: Pencil, examples: "cualquier otro gasto — descríbelo" },
 ];
 
 /** "No es gasto" — no suma al gasto operativo. */
 const PURCHASE_ITEM = { icon: BrickWall, label: "Compra de mercadería o flete", examples: "arena, bloques, cemento, viaje de material" };
-const CASH_OUT_ITEM = { icon: Banknote, label: "Retiro o envío de dinero", examples: "dinero que se manda a Master o bóveda, antes del cierre" };
+const CASH_OUT_ITEM = { icon: Banknote, label: "Retiro o envío de dinero", examples: "envío a Master o bóveda" };
 
 type Selection =
   | { kind: "expense"; item: ExpenseItemDef }
@@ -146,6 +149,9 @@ export function CashMovementsPanel({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
   const [duplicateInfo, setDuplicateInfo] = useState<DuplicateInfo>(null);
+  /** El servidor avisó que parece mercadería (arena, bloques…): ¿compra o gasto? */
+  const [merchandiseWarning, setMerchandiseWarning] = useState<string | null>(null);
+  const [notMerchandiseConfirmed, setNotMerchandiseConfirmed] = useState(false);
   const [lastWarning, setLastWarning] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
@@ -178,6 +184,8 @@ export function CashMovementsPanel({
     setReceiptPhotoUrl(null);
     setFormError("");
     setDuplicateInfo(null);
+    setMerchandiseWarning(null);
+    setNotMerchandiseConfirmed(false);
     setStep("pick");
     setPickFocusIndex(0);
   }
@@ -227,6 +235,7 @@ export function CashMovementsPanel({
       return "Describe qué fue el gasto (mínimo 10 caracteres) — no encaja en ninguna categoría.";
     }
     if (isExpense && description.trim().length < 2) return "¿Para qué fue? — describe el gasto.";
+    if (isExpense && selection!.item.key !== "OTHER" && concepts.length > 0 && !conceptId) return "Elegí el concepto (por ejemplo Luz, Pasaje, Bolsas).";
     if (isCashOut && !cashOutReasonKey) return "Elige por qué sale este dinero.";
     if (isPurchase && description.trim().length < 2) return "¿Para qué fue? — describe la compra.";
     if ((isExpense || isPurchase) && receiptChoice === null) return "¿Hay recibo o factura? — elegí Sí o No.";
@@ -241,7 +250,7 @@ export function CashMovementsPanel({
     setStep("confirm");
   }
 
-  async function register(confirmedNotDuplicate = false) {
+  async function register(confirmedNotDuplicate = false, confirmedNotMerchandise = notMerchandiseConfirmed) {
     if (!selection) return;
     const error = detailIsValid();
     if (error) { setFormError(error); setStep("detail"); return; }
@@ -262,6 +271,7 @@ export function CashMovementsPanel({
             payee: payee.trim() || undefined,
             receiptPhotoUrl: receiptPhotoUrl ?? undefined,
             confirmedNotDuplicate,
+            confirmedNotMerchandise,
           }),
         });
       } else if (selection.kind === "purchase") {
@@ -289,6 +299,10 @@ export function CashMovementsPanel({
 
       const raw = await response.json();
       if (!response.ok) {
+        if (raw?.error?.code === "LOOKS_LIKE_MERCHANDISE") {
+          setMerchandiseWarning(raw.error.message ?? "Parece mercadería para vender.");
+          return;
+        }
         if (raw?.error?.code === "POSSIBLE_DUPLICATE") {
           setDuplicateInfo(raw.error.details?.duplicate ?? null);
           return;
@@ -345,8 +359,36 @@ export function CashMovementsPanel({
     if (e.key === "Escape") { e.preventDefault(); setStep("pick"); setSelection(null); }
   }
 
+
+  // Avisos del registro: se muestran junto al botón que el cajero acaba de tocar.
+  const notices = (
+    <>
+      {formError && <p className="text-xs text-[var(--color-danger-600)]">{formError}</p>}
+
+      {merchandiseWarning && (
+        <div className="rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3 text-xs text-[var(--color-warning-700)] space-y-2">
+          <p>{merchandiseWarning}</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="rounded-lg bg-[var(--color-warning-600)] px-3 py-1.5 font-semibold text-white" onClick={() => { setMerchandiseWarning(null); setConceptId(""); setSelection({ kind: "purchase" }); setStep("confirm"); }}>Sí, es para vender: anotar como compra</button>
+            <button type="button" className="rounded-lg border border-[var(--color-warning-300)] px-3 py-1.5 font-semibold" onClick={() => { setMerchandiseWarning(null); setNotMerchandiseConfirmed(true); void register(false, true); }}>No, es un gasto</button>
+          </div>
+        </div>
+      )}
+
+      {duplicateInfo && (
+        <div className="rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3 text-xs text-[var(--color-warning-700)] space-y-2">
+          <p>Parecido a uno de hoy: {duplicateInfo.description} ({money(duplicateInfo.amount)}). ¿Es otro distinto?</p>
+          <div className="flex gap-2">
+            <button type="button" className="rounded-lg bg-[var(--color-warning-600)] px-3 py-1.5 font-semibold text-white" onClick={() => { setDuplicateInfo(null); void register(true); }}>Sí, es otro distinto</button>
+            <button type="button" className="rounded-lg border border-[var(--color-warning-300)] px-3 py-1.5 font-semibold" onClick={() => setDuplicateInfo(null)}>Revisar</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   return (
-    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
+    <div className={`rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden ${open && canCreate ? "lg:col-span-2" : ""}`}>
       <div className="px-4 py-3 border-b border-[var(--color-border)]">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
@@ -392,13 +434,13 @@ export function CashMovementsPanel({
       {open && canCreate && (
         <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] p-4 space-y-3">
           {/* Pasos visibles */}
-          <div className="flex items-center gap-2 text-[0.7rem] font-semibold">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.7rem] font-semibold">
             {(["pick", "detail", "confirm"] as const).map((s, i) => (
               <div key={s} className="flex items-center gap-2">
                 <span className={`flex h-5 w-5 items-center justify-center rounded-full border ${step === s ? "border-[var(--color-master-600)] bg-[var(--color-master-600)] text-white" : (["pick", "detail", "confirm"].indexOf(step) > i) ? "border-[var(--color-success-400)] bg-[var(--color-success-100)] text-[var(--color-success-700)]" : "border-[var(--color-border)] text-[var(--color-text-soft)]"}`}>
                   {(["pick", "detail", "confirm"].indexOf(step) > i) ? "✓" : i + 1}
                 </span>
-                <span className={step === s ? "text-[var(--color-text)]" : "text-[var(--color-text-soft)]"}>
+                <span className={`whitespace-nowrap ${step === s ? "text-[var(--color-text)]" : "text-[var(--color-text-soft)]"}`}>
                   {s === "pick" ? "¿Qué fue?" : s === "detail" ? "Detalle y monto" : "Confirmar"}
                 </span>
                 {i < 2 && <span className="text-[var(--color-border-strong)]">→</span>}
@@ -406,10 +448,11 @@ export function CashMovementsPanel({
             ))}
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.8fr)]">
             {/* Columna 1 — ¿Qué fue? */}
             <div className={`${step === "pick" ? "block" : "hidden"} md:block space-y-2`} onKeyDown={handlePickKeyDown} tabIndex={0}>
               <p className="text-[0.7rem] font-bold uppercase tracking-wide text-[var(--color-text-soft)]">Gastos del local</p>
+              <div className="grid grid-cols-2 gap-2">
               {EXPENSE_ITEMS.filter(() => canExpense).map((item) => {
                 const idx = pickList.findIndex((e) => e.group === "expense" && e.item.key === item.key);
                 const active = selection?.kind === "expense" && selection.item.key === item.key;
@@ -418,19 +461,21 @@ export function CashMovementsPanel({
                     key={item.key}
                     type="button"
                     onClick={() => pickAt(idx)}
-                    className={`flex w-full items-start gap-2.5 rounded-lg border-[1.5px] px-3 py-2 text-left transition-colors ${active ? "border-[var(--color-master-500)] bg-[var(--color-master-50)]" : pickFocusIndex === idx ? "border-[var(--color-info-400)] bg-[var(--color-surface-alt)]" : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-info-400)]"}`}
+                    className={`flex min-h-[52px] w-full items-start gap-2 rounded-lg border-[1.5px] px-2.5 py-2 text-left transition-colors ${active ? "border-[var(--color-master-500)] bg-[var(--color-master-50)]" : pickFocusIndex === idx ? "border-[var(--color-info-400)] bg-[var(--color-surface-alt)]" : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-info-400)]"}`}
                   >
                     <item.icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-text-muted)]" aria-hidden />
                     <span className="min-w-0">
-                      <span className="block text-sm font-semibold text-[var(--color-text)]">{CATEGORY_LABELS[item.key] ?? item.key}</span>
-                      <span className="block text-[0.7rem] text-[var(--color-text-muted)]">{item.examples}</span>
+                      <span className="block text-sm font-semibold leading-tight text-[var(--color-text)]">{CATEGORY_LABELS[item.key] ?? item.key}</span>
+                      <span className="mt-0.5 block text-[0.7rem] leading-snug text-[var(--color-text-muted)]">{item.examples}</span>
                     </span>
                   </button>
                 );
               })}
+              </div>
               {canMove && (
                 <>
                   <p className="pt-2 text-[0.7rem] font-bold uppercase tracking-wide text-[var(--color-text-soft)]">No es gasto (no suma al gasto operativo)</p>
+                  <div className="grid grid-cols-2 gap-2">
                   {(["purchase", "cashout"] as const).map((g) => {
                     const idx = pickList.findIndex((e) => e.group === g);
                     const def = g === "purchase" ? PURCHASE_ITEM : CASH_OUT_ITEM;
@@ -440,16 +485,17 @@ export function CashMovementsPanel({
                         key={g}
                         type="button"
                         onClick={() => pickAt(idx)}
-                        className={`flex w-full items-start gap-2.5 rounded-lg border-[1.5px] px-3 py-2 text-left transition-colors ${active ? "border-[var(--color-master-500)] bg-[var(--color-master-50)]" : pickFocusIndex === idx ? "border-[var(--color-info-400)] bg-[var(--color-surface-alt)]" : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-info-400)]"}`}
+                        className={`flex min-h-[52px] w-full items-start gap-2 rounded-lg border-[1.5px] px-2.5 py-2 text-left transition-colors ${active ? "border-[var(--color-master-500)] bg-[var(--color-master-50)]" : pickFocusIndex === idx ? "border-[var(--color-info-400)] bg-[var(--color-surface-alt)]" : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-info-400)]"}`}
                       >
                         <def.icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-text-muted)]" aria-hidden />
                         <span className="min-w-0">
-                          <span className="block text-sm font-semibold text-[var(--color-text)]">{def.label}</span>
-                          <span className="block text-[0.7rem] text-[var(--color-text-muted)]">{def.examples}</span>
+                          <span className="block text-sm font-semibold leading-tight text-[var(--color-text)]">{def.label}</span>
+                          <span className="mt-0.5 block text-[0.7rem] leading-snug text-[var(--color-text-muted)]">{def.examples}</span>
                         </span>
                       </button>
                     );
                   })}
+                  </div>
                 </>
               )}
             </div>
@@ -468,10 +514,10 @@ export function CashMovementsPanel({
                   className="space-y-3"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-2 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-1.5 text-sm font-semibold text-[var(--color-text)]">
+                    <span className="inline-flex min-w-0 items-center gap-2 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-1.5 text-sm font-semibold leading-tight text-[var(--color-text)]">
                       {SelectedIcon ? <SelectedIcon className="h-4 w-4 text-[var(--color-text-muted)]" aria-hidden /> : null} {selectionTitle(selection).label}
                     </span>
-                    <button type="button" className="text-xs font-semibold text-[var(--color-info-600)] hover:underline" onClick={() => { setSelection(null); setStep("pick"); }}>← Cambiar</button>
+                    <button type="button" className="min-h-9 shrink-0 px-1 text-xs font-semibold text-[var(--color-info-600)] hover:underline" onClick={() => { setSelection(null); setStep("pick"); }}>← Cambiar</button>
                   </div>
 
                   {isExpense && (
@@ -505,7 +551,7 @@ export function CashMovementsPanel({
                           <span className="text-xs font-medium text-[var(--color-text-secondary)]">Concepto</span>
                           <div className="flex flex-wrap gap-1.5">
                             {concepts.map((c) => (
-                              <button key={c.id} type="button" onClick={() => setConceptId(conceptId === c.id ? "" : c.id)} className={`rounded-full border px-2.5 py-1 text-[0.7rem] font-semibold ${conceptId === c.id ? "border-[var(--color-master-500)] bg-[var(--color-master-100)] text-[var(--color-master-700)]" : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-muted)]"}`}>
+                              <button key={c.id} type="button" onClick={() => setConceptId(conceptId === c.id ? "" : c.id)} className={`min-h-9 rounded-full border px-3 py-1.5 text-xs font-semibold ${conceptId === c.id ? "border-[var(--color-master-500)] bg-[var(--color-master-100)] text-[var(--color-master-700)]" : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-muted)]"}`}>
                                 {c.name}
                               </button>
                             ))}
@@ -552,10 +598,10 @@ export function CashMovementsPanel({
                         <div className="space-y-1.5">
                           <span className="text-xs font-medium text-[var(--color-text-secondary)]">¿Hay recibo o factura?</span>
                           <div className="flex gap-2">
-                            <button type="button" disabled={submitting || uploadingReceipt} onClick={() => { setReceiptChoice("photo"); fileInputRef.current?.click(); }} className={`flex-1 rounded-lg border-[1.5px] px-3 py-2 text-xs font-semibold ${receiptChoice === "photo" ? "border-[var(--color-master-500)] bg-[var(--color-master-50)]" : "border-[var(--color-border)] bg-[var(--color-surface)]"}`}>
-                              📷 Sí, tomar foto
+                            <button type="button" disabled={submitting || uploadingReceipt} onClick={() => { setReceiptChoice("photo"); fileInputRef.current?.click(); }} className={`inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg border-[1.5px] px-3 py-2 text-xs font-semibold ${receiptChoice === "photo" ? "border-[var(--color-master-500)] bg-[var(--color-master-50)]" : "border-[var(--color-border)] bg-[var(--color-surface)]"}`}>
+                              <Camera className="h-4 w-4" aria-hidden /> Sí, tomar foto
                             </button>
-                            <button type="button" disabled={submitting} onClick={() => { setReceiptChoice("none"); setReceiptPhotoUrl(null); }} className={`flex-1 rounded-lg border-[1.5px] px-3 py-2 text-xs font-semibold ${receiptChoice === "none" ? "border-[var(--color-master-500)] bg-[var(--color-master-50)]" : "border-[var(--color-border)] bg-[var(--color-surface)]"}`}>
+                            <button type="button" disabled={submitting} onClick={() => { setReceiptChoice("none"); setReceiptPhotoUrl(null); }} className={`inline-flex min-h-11 flex-1 items-center justify-center rounded-lg border-[1.5px] px-3 py-2 text-xs font-semibold ${receiptChoice === "none" ? "border-[var(--color-master-500)] bg-[var(--color-master-50)]" : "border-[var(--color-border)] bg-[var(--color-surface)]"}`}>
                               No hay recibo
                             </button>
                           </div>
@@ -567,17 +613,7 @@ export function CashMovementsPanel({
                         </div>
                       )}
 
-                      {formError && <p className="text-xs text-[var(--color-danger-600)]">{formError}</p>}
-
-                      {duplicateInfo && (
-                        <div className="rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3 text-xs text-[var(--color-warning-700)] space-y-2">
-                          <p>Parecido a uno de hoy: {duplicateInfo.description} ({money(duplicateInfo.amount)}). ¿Es otro distinto?</p>
-                          <div className="flex gap-2">
-                            <button type="button" className="rounded-lg bg-[var(--color-warning-600)] px-3 py-1.5 font-semibold text-white" onClick={() => { setDuplicateInfo(null); void register(true); }}>Sí, es otro distinto</button>
-                            <button type="button" className="rounded-lg border border-[var(--color-warning-300)] px-3 py-1.5 font-semibold" onClick={() => setDuplicateInfo(null)}>Revisar</button>
-                          </div>
-                        </div>
-                      )}
+                      <div className="space-y-2 lg:hidden">{notices}</div>
 
                       {step === "detail" ? (
                         <button type="submit" className="block w-full rounded-lg bg-[var(--color-info-600)] px-4 py-2.5 text-sm font-semibold text-white lg:hidden" disabled={submitting}>
@@ -595,7 +631,7 @@ export function CashMovementsPanel({
             </div>
 
             {/* Columna 3 — Así queda anotado */}
-            <div className={`${step !== "pick" ? "block" : "hidden"} md:block md:col-span-2 lg:col-span-1 space-y-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3`}>
+            <div className={`${step !== "pick" ? "block" : "hidden"} md:block md:col-span-2 lg:col-span-1 lg:sticky lg:top-4 lg:self-start space-y-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3`}>
               <p className="text-[0.7rem] font-bold uppercase tracking-wide text-[var(--color-text-soft)]">Así queda anotado</p>
               {!selection ? (
                 <p className="text-xs text-[var(--color-text-soft)]">Elegí qué fue para ver el resumen.</p>
@@ -612,6 +648,7 @@ export function CashMovementsPanel({
                   )}
                   <p className="text-[var(--color-text-soft)]">{periodLabel()}</p>
 
+                  <div className="hidden space-y-2 pt-1 lg:block">{notices}</div>
                   {step === "confirm" && (
                     <button
                       type="button"
@@ -637,7 +674,7 @@ export function CashMovementsPanel({
             <div className="flex items-center justify-between gap-2 lg:hidden">
               <button
                 type="button"
-                className="rounded-lg border border-[var(--color-border)] px-4 py-2 text-xs font-semibold"
+                className="min-h-11 rounded-lg border border-[var(--color-border)] px-4 py-2 text-xs font-semibold"
                 onClick={() => { if (step === "confirm") setStep("detail"); else { setSelection(null); setStep("pick"); } }}
               >
                 ← Atrás

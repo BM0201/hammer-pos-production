@@ -12,13 +12,15 @@ type ComparisonRow = {
   branchName: string;
   configExists: boolean;
   monthlyExpenses: number;
-  estimatedMonthlyUnits: number;
+  monthlySales: number;
+  expenseRatePercent: number | null;
   operatingExpensePerUnit: number;
   totalInternalCost: number;
   marginPercent: number;
   suggestedPrice: number;
   currentPrice: number | null;
   diffPercent: number | null;
+  profitAfterExpensesAtCurrent: number | null;
 };
 
 type Comparison = {
@@ -28,7 +30,7 @@ type Comparison = {
 
 /**
  * Precio sugerido del mismo producto en cada sucursal: mismo costo de compra,
- * pero el gasto mensual, las unidades y el margen de cada sucursal.
+ * pero el % de gasto (gasto del mes ÷ venta del mes) y el margen de cada sucursal.
  */
 export function BranchPriceComparison({
   productId,
@@ -81,7 +83,7 @@ export function BranchPriceComparison({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           price: row.suggestedPrice,
-          reason: `Calculadora: precio por gastos de la sucursal (C$${row.operatingExpensePerUnit.toFixed(2)} por unidad, margen ${row.marginPercent}%)`,
+          reason: `Calculadora: gasto ${row.expenseRatePercent ?? 0}% de la venta (C$${row.operatingExpensePerUnit.toFixed(2)} por unidad), margen ${row.marginPercent}%`,
         }),
       });
       const raw = await res.json().catch(() => null);
@@ -105,7 +107,7 @@ export function BranchPriceComparison({
             Comparar por sucursal
           </h3>
           <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-            Mismo costo de compra ({money(baseCost)}); cada sucursal con sus propios gastos, unidades y margen.
+            Mismo costo de compra ({money(baseCost)}). Cada sucursal con su % de gasto: de cada C$100 que vende, cuánto se va en gastos (presupuesto del mes ÷ venta promedio de los últimos 3 meses; sin compras, equipo ni gastos personales).
           </p>
         </div>
         <Button type="button" variant="secondary" size="sm" loading={loading} onClick={() => void load()}>
@@ -125,17 +127,18 @@ export function BranchPriceComparison({
 
       {data && (
         <div className="mt-4 overflow-x-auto rounded-lg border border-[var(--color-border)]">
-          <table className="w-full min-w-[720px] text-xs">
+          <table className="w-full min-w-[800px] text-xs">
             <thead>
               <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] text-left text-[var(--color-text-muted)]">
                 <th className="px-2 py-1.5">Sucursal</th>
-                <th className="px-2 py-1.5 text-right">Gasto/mes</th>
+                <th className="px-2 py-1.5 text-right">% de gasto</th>
                 <th className="px-2 py-1.5 text-right">Gasto por unidad</th>
                 <th className="px-2 py-1.5 text-right">Costo total</th>
                 <th className="px-2 py-1.5 text-right">Margen</th>
                 <th className="px-2 py-1.5 text-right">Sugerido</th>
                 <th className="px-2 py-1.5 text-right">Actual</th>
                 <th className="px-2 py-1.5 text-right">Dif.</th>
+                <th className="px-2 py-1.5 text-right" title="Precio actual − costo − su parte de los gastos">Te queda hoy</th>
                 <th className="px-2 py-1.5" />
               </tr>
             </thead>
@@ -148,12 +151,14 @@ export function BranchPriceComparison({
                     <td className="px-2 py-1.5 text-[var(--color-text)]">
                       {row.branchName}
                       {!row.configExists && (
-                        <span className="ml-1 text-[10px] text-[var(--color-text-muted)]" title="Sin configuración de precios: usa margen 30% y 1,000 unidades/mes">
+                        <span className="ml-1 text-[10px] text-[var(--color-text-muted)]" title="Sin configuración de precios: usa margen 30%">
                           (sin config.)
                         </span>
                       )}
                     </td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">{money(row.monthlyExpenses)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums" title={`Gasto del mes ${money(row.monthlyExpenses)} ÷ venta del mes ${money(row.monthlySales)}`}>
+                      {row.expenseRatePercent === null ? <span className="text-[var(--color-text-muted)]">Sin ventas</span> : `${row.expenseRatePercent}%`}
+                    </td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{money(row.operatingExpensePerUnit)}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{money(row.totalInternalCost)}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{row.marginPercent}%</td>
@@ -162,6 +167,9 @@ export function BranchPriceComparison({
                     <td className={`px-2 py-1.5 text-right tabular-nums ${below ? "font-semibold text-[var(--color-danger-700)]" : "text-[var(--color-text-muted)]"}`}
                       title={below ? "Vende por debajo de lo que piden los gastos de esta sucursal" : undefined}>
                       {row.diffPercent === null ? "—" : `${row.diffPercent > 0 ? "+" : ""}${row.diffPercent}%`}
+                    </td>
+                    <td className={`px-2 py-1.5 text-right tabular-nums ${row.profitAfterExpensesAtCurrent !== null && row.profitAfterExpensesAtCurrent < 0 ? "font-semibold text-[var(--color-danger-700)]" : ""}`}>
+                      {row.profitAfterExpensesAtCurrent === null ? "—" : money(row.profitAfterExpensesAtCurrent)}
                     </td>
                     <td className="px-2 py-1.5 text-right">
                       <Button type="button" variant="success" size="sm" disabled={same || applyingId !== null}

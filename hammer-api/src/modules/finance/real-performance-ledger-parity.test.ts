@@ -21,8 +21,14 @@ const BRANCH_1 = { id: "branch-1", code: "MSY", name: "Masaya" };
 const START = new Date("2026-10-01T06:00:00Z");
 const END = new Date("2026-11-01T06:00:00Z");
 
-function buildFakeDb() {
+function buildFakeDb(extraCash: Array<{ id: string; amount: number; category: string }> = []) {
   const cashMovements = [
+    ...extraCash.map((e) => ({
+      id: e.id, amount: decimal(e.amount), createdAt: new Date("2026-10-09T12:00:00Z"), reason: e.category,
+      createdByUserId: "user-1", approvedByUserId: null,
+      cashSession: { physicalCashBox: { branchId: "branch-1" } },
+      operatingExpense: { category: e.category, description: e.category, payee: null, receiptNumber: null, conceptId: null, concept: null },
+    })),
     {
       id: "cm-1", amount: decimal(300), createdAt: new Date("2026-10-06T12:00:00Z"), reason: "Limpieza",
       createdByUserId: "user-1", approvedByUserId: null,
@@ -115,4 +121,14 @@ test("comisión de tarjeta: línea propia y, sin sucursal, en la fila Central �
   assert.equal(performance.central.cardFees, 85);
   const branchesPlusCentral = performance.byBranch.reduce((s, b) => s + b.operatingExpenses, 0) + performance.central.operatingExpenses;
   assert.ok(Math.abs(branchesPlusCentral - performance.operatingExpenses) < 0.01);
+});
+
+test("equipo y gastos personales del dueño: salen en el libro, pero NO restan de la utilidad operativa", async () => {
+  const db = buildFakeDb([{ id: "cm-eq", amount: 1000, category: "EQUIPMENT" }, { id: "cm-own", amount: 310, category: "OWNER_PERSONAL" }]);
+  const ledger = await getExpenseLedger({ start: START, end: END, branchId: null, basis: "PAID" }, db);
+  const ledgerTotal = ledger.rows.reduce((sum, row) => sum + row.amount, 0);
+  const performance = await computeRealPerformance(null, START, END, { monthlyTotal: 0 }, db);
+  assert.deepEqual(performance.outsideOperation, { equipment: 1000, ownerPersonal: 310, total: 1310 });
+  assert.ok(Math.abs(performance.operatingExpenses - 7635) < 0.01, "el gasto operativo no cambia");
+  assert.ok(Math.abs(performance.operatingExpenses + performance.outsideOperation.total - ledgerTotal) < 0.01, "operativo + fuera de la operación = todo el libro");
 });

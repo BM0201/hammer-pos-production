@@ -24,6 +24,8 @@ export const EXPENSE_CATEGORY_LABELS: Record<(typeof EXPENSE_CATEGORIES)[number]
   CASUAL_LABOR: "Carga y descarga",
   BANK_FEES: "Comisiones bancarias",
   OTHER: "Otro",
+  EQUIPMENT: "Equipo y mejoras",
+  OWNER_PERSONAL: "Personal del dueño",
 };
 
 export function expenseCategoryLabel(category: string): string {

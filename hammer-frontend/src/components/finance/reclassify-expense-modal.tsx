@@ -8,7 +8,17 @@ import { showToast } from "@/components/ui/toast";
 import { money, fmtDateTime } from "@/lib/format";
 import { CATEGORY_LABELS, CATEGORIES } from "@/components/expenses/expense-manager.types";
 
-type ReviewRow = { id: string; amount: string | number; description: string; effectiveFrom: string; payee: string | null };
+type Suggestion = { isPurchase: true; matchedKeyword: string } | { isPurchase: false; category: string; matchedKeyword: string };
+type ReviewRow = { id: string; amount: string | number; description: string; effectiveFrom: string; payee: string | null; category?: string; suggestion?: Suggestion | null };
+type RowForm = { category: string; conceptId: string; mode: "RECLASSIFY" | "PURCHASE"; kind: "GOODS" | "FREIGHT"; supplierName: string };
+
+/** Lo que el sistema propone según la descripción: Master solo confirma. */
+function formFromSuggestion(row: ReviewRow): RowForm {
+  const s = row.suggestion;
+  const base: RowForm = { category: row.category ?? CATEGORIES[0], conceptId: "", mode: "RECLASSIFY", kind: "GOODS", supplierName: "" };
+  if (!s) return base;
+  return s.isPurchase ? { ...base, mode: "PURCHASE" } : { ...base, category: s.category };
+}
 type ExpenseConceptOption = { id: string; name: string; category: string };
 
 /**
@@ -34,7 +44,7 @@ export function ReclassifyExpenseModal({
   const [rows, setRows] = useState<ReviewRow[]>(singleRow ? [{ ...singleRow, payee: null }] : []);
   const [loading, setLoading] = useState(mode === "bulk");
   const [concepts, setConcepts] = useState<ExpenseConceptOption[]>([]);
-  const [forms, setForms] = useState<Record<string, { category: string; conceptId: string; mode: "RECLASSIFY" | "PURCHASE"; kind: "GOODS" | "FREIGHT"; supplierName: string }>>({});
+  const [forms, setForms] = useState<Record<string, RowForm>>({});
   const [submittingId, setSubmittingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -56,23 +66,19 @@ export function ReclassifyExpenseModal({
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
-    apiFetch(`/api/master/finance/expense-concepts?category=${CATEGORIES[0]}`)
+    // Todos los conceptos de una vez: cada fila puede estar en otra categoría.
+    apiFetch("/api/master/finance/expense-concepts")
       .then((r) => r.json())
       .then((raw) => setConcepts((unwrapApiData(raw) as ExpenseConceptOption[]) ?? []))
       .catch(() => setConcepts([]));
   }, []);
 
   function formFor(id: string) {
-    return forms[id] ?? { category: CATEGORIES[0], conceptId: "", mode: "RECLASSIFY" as const, kind: "GOODS" as const, supplierName: "" };
+    const row = rows.find((r) => r.id === id);
+    return forms[id] ?? (row ? formFromSuggestion(row) : formFromSuggestion({ id, amount: 0, description: "", effectiveFrom: "", payee: null }));
   }
-  function setForm(id: string, patch: Partial<ReturnType<typeof formFor>>) {
+  function setForm(id: string, patch: Partial<RowForm>) {
     setForms((f) => ({ ...f, [id]: { ...formFor(id), ...patch } }));
-  }
-
-  async function loadConceptsFor(category: string) {
-    const res = await apiFetch(`/api/master/finance/expense-concepts?category=${category}`);
-    const raw = await res.json();
-    setConcepts((unwrapApiData(raw) as ExpenseConceptOption[]) ?? []);
   }
 
   async function apply(row: ReviewRow) {
@@ -105,7 +111,7 @@ export function ReclassifyExpenseModal({
       <div className="w-full max-w-3xl max-h-[85vh] overflow-y-auto space-y-4 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-[var(--color-text)]">
-            {mode === "single" ? "Reclasificar gasto" : `Revisar ${rows.length} gasto${rows.length === 1 ? "" : "s"} en Otros`}
+            {mode === "single" ? "Reclasificar gasto" : `Revisar clasificación · ${rows.length} gasto${rows.length === 1 ? "" : "s"}`}
           </h3>
           <button onClick={onClose} aria-label="Cerrar" className="hm-icon-btn"><X className="h-4 w-4" /></button>
         </div>
@@ -128,6 +134,14 @@ export function ReclassifyExpenseModal({
                     </div>
                     <span className="text-sm font-bold tabular-nums">{money(Number(row.amount))}</span>
                   </div>
+                  {row.category && (
+                    <p className="text-xs text-[var(--color-text-secondary)]">
+                      Ahora: <strong>{CATEGORY_LABELS[row.category] ?? row.category}</strong>
+                      {row.suggestion && (
+                        <> · Sugerido: <strong>{row.suggestion.isPurchase ? "Compra de mercadería (no es gasto)" : CATEGORY_LABELS[row.suggestion.category] ?? row.suggestion.category}</strong> (dice “{row.suggestion.matchedKeyword}”)</>
+                      )}
+                    </p>
+                  )}
 
                   <div className="flex gap-2 text-xs">
                     <button type="button" onClick={() => setForm(row.id, { mode: "RECLASSIFY" })} className={`rounded-full px-2.5 py-1 font-semibold ${form.mode === "RECLASSIFY" ? "bg-[var(--color-master-100)] text-[var(--color-master-700)]" : "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]"}`}>
@@ -145,13 +159,13 @@ export function ReclassifyExpenseModal({
                         <select
                           className="hm-input h-8 text-xs"
                           value={form.category}
-                          onChange={(e) => { setForm(row.id, { category: e.target.value, conceptId: "" }); void loadConceptsFor(e.target.value); }}
+                          onChange={(e) => setForm(row.id, { category: e.target.value, conceptId: "" })}
                         >
                           {CATEGORIES.filter((c) => c !== "PAYROLL").map((c) => <option key={c} value={c}>{CATEGORY_LABELS[c] ?? c}</option>)}
                         </select>
                       </label>
                       <label className="grid gap-1 text-xs">
-                        <span className="font-medium text-[var(--color-text-secondary)]">Concepto (opcional)</span>
+                        <span className="font-medium text-[var(--color-text-secondary)]">Concepto</span>
                         <select className="hm-input h-8 text-xs" value={form.conceptId} onChange={(e) => setForm(row.id, { conceptId: e.target.value })}>
                           <option value="">Sin concepto específico</option>
                           {concepts.filter((c) => c.category === form.category).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}

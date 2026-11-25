@@ -32,3 +32,11 @@ test("FINANCE_CATEGORY_COLORS (gráfica de Gastos por período) también cubre l
     assert.ok(FINANCE_CATEGORY_COLORS[code], `falta color de gráfica para "${code}"`);
   }
 });
+
+test("cada categoría cae en uno de los 4 grupos; equipo y personal del dueño quedan fuera de la operación", async () => {
+  const { EXPENSE_GROUP_BY_CATEGORY } = await import("@/components/expenses/expense-manager.types");
+  for (const code of CATEGORIES) assert.ok(EXPENSE_GROUP_BY_CATEGORY[code], `"${code}" no tiene grupo`);
+  assert.equal(EXPENSE_GROUP_BY_CATEGORY.EQUIPMENT, "OUTSIDE");
+  assert.equal(EXPENSE_GROUP_BY_CATEGORY.OWNER_PERSONAL, "OUTSIDE");
+  assert.equal(EXPENSE_GROUP_BY_CATEGORY.SUPPLIES, "SUPPLIES");
+});

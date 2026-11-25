@@ -2565,6 +2565,8 @@ const EXPENSE_CATEGORY_COUNTERPARTY: Record<ExpenseCategory, TreasuryCounterpart
   CASUAL_LABOR: "EMPLOYEE",
   BANK_FEES: "ADJUSTMENT",
   OTHER: "SUPPLIER",
+  EQUIPMENT: "SUPPLIER",
+  OWNER_PERSONAL: "ADJUSTMENT",
 };
 
 export type RetainedCashExpenseInput = {

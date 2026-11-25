@@ -4,6 +4,7 @@ import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import { listSupplierPayables } from "@/modules/purchase-orders/payables";
 import { isCountableTreasuryExpenseEntry, payrollEmployerCostPaid } from "@/modules/finance/expense-rules";
 import { getExpenseLedger } from "@/modules/finance/expense-ledger";
+import { isOutsideOperation, OUTSIDE_OPERATION_CATEGORIES } from "@/modules/finance/expense-groups";
 
 export { isCountableTreasuryExpenseEntry, payrollEmployerCostPaid };
 
@@ -163,6 +164,12 @@ export type FinanceSummary = {
      */
     purchasesPaid: number;
     payablesOpen: number;
+    /**
+     * 2026-11-26 — salió plata pero NO es costo de operar (expense-groups.ts):
+     * equipo y mejoras del local (inversión) y gastos personales del dueño
+     * (retiro). Información aparte, NO se resta de operatingProfit.
+     */
+    outsideOperation: { equipment: number; ownerPersonal: number; total: number };
     byBranch: Array<{
       branchId: string;
       branchCode: string | null;
@@ -306,6 +313,7 @@ async function computeOperatingExpenses(branchId: string | null, start: Date, en
     // ya NO entra acá — antes se sumaba como gasto de todos los meses
     // siguientes (el bug de fondo de este doc).
     kind: { not: "PAID" },
+    category: { notIn: [...OUTSIDE_OPERATION_CATEGORIES] },
     ...(branchId ? { branchId } : {}),
     effectiveFrom: { lt: end },
     // Cubre recurrentes sin fecha de fin y recurrentes con un effectiveTo
@@ -474,6 +482,8 @@ export async function fetchTreasuryExpenseEntries(
 
   return entries
     .filter((e) => isCountableTreasuryExpenseEntry(e, linkedById.get(e.expensePaymentId ?? "")))
+    // Equipo/mejoras y personal del dueño no son gasto operativo (expense-groups.ts).
+    .filter((e) => !isOutsideOperation(linkedById.get(e.expensePaymentId ?? "")?.category))
     .map((e) => ({
       amount: num(e.amount),
       occurredAt: e.occurredAt,
@@ -577,7 +587,13 @@ export async function computeRealPerformance(
   // 2026-11-25: la comisión de tarjeta va en su propia línea (cardFees), ya no dentro de bankExpenses.
   let unattributedBankExpenses = 0;
   let unattributedCardFees = 0;
+  const outside = { equipment: 0, ownerPersonal: 0 };
   for (const row of expenseLedger.rows) {
+    if (row.source !== "PLANILLA" && isOutsideOperation(row.category)) {
+      if (row.category === "EQUIPMENT") outside.equipment += row.amount;
+      else outside.ownerPersonal += row.amount;
+      continue;
+    }
     if (row.source === "CAJA") { acc(row.branchId!).cashExpenses += row.amount; continue; }
     if (row.source === "PLANILLA") { acc(row.branchId!).payrollPaid += row.amount; continue; }
     if (row.source === "EFECTIVO_RETENIDO") { acc(row.branchId!).retainedCashExpenses += row.amount; continue; }
@@ -676,6 +692,7 @@ export async function computeRealPerformance(
     estimatedNetProfit: round2(operatingProfit),
     purchasesPaid: round2(num(purchasesPaidAgg._sum.amount ?? 0)),
     payablesOpen: round2(supplierPayables.reduce((s, sp) => s + sp.totalBalance, 0)),
+    outsideOperation: { equipment: round2(outside.equipment), ownerPersonal: round2(outside.ownerPersonal), total: round2(outside.equipment + outside.ownerPersonal) },
     byBranch,
   };
 }
@@ -771,13 +788,14 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
       },
       select: { quantity: true, unitCost: true, movementType: true, createdAt: true },
     }),
-    // Mismas exclusiones de planilla que computeRealPerformance (criterio único).
+    // Mismas exclusiones de planilla que computeRealPerformance (criterio único),
+    // más lo que está fuera de la operación (expense-groups.ts).
     prisma.cashMovement.findMany({
       where: {
         type: "EXPENSE_OUT",
         createdAt: { gte: start, lt: end },
         payrollDisbursements: { none: {} },
-        operatingExpense: { isNot: { category: "PAYROLL" } },
+        operatingExpense: { isNot: { category: { in: ["PAYROLL", ...OUTSIDE_OPERATION_CATEGORIES] } } },
         ...(branchId ? { cashSession: { physicalCashBox: { branchId } } } : {}),
       },
       select: { amount: true, createdAt: true },

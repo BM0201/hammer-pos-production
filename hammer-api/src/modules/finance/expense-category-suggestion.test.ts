@@ -45,3 +45,19 @@ test("sin coincidencia → null", () => {
 test("normaliza acentos y mayúsculas", () => {
   assert.equal(categoryOf(suggestExpenseCategory("CÉSPED Y BOLSA")), "SUPPLIES");
 });
+
+test("2026-11-26 — lo que se vio en producción cae donde corresponde", () => {
+  const cat = (d: string) => { const r = suggestExpenseCategory(d); return r ? (r.isPurchase ? "COMPRA" : r.category) : null; };
+  assert.equal(cat("un viaje de arena de 12 metros"), "COMPRA");
+  assert.equal(cat("maiz quebrado"), "OWNER_PERSONAL");
+  assert.equal(cat("medicamento para pollos."), "OWNER_PERSONAL");
+  assert.equal(cat("compra de una balanza"), "EQUIPMENT");
+  assert.equal(cat("imperfast y membrana para techo del Proyecto Rivas"), "EQUIPMENT");
+  assert.equal(cat("pasaje al banco"), "TRANSPORT");
+  assert.equal(cat("Bridas plasticas para exhibir productos de ferreteria"), "SUPPLIES");
+  assert.equal(cat("una escoba"), "SUPPLIES");
+  assert.equal(cat("Alcaldía (impuesto municipal) — basura de septiembre"), "TAXES");
+  assert.equal(cat("Luz (energía eléctrica) — AGOSTO"), "UTILITIES");
+  assert.equal(cat("Tubo cedula 41 ,codo y complemento"), "MAINTENANCE");
+  assert.equal(cat("Ignacio descarga de bloques"), "CASUAL_LABOR");
+});

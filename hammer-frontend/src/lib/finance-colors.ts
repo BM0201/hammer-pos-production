@@ -24,6 +24,9 @@ export const FINANCE_CATEGORY_COLORS: Record<string, FinanceCategoryColor> = {
   CASUAL_LABOR: { light: "#a16207", dark: "#ca8a04" },
   BANK_FEES: { light: "#64748b", dark: "#94a3b8" },
   OTHER: { light: "#6b7280", dark: "#9ca3af" },
+  // 2026-11-26 — fuera de la operación.
+  EQUIPMENT: { light: "#0e7490", dark: "#22d3ee" },
+  OWNER_PERSONAL: { light: "#78716c", dark: "#a8a29e" },
   UNCLASSIFIED: { light: "#d97706", dark: "#f59e0b" },
 };
 

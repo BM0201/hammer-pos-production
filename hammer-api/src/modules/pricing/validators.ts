@@ -14,6 +14,8 @@ export const EXPENSE_CATEGORIES = [
   "CASUAL_LABOR",
   "BANK_FEES",
   "OTHER",
+  "EQUIPMENT",
+  "OWNER_PERSONAL",
 ] as const;
 
 const PRORATION_METHODS = ["BY_QUANTITY", "BY_VALUE"] as const;

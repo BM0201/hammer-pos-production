@@ -14,6 +14,7 @@ import { EXPENSE_CATEGORIES } from "@/modules/pricing/validators";
 import { logAuditEvent } from "@/modules/audit/service";
 import { checkOutlier, computeCategoryStats } from "@/modules/finance/expense-intelligence";
 import { findPossibleDuplicate } from "@/modules/finance/expense-duplicate-detection";
+import { suggestExpenseCategory } from "@/modules/finance/expense-category-suggestion";
 
 /** Returns year, month (1-based) and day in America/Managua timezone. */
 function getNicaraguaDateParts() {
@@ -46,6 +47,8 @@ const createSchema = z.object({
   // el cliente lo manda en true solo después de que el usuario confirmó
   // explícitamente "es otro gasto distinto" sobre el aviso ya mostrado.
   confirmedNotDuplicate: z.boolean().optional(),
+  // 2026-11-26 — el cajero confirmó "No, es un gasto" sobre el aviso de que parecía mercadería.
+  confirmedNotMerchandise: z.boolean().optional(),
 });
 
 /**
@@ -151,6 +154,24 @@ export async function POST(req: NextRequest) {
         "La planilla no se registra aquí: la postea Master y aparece sola el día de pago.",
         400,
       );
+    }
+
+    // 2026-11-26 — en Rivas la arena se registró 7 veces como gasto: nunca
+    // entró al inventario e infló el gasto. Si la descripción parece
+    // mercadería, se detiene hasta que el cajero confirme que es un gasto
+    // (o lo cambie a "Compra de mercadería o flete").
+    if (!parsed.data.confirmedNotMerchandise) {
+      const suggestion = suggestExpenseCategory(parsed.data.description);
+      if (suggestion?.isPurchase) {
+        return fail("LOOKS_LIKE_MERCHANDISE", `"${suggestion.matchedKeyword}" parece mercadería para vender. Si es así, va como Compra de mercadería, no como gasto.`, 409, { matchedKeyword: suggestion.matchedKeyword });
+      }
+    }
+
+    // Concepto obligatorio (menos en Otro, que ya pide describirlo): sin
+    // concepto todo terminaba en "Otro" y el gasto no se podía separar.
+    if (!parsed.data.conceptId && parsed.data.category !== "OTHER") {
+      const hasConcepts = await prisma.expenseConcept.count({ where: { category: parsed.data.category, isActive: true } });
+      if (hasConcepts > 0) return fail("VALIDATION_ERROR", "Elegí el concepto del gasto (por ejemplo Luz, Pasaje, Bolsas).", 400);
     }
 
     // Aviso de posible duplicado (prompt-caja-gastos-pos-cobro.md Commit 1):

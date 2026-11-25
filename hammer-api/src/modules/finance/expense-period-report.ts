@@ -1,3 +1,4 @@
+import { EXPENSE_GROUP_LABELS, expenseGroupFor, isOutsideOperation, type ExpenseGroup } from "@/modules/finance/expense-groups";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { OPERATIONAL_TIMEZONE, businessDateFromInstant } from "@/modules/operations/business-date";
@@ -68,7 +69,11 @@ export type ExpensePeriodReport = {
     grossProfit: number;
     operatingProfit: number;
     expenseToSalesPercent: number | null;
+    /** Equipo/mejoras y personal del dueño: salió de caja pero NO está en expenseTotal (expense-groups.ts). */
+    outsideOperation: number;
   };
+  /** Gastos fijos / operación / suministros / fuera de la operación. */
+  byGroup: Array<{ group: ExpenseGroup; label: string; total: number }>;
   byCategory: CategoryBreakdown[];
   byBranch: Array<{ branchId: string | null; branchCode: string | null; branchName: string | null; total: number }>;
   bySource: Array<{ source: ExpenseLedgerSource; total: number }>;
@@ -343,7 +348,12 @@ export async function getExpensePeriodReport(input: ExpensePeriodReportInput, db
     }),
   ]);
 
-  const expenseTotal = sumRows(currentRows);
+  // Lo que está fuera de la operación se muestra aparte, nunca dentro del gasto (expense-groups.ts).
+  const expenseTotal = sumRows(currentRows.filter((r) => !isOutsideOperation(r.category)));
+  const outsideOperation = sumRows(currentRows.filter((r) => isOutsideOperation(r.category)));
+  const groupTotals = new Map<ExpenseGroup, number>();
+  for (const r of currentRows) groupTotals.set(expenseGroupFor(r.category), (groupTotals.get(expenseGroupFor(r.category)) ?? 0) + r.amount);
+  const byGroup = (["FIXED", "OPERATION", "SUPPLIES", "OUTSIDE"] as const).map((group) => ({ group, label: EXPENSE_GROUP_LABELS[group], total: round2(groupTotals.get(group) ?? 0) }));
   const currentCategoryTotals = categoryTotalsOf(currentRows);
   const previousCategoryTotals = trailingCategoryTotals[0] ?? new Map<string, number>();
   const previousTotal = round2([...previousCategoryTotals.values()].reduce((s, v) => s + v, 0));
@@ -399,7 +409,9 @@ export async function getExpensePeriodReport(input: ExpensePeriodReportInput, db
       grossProfit,
       operatingProfit,
       expenseToSalesPercent: performance.netSales > 0 ? round2((expenseTotal / performance.netSales) * 100) : null,
+      outsideOperation,
     },
+    byGroup,
     byCategory,
     byBranch,
     bySource,

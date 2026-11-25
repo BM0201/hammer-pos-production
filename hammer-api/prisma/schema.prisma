@@ -2914,6 +2914,10 @@ enum ExpenseCategory {
   /// Comisiones bancarias (antes sin categoría propia).
   BANK_FEES
   OTHER
+  /// 2026-11-26 — fuera de la operación: herramienta/equipo o mejora del local (inversión, no gasto del mes).
+  EQUIPMENT
+  /// 2026-11-26 — fuera de la operación: gasto personal del dueño (retiro, no costo de la ferretería).
+  OWNER_PERSONAL
 }
 
 enum ProrationMethod {

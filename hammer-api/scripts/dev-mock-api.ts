@@ -53,9 +53,11 @@ import { calculateReconciliation, calculateTimber, calculateTimberTrip, DEFAULT_
 import { timberTripAccount } from "../src/modules/timber/payments";
 import { buildCatalogExportWorkbookFromRows } from "../src/modules/catalog-inventory/export-service";
 import { calculatePricingSuggestion } from "../src/modules/pricing/calculator";
-import { branchPriceSpread } from "../src/modules/pricing/branch-comparison-service";
+import { branchPriceSpread, expensePerUnitForRate, expenseRateFrom } from "../src/modules/pricing/branch-comparison-service";
+import { suggestExpenseCategory } from "../src/modules/finance/expense-category-suggestion";
 import { formatEvidence, getDecisionCatalogEntry } from "../src/modules/brain/decision-catalog";
 import { buildDecisionSuggestion } from "../src/modules/brain/suggestions";
+import { verdictFor } from "../src/modules/brain/learning";
 
 const PORT = Number(process.env.PORT) || 4000;
 const SESSION_COOKIE = "__Host-hammer_session=dev-preview; Path=/; Secure; HttpOnly; SameSite=Lax";
@@ -575,7 +577,7 @@ function mockFinanceSummary() {
   const profit = 107000 - (branchExpenses + central.operatingExpenses) + cashOverages - cashShortages;
   const perf = { grossSales: 420000, refunds: 3000, netSales: 417000, cogs: 310000, grossProfit: 107000, grossMarginPercent: 25.7, cashExpenses: 12000, bankExpenses: 6500, cardFees: 1500,
     retainedCashExpenses: 1500, payrollPaid: 45000, operatingExpenses: branchExpenses + central.operatingExpenses, cashOverages, cashOverageItems: items, cashShortages, cashShortageItems: shortageItems,
-    central, expensesBudgetMonthly: 70000, operatingProfit: profit, estimatedNetProfit: profit, purchasesPaid: 0, payablesOpen: 0,
+    central, outsideOperation: { equipment: 1000, ownerPersonal: 310, total: 1310 }, expensesBudgetMonthly: 70000, operatingProfit: profit, estimatedNetProfit: profit, purchasesPaid: 0, payablesOpen: 0,
     byBranch: [{ branchId: "br-central", branchCode: "MSY", branchName: "Masaya", grossSales: 420000, refunds: 3000, netSales: 417000, cogs: 310000, grossProfit: 107000,
       grossMarginPercent: 25.7, cashExpenses: 12000, bankExpenses: 6500, cardFees: 0, retainedCashExpenses: 1500, payrollPaid: 45000, operatingExpenses: branchExpenses,
       cashOverages, cashShortages, operatingProfit: 107000 - branchExpenses + cashOverages - cashShortages }] };
@@ -750,7 +752,13 @@ const server = http.createServer(async (req, res) => {
   if (path === "/api/master/finance/expenses/period") return ok(res, {
     period: { kind: "MONTH", start: "2026-11-01T06:00:00Z", end: "2026-12-01T05:59:59Z", label: "Noviembre 2026", previous: { start: "2026-10-01T06:00:00Z", end: "2026-11-01T05:59:59Z", label: "Octubre 2026" }, next: { start: "2026-12-01T06:00:00Z", end: "2027-01-01T05:59:59Z", label: "Diciembre 2026" } },
     basis: "PAID", branchId: null,
-    totals: { expenseTotal: 49288.52, netSales: 616000, cogs: 496078.3, grossProfit: 119921.7, operatingProfit: 70633.18, expenseToSalesPercent: 8 },
+    totals: { expenseTotal: 49288.52, netSales: 616000, cogs: 496078.3, grossProfit: 119921.7, operatingProfit: 70633.18, expenseToSalesPercent: 8, outsideOperation: 1310 },
+    byGroup: [
+      { group: "FIXED", label: "Gastos fijos", total: 35344.52 },
+      { group: "OPERATION", label: "Gastos de operación", total: 12619 },
+      { group: "SUPPLIES", label: "Suministros", total: 1325 },
+      { group: "OUTSIDE", label: "Fuera de la operación", total: 1310 },
+    ],
     byCategory: [
       { category: "PAYROLL", total: 32044.52, previousTotal: 15000, average4: 14969.6, deltaPercent: 114, budgetProrated: 30000, budgetExecutedPercent: 107, byConcept: [{ conceptId: null, conceptName: null, total: 32044.52 }] },
       { category: "OTHER", total: 8333, previousTotal: 5000, average4: 5369.25, deltaPercent: 55, budgetProrated: 0, budgetExecutedPercent: null, byConcept: [{ conceptId: null, conceptName: null, total: 8333 }] },
@@ -987,16 +995,19 @@ const server = http.createServer(async (req, res) => {
     });
   }
   if (path === "/api/pricing/branch-comparison" && method === "GET") {
-    // Gastos/unidades distintos por sucursal para ver la comparación; la fórmula es la real.
+    // Gasto y venta distintos por sucursal para ver la comparación; la fórmula es la real.
     const q = url.searchParams;
     const productId = q.get("productId") ?? "";
     const standard = mockStandardPrices.get(productId) ?? 100;
-    const perBranch: Record<string, { expenses: number; units: number; margin: number }> = { "br-central": { expenses: 46000, units: 1000, margin: 30 }, "br-demo": { expenses: 12000, units: 400, margin: 30 } };
+    const perBranch: Record<string, { expenses: number; sales: number; margin: number }> = { "br-central": { expenses: 54800, sales: 417000, margin: 30 }, "br-demo": { expenses: 7700, sales: 0, margin: 30 } };
     const rows = branches.map((b) => {
-      const cfg = perBranch[b.id] ?? { expenses: 0, units: 1000, margin: 30 };
-      const r = calculatePricingSuggestion({ baseCost: Number(q.get("baseCost")), taxPercent: Number(q.get("taxPercent") ?? 0), includeTaxInCost: q.get("includeTaxInCost") === "true", monthlyOperatingExpenses: cfg.expenses, estimatedMonthlyUnits: cfg.units, expenseAllocationScope: "BRANCH", branchMonthlyUnits: cfg.units, marginPercent: cfg.margin, roundingRule: (q.get("roundingRule") ?? "NEAREST_1") as Parameters<typeof calculatePricingSuggestion>[0]["roundingRule"] });
+      const cfg = perBranch[b.id] ?? { expenses: 0, sales: 0, margin: 30 };
+      const rate = expenseRateFrom(cfg.expenses, cfg.sales);
+      const calc = (manual: number) => calculatePricingSuggestion({ baseCost: Number(q.get("baseCost")), taxPercent: Number(q.get("taxPercent") ?? 0), includeTaxInCost: q.get("includeTaxInCost") === "true", monthlyOperatingExpenses: cfg.expenses, expenseAllocationScope: "MANUAL", manualOperatingExpensePerUnit: manual, marginPercent: cfg.margin, roundingRule: (q.get("roundingRule") ?? "NEAREST_1") as Parameters<typeof calculatePricingSuggestion>[0]["roundingRule"] });
+      const landed = calc(0).landedCost;
+      const r = calc(expensePerUnitForRate(landed, cfg.margin, rate));
       const currentPrice = mockBranchPrices.get(`${productId}:${b.id}`)?.price ?? standard;
-      return { branchId: b.id, branchName: b.name, configExists: b.id in perBranch, monthlyExpenses: r.monthlyOperatingExpenses, estimatedMonthlyUnits: cfg.units, operatingExpensePerUnit: r.operatingExpensePerUnit, totalInternalCost: r.totalInternalCost, marginPercent: r.marginPercent, suggestedPrice: r.suggestedPrice, currentPrice, diffPercent: Math.round(((currentPrice - r.suggestedPrice) / r.suggestedPrice) * 1000) / 10 };
+      return { branchId: b.id, branchName: b.name, configExists: b.id in perBranch, monthlyExpenses: cfg.expenses, monthlySales: cfg.sales, expenseRatePercent: rate, operatingExpensePerUnit: r.operatingExpensePerUnit, totalInternalCost: r.totalInternalCost, marginPercent: r.marginPercent, suggestedPrice: r.suggestedPrice, currentPrice, diffPercent: Math.round(((currentPrice - r.suggestedPrice) / r.suggestedPrice) * 1000) / 10, profitAfterExpensesAtCurrent: Math.round((currentPrice - landed - currentPrice * ((rate ?? 0) / 100)) * 100) / 100 };
     });
     return ok(res, { rows, spread: branchPriceSpread(rows.map((r) => r.suggestedPrice)) });
   }
@@ -1173,8 +1184,34 @@ const server = http.createServer(async (req, res) => {
       manualExpenses.filter((e) => e.isActive && (!branchId || e.branchId === branchId) && e.effectiveFrom.slice(0, 10) === today),
     );
   }
+  if (path === "/api/branch/expense-concepts" || path === "/api/master/finance/expense-concepts") {
+    const all = [
+      { id: "con-pasaje", name: "Pasaje", category: "TRANSPORT" }, { id: "con-flete", name: "Flete de mandado", category: "TRANSPORT" },
+      { id: "con-bolsas", name: "Bolsas", category: "SUPPLIES" }, { id: "con-exhib", name: "Exhibición (bridas, ganchos)", category: "SUPPLIES" },
+      { id: "con-herr", name: "Herramienta o equipo", category: "EQUIPMENT" }, { id: "con-mejora", name: "Mejora del local", category: "EQUIPMENT" },
+      { id: "con-pers", name: "Gasto personal", category: "OWNER_PERSONAL" }, { id: "con-mand", name: "Mandado personal", category: "OWNER_PERSONAL" },
+      { id: "con-rep", name: "Reparación", category: "MAINTENANCE" },
+    ];
+    const cat = url.searchParams.get("category");
+    return ok(res, cat ? all.filter((c) => c.category === cat) : all);
+  }
+  if (path === "/api/master/finance/expenses/other-for-review" && method === "GET") {
+    const rows = [
+      { id: "rv-1", amount: 5640, description: "Viaje de arena", effectiveFrom: "2026-11-23T15:00:00Z", payee: null, branchId: "br-demo", category: "OTHER" },
+      { id: "rv-2", amount: 1000, description: "Compra de una balanza", effectiveFrom: "2026-11-20T15:00:00Z", payee: null, branchId: "br-central", category: "SUPPLIES" },
+      { id: "rv-3", amount: 1040, description: "Maíz quebrado para las gallinas", effectiveFrom: "2026-11-18T15:00:00Z", payee: null, branchId: "br-demo", category: "SUPPLIES" },
+      { id: "rv-4", amount: 60, description: "Pasaje al banco", effectiveFrom: "2026-11-17T15:00:00Z", payee: null, branchId: "br-demo", category: "OTHER" },
+      { id: "rv-5", amount: 125, description: "Bridas para exhibir", effectiveFrom: "2026-11-15T15:00:00Z", payee: null, branchId: "br-demo", category: "OTHER" },
+      { id: "rv-6", amount: 80, description: "Varios", effectiveFrom: "2026-11-14T15:00:00Z", payee: null, branchId: "br-demo", category: "OTHER" },
+    ];
+    return ok(res, rows.map((r) => ({ ...r, suggestion: suggestExpenseCategory(r.description) })));
+  }
   if (path === "/api/branch/expenses" && method === "POST") {
     const body = await readJson(req);
+    if (!body.confirmedNotMerchandise) {
+      const s = suggestExpenseCategory(String(body.description ?? ""));
+      if (s?.isPurchase) return send(res, 409, { ok: false, error: { code: "LOOKS_LIKE_MERCHANDISE", message: `"${s.matchedKeyword}" parece mercadería para vender. Si es así, va como Compra de mercadería, no como gasto.`, details: { matchedKeyword: s.matchedKeyword } } });
+    }
     const branchId = String(body.branchId ?? branches[0].id);
     const category = String(body.category ?? "OTHER");
     const amountNum = Number(body.amount ?? 0);
@@ -1792,10 +1829,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (path === "/api/master/brain/inbox") {
       const types = [...new Set(visible.map((d) => d.type))];
-      const groups = types.map((type) => {
+      // Lo aprendido, de muestra: el 1er tipo te sirve, el 2do casi nunca, el resto aprendiendo.
+      const mockRecords = [{ acted: 8, notApplicable: 2, measuredGood: 3, measuredBad: 1 }, { acted: 1, notApplicable: 7, measuredGood: 0, measuredBad: 0 }];
+      const groups = types.map((type, i) => {
         const ds = visible.filter((d) => d.type === type);
+        const verdict = verdictFor(mockRecords[i] ?? { acted: 2, notApplicable: 0, measuredGood: 0, measuredBad: 0 });
         const { entry } = enrich(ds[0]);
-        return { type, typeLabel: entry.label, area: entry.area, cta: entry.cta, groupHref: entry.href({ branchId: null, productId: null, evidence: {}, action: {} }), severity: ds[0].severity, count: ds.length, branches: branches.filter((b) => ds.some((d) => d.branchId === b.id)), impactAmount: ds.reduce((s, d) => s + d.impact, 0), oldestDetectedAt: ds[0].createdAt, hasReappeared: false, productIds: ds.map((d) => d.productId).filter(Boolean), help: buildDecisionSuggestion({ proposedActionType: type, category: ds[0].category, status: "CLOSED", href: null, evidence: {}, action: {} }).help };
+        return { type, typeLabel: entry.label, area: entry.area, cta: entry.cta, groupHref: entry.href({ branchId: null, productId: null, evidence: {}, action: {} }), severity: ds[0].severity, count: ds.length, branches: branches.filter((b) => ds.some((d) => d.branchId === b.id)), impactAmount: ds.reduce((s, d) => s + d.impact, 0), oldestDetectedAt: ds[0].createdAt, hasReappeared: false, productIds: ds.map((d) => d.productId).filter(Boolean), help: buildDecisionSuggestion({ proposedActionType: type, category: ds[0].category, status: "CLOSED", href: null, evidence: {}, action: {} }).help, learning: { level: verdict.level, text: verdict.text } };
       });
       const areas = [...new Set(groups.map((g) => g.area))].map((area) => ({ area, count: groups.filter((g) => g.area === area).reduce((s, g) => s + g.count, 0), criticalCount: groups.filter((g) => g.area === area && g.severity === "CRITICAL").reduce((s, g) => s + g.count, 0) }));
       return ok(res, { groups, areas });

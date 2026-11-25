@@ -66,7 +66,11 @@ export type ExpensePeriodReport = {
     grossProfit: number;
     operatingProfit: number;
     expenseToSalesPercent: number | null;
+    /** Equipo/mejoras y personal del dueño: salió de caja, pero no está en expenseTotal. */
+    outsideOperation?: number;
   };
+  /** Gastos fijos / operación / suministros / fuera de la operación. */
+  byGroup?: Array<{ group: "FIXED" | "OPERATION" | "SUPPLIES" | "OUTSIDE"; label: string; total: number }>;
   byCategory: CategoryBreakdown[];
   byBranch: Array<{ branchId: string | null; branchCode: string | null; branchName: string | null; total: number }>;
   bySource: Array<{ source: ExpenseLedgerSource; total: number }>;

@@ -1,6 +1,7 @@
 import { CashMovementType, Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { conceptMatchesCategory } from "@/modules/pricing/expense-kind";
+import { suggestExpenseCategory } from "@/modules/finance/expense-category-suggestion";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -123,16 +124,25 @@ export async function convertExpenseToCashPurchase(
   });
 }
 
-/** Para el aviso "Revisar N gastos en Otros" — gastos OTHER en el período, con la sugerencia de categoría/concepto (mismas palabras clave del Commit 1). */
-export async function listOtherExpensesForReview(input: { start: Date; end: Date; branchId: string | null }, db: PrismaClient = prisma) {
-  return db.operatingExpense.findMany({
+/**
+ * "Revisar clasificación" (2026-11-26) — antes solo listaba los de Otro, y
+ * la arena anotada como Suministros nunca aparecía. Ahora: todo gasto pagado
+ * del período que está en Otro, o cuya descripción sugiere OTRA categoría (o
+ * una compra de mercadería), con esa sugerencia ya calculada. Solo propone:
+ * Master aplica uno por uno.
+ */
+export async function listExpensesForReview(input: { start: Date; end: Date; branchId: string | null }, db: PrismaClient = prisma) {
+  const expenses = await db.operatingExpense.findMany({
     where: {
-      category: "OTHER",
       kind: "PAID",
+      category: { not: "PAYROLL" },
       effectiveFrom: { gte: input.start, lt: input.end },
       ...(input.branchId ? { branchId: input.branchId } : {}),
     },
-    select: { id: true, amount: true, description: true, effectiveFrom: true, branchId: true, payee: true },
+    select: { id: true, amount: true, description: true, effectiveFrom: true, branchId: true, payee: true, category: true, conceptId: true },
     orderBy: { effectiveFrom: "desc" },
   });
+  return expenses
+    .map((e) => ({ ...e, suggestion: suggestExpenseCategory(e.description) }))
+    .filter((e) => e.category === "OTHER" || (e.suggestion !== null && (e.suggestion.isPurchase || e.suggestion.category !== e.category)));
 }

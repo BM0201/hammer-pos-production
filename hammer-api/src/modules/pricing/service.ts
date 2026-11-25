@@ -1,5 +1,6 @@
 import { CashMovementType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { OUTSIDE_OPERATION_CATEGORIES } from "@/modules/finance/expense-groups";
 import { logAuditEvent } from "@/modules/audit/service";
 import { calculatePricingSuggestion, calculateSuggestedPrice, type PricingSuggestionInput, type SuggestedPriceResult } from "./calculator";
 import type { ApplyPricingInput, CreateExpenseInput, UpdateExpenseInput, UpsertPricingConfigInput } from "./validators";
@@ -235,6 +236,8 @@ export async function getMonthlyExpensesByBranch(branchId: string, db: typeof pr
       // este total) cuentan; PAID (un gasto puntual pagado en caja) no — ese es
       // el bug de fondo (ver computeOperatingExpenses, finance/service.ts).
       kind: { not: "PAID" },
+      // Equipo/mejoras y personal del dueño no son gasto del mes (expense-groups.ts).
+      category: { notIn: [...OUTSIDE_OPERATION_CATEGORIES] },
       effectiveFrom: { lte: new Date() },
       OR: [
         { effectiveTo: null },

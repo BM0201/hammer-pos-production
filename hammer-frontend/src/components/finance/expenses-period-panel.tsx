@@ -105,6 +105,14 @@ function ExpenseDayTooltip({ active, payload, label }: { active?: boolean; paylo
  * YA CARGADA del libro de gastos (no todo el período — paginado, igual que
  * el resto de esta tabla), buscando TODOS los pares, no "contra lo nuevo".
  */
+/** Una línea por grupo, para que se entienda qué entra en cada uno. */
+const GROUP_HINT: Record<"FIXED" | "OPERATION" | "SUPPLIES" | "OUTSIDE", string> = {
+  FIXED: "Planilla, alquiler, luz, agua, impuestos",
+  OPERATION: "Pasajes, carga y descarga, comida, reparaciones",
+  SUPPLIES: "Bolsas, escobas, papelería, limpieza",
+  OUTSIDE: "Equipo, mejoras y gastos personales: no resta de la utilidad",
+};
+
 export function findDuplicatePairs(rows: ExpensePeriodReport["rows"]["items"]): Array<{ a: ExpensePeriodReport["rows"]["items"][number]; b: ExpensePeriodReport["rows"]["items"][number] }> {
   const pairs: Array<{ a: ExpensePeriodReport["rows"]["items"][number]; b: ExpensePeriodReport["rows"]["items"][number] }> = [];
   for (let i = 0; i < rows.length; i += 1) {
@@ -358,6 +366,19 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
             />
           </div>
 
+          {/* ── Los 4 grupos: fijos / operación / suministros / fuera de la operación ── */}
+          {report.byGroup && report.byGroup.some((g) => g.total > 0) && (
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {report.byGroup.map((g) => (
+                <div key={g.group} className="rounded-lg px-3 py-2.5" style={{ background: "var(--color-surface)", border: g.group === "OUTSIDE" ? "0.5px dashed var(--color-border-strong)" : "0.5px solid var(--color-border)" }}>
+                  <p className="text-[11px] font-semibold" style={{ color: "var(--color-text-muted)" }}>{g.label}</p>
+                  <p className="text-base font-bold tabular-nums" style={{ color: "var(--color-text)" }}>{money(g.total)}</p>
+                  <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>{GROUP_HINT[g.group]}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* ── Alertas: "qué pasó" ── */}
           {report.alerts.length > 0 && (
             <div className="rounded-lg p-3 space-y-2" style={{ background: "var(--color-danger-50)", border: "0.5px solid var(--color-danger-200)" }}>
@@ -564,9 +585,9 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
                 Libro de gastos {categoryFilter && `— ${ledgerCategoryLabel(categoryFilter)}`}
               </p>
               <div className="flex items-center gap-3">
-                {isMaster && categoryFilter === "OTHER" && (
+                {isMaster && (
                   <button onClick={() => setReclassifyTarget("bulk")} className="text-xs font-semibold hover:underline" style={{ color: "var(--color-master-700)" }}>
-                    Revisar gastos en Otros
+                    Revisar clasificación
                   </button>
                 )}
                 {categoryFilter && (

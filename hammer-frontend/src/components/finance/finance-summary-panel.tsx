@@ -73,6 +73,8 @@ type FinanceSummary = {
     expensesBudgetMonthly: number;
     operatingProfit: number;
     estimatedNetProfit: number;
+    /** Salió plata, pero no es costo de operar (equipo/mejoras, personal del dueño): no resta de la utilidad operativa. */
+    outsideOperation?: { equipment: number; ownerPersonal: number; total: number };
     byBranch: BranchRow[];
   };
 };
@@ -461,6 +463,17 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                 <PnlRow label="Sobrante de caja" value={perf.cashOverages} kind="plus" />
                 <PnlRow label="Faltante de caja" value={perf.cashShortages} kind="minus" />
                 <PnlRow label="Utilidad operativa" value={perf.operatingProfit} kind="total" />
+                {(perf.outsideOperation?.total ?? 0) > 0 && (
+                  <div className="mt-2 rounded-md px-2.5 py-2 text-xs" style={{ background: "var(--color-surface)", border: "0.5px dashed var(--color-border-strong)" }}>
+                    <p className="font-semibold" style={{ color: "var(--color-text)" }}>Fuera de la operación: {money(perf.outsideOperation!.total)}</p>
+                    <p className="mt-0.5" style={{ color: "var(--color-text-secondary)" }}>
+                      {perf.outsideOperation!.equipment > 0 && <>Equipo y mejoras {money(perf.outsideOperation!.equipment)}</>}
+                      {perf.outsideOperation!.equipment > 0 && perf.outsideOperation!.ownerPersonal > 0 && " · "}
+                      {perf.outsideOperation!.ownerPersonal > 0 && <>Personal del dueño {money(perf.outsideOperation!.ownerPersonal)}</>}
+                    </p>
+                    <p className="mt-0.5 text-[10px]" style={{ color: "var(--color-text-muted)" }}>Salió de caja, pero no es costo de operar la ferretería: no resta de la utilidad operativa.</p>
+                  </div>
+                )}
                 <CashDifferenceList items={perf.cashOverageItems} kind="overage" />
                 <CashDifferenceList items={perf.cashShortageItems} kind="shortage" />
                 <p className="mt-2 text-[10px] leading-relaxed" style={{ color: "var(--color-text-muted)" }}>

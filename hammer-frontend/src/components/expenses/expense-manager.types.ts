@@ -248,6 +248,8 @@ export const CATEGORY_LABELS: Record<string, string> = {
   CASUAL_LABOR: "Carga y descarga",
   BANK_FEES: "Comisiones bancarias",
   OTHER: "Otro",
+  EQUIPMENT: "Equipo y mejoras",
+  OWNER_PERSONAL: "Personal del dueño",
 };
 
 export const CATEGORY_ICONS: Record<string, string> = {
@@ -263,6 +265,8 @@ export const CATEGORY_ICONS: Record<string, string> = {
   CASUAL_LABOR: "C&D",
   BANK_FEES: "BCO",
   OTHER: "OTR",
+  EQUIPMENT: "EQP",
+  OWNER_PERSONAL: "DUE",
 };
 
 export const CATEGORY_COLORS: Record<string, string> = {
@@ -278,9 +282,30 @@ export const CATEGORY_COLORS: Record<string, string> = {
   CASUAL_LABOR: "#a16207",
   BANK_FEES: "#64748b",
   OTHER: "#6b7280",
+  EQUIPMENT: "#0e7490",
+  OWNER_PERSONAL: "#78716c",
 };
 
 export const CATEGORIES = Object.keys(CATEGORY_LABELS);
+
+/**
+ * Los gastos en 4 grupos (misma regla que hammer-api finance/expense-groups.ts).
+ * "Fuera de la operación" salió de caja pero no es costo de operar: no resta
+ * de la utilidad operativa ni entra al % de gasto de Precios.
+ */
+export type ExpenseGroup = "FIXED" | "OPERATION" | "SUPPLIES" | "OUTSIDE";
+export const EXPENSE_GROUP_BY_CATEGORY: Record<string, ExpenseGroup> = {
+  PAYROLL: "FIXED", RENT: "FIXED", UTILITIES: "FIXED", TAXES: "FIXED",
+  TRANSPORT: "OPERATION", CASUAL_LABOR: "OPERATION", FOOD: "OPERATION", MAINTENANCE: "OPERATION", MARKETING: "OPERATION", BANK_FEES: "OPERATION", OTHER: "OPERATION",
+  SUPPLIES: "SUPPLIES",
+  EQUIPMENT: "OUTSIDE", OWNER_PERSONAL: "OUTSIDE",
+};
+export const EXPENSE_GROUP_LABELS: Record<ExpenseGroup, string> = {
+  FIXED: "Gastos fijos",
+  OPERATION: "Gastos de operación",
+  SUPPLIES: "Suministros",
+  OUTSIDE: "Fuera de la operación",
+};
 
 export const FREIGHT_STATUS_LABELS: Record<string, string> = {
   CALCULATED: "Calculado",

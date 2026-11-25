@@ -21,10 +21,17 @@ type KeywordRule = { keywords: string[] } & ({ isPurchase: true } | { isPurchase
 // compra de material, aunque "bloques" también sea palabra clave de compra.
 const RULES: KeywordRule[] = [
   { keywords: ["descarga", "ayudante"], isPurchase: false, category: "CASUAL_LABOR" },
-  { keywords: ["arena", "bloque", "cemento", "viaje de material"], isPurchase: true },
-  { keywords: ["pasaje", "bus", "taxi", "mototaxi"], isPurchase: false, category: "TRANSPORT" },
+  // 2026-11-26 — lo que se compra para VENDER (en Rivas la arena se anotó 7 veces como gasto).
+  { keywords: ["arena", "bloque", "cemento", "viaje de material", "piedrin", "grava", "varilla", "mercaderia"], isPurchase: true },
+  // Fuera de la operación: personal del dueño y equipo/mejoras (expense-groups.ts).
+  { keywords: ["pollo", "gallina", "maiz", "personal"], isPurchase: false, category: "OWNER_PERSONAL" },
+  { keywords: ["balanza", "herramienta", "techo", "mejora", "proyecto"], isPurchase: false, category: "EQUIPMENT" },
+  { keywords: ["pasaje", "bus", "taxi", "mototaxi", "combustible"], isPurchase: false, category: "TRANSPORT" },
   { keywords: ["desayuno", "almuerzo", "cena"], isPurchase: false, category: "FOOD" },
-  { keywords: ["bolsa", "papel", "cloro"], isPurchase: false, category: "SUPPLIES" },
+  { keywords: ["bolsa", "papel", "cloro", "escoba", "brida", "limpieza"], isPurchase: false, category: "SUPPLIES" },
+  { keywords: ["alcaldia", "dgi", "basura", "impuesto"], isPurchase: false, category: "TAXES" },
+  { keywords: ["luz", "energia", "internet", "telefono"], isPurchase: false, category: "UTILITIES" },
+  { keywords: ["reparacion", "pintura", "tubo", "codo"], isPurchase: false, category: "MAINTENANCE" },
 ];
 
 function normalize(text: string): string {
