@@ -5,6 +5,7 @@ import { toHttpErrorResponse } from "@/lib/http";
 import { okCached } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
 import { computeCategoryStats, type ExpenseRecord } from "@/modules/finance/expense-intelligence";
+import { OUTSIDE_OPERATION_CATEGORIES } from "@/modules/finance/expense-groups";
 
 /** Meses de historial que alimentan el presupuesto inteligente. */
 const HISTORY_MONTHS = 6;
@@ -28,7 +29,8 @@ export async function GET(req: NextRequest) {
 
     const rows = await prisma.operatingExpense.findMany({
       where: {
-        category: { not: "PAYROLL" },
+        // Equipo y personal del dueño no son gasto del mes: no arman presupuesto (expense-groups.ts).
+        category: { notIn: ["PAYROLL", ...OUTSIDE_OPERATION_CATEGORIES] },
         cashMovementId: { not: null },
         effectiveFrom: { gte: since },
         ...(branchId ? { branchId } : {}),
