@@ -29,6 +29,8 @@ export type DocumentOrderData = {
   grandTotal: number;
   requiresTransport: boolean;
   transportAmount: number;
+  /** Con tarjeta: el 6% de descuento de contado que no aplica. Ya va en grandTotal. */
+  cardPriceAmount?: number;
   paymentMethod: string | null;
   lines: DocumentLineItem[];
   createdAt: string;

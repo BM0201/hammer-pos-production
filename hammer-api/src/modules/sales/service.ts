@@ -17,6 +17,7 @@ import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/module
 import { resolveCancellationCashPlan, type CashRefundHandling } from "@/modules/sales/cancellation-cash-policy";
 import { bumpBankAccountUsageTx, getLatestUsdToNioRate, recordSaleTenderEntriesTx } from "@/modules/treasury/service";
 import { resolveUsdTenders } from "@/modules/payments/usd-tender";
+import { applyCardPrice } from "@/modules/payments/card-price";
 
 type DirectSaleTenderInput = {
   method: PaymentMethod;
@@ -959,7 +960,7 @@ export async function submitDirectSale(input: {
     const finalStatus = branchConfig.enableDispatch ? SaleOrderStatus.DISPATCH_PENDING : SaleOrderStatus.DISPATCHED;
 
     // Update order
-    const updatedOrder = await tx.saleOrder.update({
+    let updatedOrder = await tx.saleOrder.update({
       where: { id: order.id },
       data: {
         ...totals,
@@ -978,6 +979,13 @@ export async function submitDirectSale(input: {
     });
     if (!tenderSummary.total.eq(grandTotal)) throw new Error("INVALID_PAYMENT_AMOUNT");
 
+    // Con tarjeta el cliente pierde el 6% de descuento de contado (mismo criterio que postSaleOrderPayment).
+    const cardPrice = applyCardPrice(tenderSummary.tenders);
+    const chargedAmount = grandTotal.add(cardPrice.extra);
+    if (cardPrice.extra.gt(0)) {
+      updatedOrder = await tx.saleOrder.update({ where: { id: order.id }, data: { cardPriceAmount: cardPrice.extra, grandTotal: chargedAmount } });
+    }
+
     // Fuente de verdad operacional: el pago hereda el día de la orden (o de la sesión).
     const directSaleOperationalDayId = order.operationalDayId ?? session.operationalDayId ?? null;
 
@@ -990,7 +998,7 @@ export async function submitDirectSale(input: {
         receivedByUserId: input.actorUserId,
         method: tenderSummary.method,
         status: PaymentStatus.POSTED,
-        amount: grandTotal,
+        amount: chargedAmount,
         referenceNumber: tenderSummary.referenceNumber,
         paidAt: now,
         postedAt: now,
@@ -998,7 +1006,7 @@ export async function submitDirectSale(input: {
       },
     });
     await tx.paymentTender.createMany({
-      data: tenderSummary.tenders.map((tender) => ({
+      data: cardPrice.tenders.map((tender) => ({
         paymentId: payment.id,
         operationalDayId: directSaleOperationalDayId,
         method: tender.method,
@@ -1857,6 +1865,7 @@ export async function getSaleOrderDetailForManagement(
       discountTotal: Number(order.discountTotal),
       taxTotal: Number(order.taxTotal),
       transportAmount: Number(order.transportAmount),
+      cardPriceAmount: Number(order.cardPriceAmount),
       grandTotal: Number(order.grandTotal),
     },
     documentMode: order.documentMode,

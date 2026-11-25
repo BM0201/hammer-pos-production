@@ -1689,6 +1689,8 @@ model SaleOrder {
   grandTotal        Decimal         @default(0)
   requiresTransport Boolean         @default(false)
   transportAmount   Decimal         @default(0)
+  /// Lo que se cobró de más por pagar con tarjeta (el cliente pierde el 6% de descuento de contado). Ya va dentro de grandTotal.
+  cardPriceAmount   Decimal         @default(0)
   notes             String?
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt

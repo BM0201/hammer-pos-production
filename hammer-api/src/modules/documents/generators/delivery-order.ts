@@ -61,6 +61,10 @@ export function generateDeliveryOrderHtml(options: DocumentGenerationOptions): s
     ? `<tr><td colspan="3" style="text-align:right;font-size:${fs}px;">Transporte:</td><td style="text-align:right;font-size:${fs}px;">${formatCurrency(order.transportAmount)}</td></tr>`
     : "";
 
+  const cardPriceRow = (order.cardPriceAmount ?? 0) > 0
+    ? `<tr><td colspan="3" style="text-align:right;font-size:${fs}px;">Pago con tarjeta (sin desc. contado 6%):</td><td style="text-align:right;font-size:${fs}px;">${formatCurrency(order.cardPriceAmount ?? 0)}</td></tr>`
+    : "";
+
   const discountRow =
     order.discountTotal > 0
       ? `<tr><td colspan="3" style="text-align:right;font-size:${fs}px;">Descuento:</td><td style="text-align:right;font-size:${fs}px;">-${formatCurrency(order.discountTotal)}</td></tr>`
@@ -154,6 +158,7 @@ export function generateDeliveryOrderHtml(options: DocumentGenerationOptions): s
       </tr>
       ${discountRow}
       ${transportRow}
+      ${cardPriceRow}
       <tr>
         <td colspan="3" style="text-align:right;font-size:${fs + 1}px;font-weight:bold;padding-top:4px;">TOTAL:</td>
         <td style="text-align:right;font-size:${fs + 1}px;font-weight:bold;padding-top:4px;">${formatCurrency(order.grandTotal)}</td>

@@ -180,9 +180,14 @@ export function calculateRefundableAmount(input: {
   quantity: Prisma.Decimal;
   originalQuantity: Prisma.Decimal;
   lineSubtotal: Prisma.Decimal;
+  /** Venta con tarjeta: se devuelve lo que pagó, con su parte del 6% (grandTotal ya lo incluye). */
+  grandTotal?: Prisma.Decimal;
+  cardPriceAmount?: Prisma.Decimal;
 }): Prisma.Decimal {
   if (input.originalQuantity.lte(0)) throw new Error("INVALID_ORIGINAL_QUANTITY");
-  return input.lineSubtotal.mul(input.quantity).div(input.originalQuantity);
+  const base = input.lineSubtotal.mul(input.quantity).div(input.originalQuantity);
+  if (!input.grandTotal || !input.cardPriceAmount?.gt(0)) return base;
+  return base.mul(input.grandTotal).div(input.grandTotal.sub(input.cardPriceAmount)).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 }
 
 function effectiveReturnCost(input: {
@@ -288,6 +293,8 @@ export async function requestSaleReturn(input: RequestSaleReturnInput, actor: Ac
         quantity: requestedQty,
         originalQuantity: line.quantity,
         lineSubtotal: line.lineSubtotal,
+        grandTotal: order.grandTotal,
+        cardPriceAmount: order.cardPriceAmount,
       });
       return {
         saleOrderLineId: line.id,

@@ -67,6 +67,8 @@ type OrderDetail = {
     discountTotal: number;
     taxTotal: number;
     transportAmount: number;
+    /** Lo que se cobró de más con tarjeta (sin el 6% de descuento de contado). */
+    cardPriceAmount?: number;
     grandTotal: number;
   };
   documentMode: string | null;
@@ -720,6 +722,12 @@ function DetailPanel({
                         <span>{money(detail.totals.transportAmount)}</span>
                       </div>
                     )}
+                    {(detail.totals.cardPriceAmount ?? 0) > 0 && (
+                      <div className="flex justify-between">
+                        <span>Con tarjeta (sin desc. contado 6%)</span>
+                        <span>{money(detail.totals.cardPriceAmount ?? 0)}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between border-t border-[var(--color-border)] pt-1 font-semibold">
                       <span>Total</span>
                       <span>{money(detail.totals.grandTotal)}</span>
@@ -984,6 +992,7 @@ function DetailPanel({
             lineSubtotal: l.lineSubtotal,
             pendingOrReturnedQuantity: l.pendingOrReturnedQuantity,
           }))}
+          cardRatio={(detail.totals.cardPriceAmount ?? 0) > 0 ? detail.totals.grandTotal / (detail.totals.grandTotal - (detail.totals.cardPriceAmount ?? 0)) : 1}
           onClose={() => setShowReturnRequest(false)}
           onRequested={() => {
             setShowReturnRequest(false);

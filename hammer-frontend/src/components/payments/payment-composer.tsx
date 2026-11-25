@@ -71,6 +71,16 @@ function round2(value: number) {
 }
 
 /**
+ * Con tarjeta el cliente pierde el 6% de descuento de contado que ya traen los
+ * precios (C$440 → C$466.40). El servidor hace la misma cuenta al guardar
+ * (hammer-api/src/modules/payments/card-price.ts); aquí solo se muestra.
+ */
+export const CARD_PRICE_RATE = 0.06;
+export function cardCharge(amount: number) {
+  return round2(amount + round2(amount * CARD_PRICE_RATE));
+}
+
+/**
  * US$ → C$ a 2 decimales, redondeo hacia arriba en .5 — en enteros (centavos ×
  * diezmilésimas) para dar exactamente lo mismo que el servidor (Decimal
  * ROUND_HALF_UP); con flotantes 40 × 36.6243 podía caer del otro lado del .5.
@@ -185,6 +195,8 @@ export type PaymentComposerProps = {
   availableMethods?: TenderMethod[];
   /** Cuentas propias para "¿a qué cuenta entró?" en transferencias. Sin cuentas cargadas, no se pide. */
   bankAccounts?: BankAccountOption[];
+  /** Cuánto suma la tarjeta (el 6% de descuento de contado que se pierde), para que el encabezado muestre el total real. */
+  onCardExtraChange?: (extra: number) => void;
 };
 
 export function PaymentComposer({
@@ -193,6 +205,7 @@ export function PaymentComposer({
   onSubmit,
   availableMethods = ["CASH", "CARD", "TRANSFER"],
   bankAccounts = [],
+  onCardExtraChange,
 }: PaymentComposerProps) {
   // Tasa USD→NIO que fijó Master en Tesorería; sin tasa no se cobra en dólares.
   const [usdRate, setUsdRate] = useState<number | null>(null);
@@ -246,6 +259,11 @@ export function PaymentComposer({
   const exactMatch = Math.abs(missing) < 0.005;
   const allLinesValid = validations.every((v) => v.valid);
   const canConfirm = !isSubmitting && lines.length > 0 && exactMatch && allLinesValid;
+  const cardExtra = round2(lines.reduce((sum, l, i) => sum + (l.method === "CARD" ? cardCharge(validations[i].amount) - validations[i].amount : 0), 0));
+  const chargeTotal = round2(covered + cardExtra);
+  useEffect(() => {
+    onCardExtraChange?.(cardExtra);
+  }, [cardExtra, onCardExtraChange]);
   const single = lines[0];
 
   function updateLine(id: string, patch: Partial<DraftLine>) {
@@ -319,7 +337,7 @@ export function PaymentComposer({
 
   const submitText = mixed
     ? exactMatch
-      ? `Cobrar ${money(total)} en ${lines.length} formas`
+      ? `Cobrar ${money(chargeTotal)} en ${lines.length} formas`
       : missing > 0
         ? `Falta ${money(missing)}`
         : `Sobra ${money(-missing)}`
@@ -327,7 +345,7 @@ export function PaymentComposer({
       ? "Elige cómo paga"
       : single.method === "USD" && validations[0]?.needsUsd
       ? "Anota cuántos dólares entrega"
-      : `Cobrar ${money(total)} ${METHOD_META[single.method].action}`;
+      : `Cobrar ${money(single.method === "CARD" ? cardCharge(total) : total)} ${METHOD_META[single.method].action}`;
 
   return (
     <div className="@container flex h-full min-h-0 flex-col">
@@ -545,8 +563,11 @@ function MethodBody({
   return (
     <div className="space-y-3">
       <div className="rounded-xl bg-[var(--color-surface-muted)] px-4 py-3 text-center">
-        <p className="text-xs text-[var(--color-text-muted)]">Se cobra {METHOD_META[line.method].action}</p>
-        <p className="text-2xl font-bold tabular-nums text-[var(--color-text)]">{money(total)}</p>
+        <p className="text-xs text-[var(--color-text-muted)]">{line.method === "CARD" ? "Pasa por el datáfono" : `Se cobra ${METHOD_META[line.method].action}`}</p>
+        <p className="text-2xl font-bold tabular-nums text-[var(--color-text)]" data-testid="payment-composer-charge">{money(line.method === "CARD" ? cardCharge(total) : total)}</p>
+        {line.method === "CARD" ? (
+          <p className="text-xs text-[var(--color-text-muted)]">{money(total)} + 6%: con tarjeta no aplica el descuento de contado</p>
+        ) : null}
       </div>
       <ReferenceFields line={line} validation={validation} bankAccounts={bankAccounts} onChange={onChange} onTouch={onTouch} onOpenAccountPicker={onOpenAccountPicker} />
     </div>
@@ -656,20 +677,28 @@ function ReceivedPad({
   );
 }
 
-/** Texto bajo una línea de tarjeta: la plata de tarjeta se liquida a 1-2 días menos comisión. */
-function CardSettlementNote() {
+/** Texto bajo una línea de tarjeta: cuánto pasar por el datáfono (en dos formas) y que se liquida menos comisión. */
+function CardSettlementNote({ amount, showCharge }: { amount: number; showCharge: boolean }) {
   return (
-    <p className="mt-2 flex items-center gap-1.5 rounded-lg bg-[var(--color-warning-50)] px-2.5 py-2 text-[0.6875rem] text-[var(--color-warning-700)]">
-      <AlertTriangle className="h-3 w-3 shrink-0" />
-      <span>Se liquida en 1–2 días menos comisión · queda en <b>Por liquidar</b>, no en el banco</span>
-    </p>
+    <div className="mt-2 space-y-1">
+      {showCharge && amount > 0 ? (
+        <p className="rounded-lg bg-[var(--color-surface-muted)] px-2.5 py-2 text-xs text-[var(--color-text-secondary)]" data-testid="payment-composer-card-charge">
+          Pasa por el datáfono <b className="tabular-nums text-[var(--color-text)]">{money(cardCharge(amount))}</b> ({money(amount)} + 6%, sin descuento de contado)
+        </p>
+      ) : null}
+      <p className="flex items-center gap-1.5 rounded-lg bg-[var(--color-warning-50)] px-2.5 py-2 text-[0.6875rem] text-[var(--color-warning-700)]">
+        <AlertTriangle className="h-3 w-3 shrink-0" />
+        <span>Se liquida en 1–2 días menos comisión · queda en <b>Por liquidar</b>, no en el banco</span>
+      </p>
+    </div>
   );
 }
 
 /** Cuenta de destino (transferencia) + número de referencia (tarjeta y transferencia). */
 function ReferenceFields({
-  line, validation, bankAccounts, onChange, onTouch, onOpenAccountPicker,
+  line, validation, bankAccounts, onChange, onTouch, onOpenAccountPicker, showCardCharge = false,
 }: {
+  showCardCharge?: boolean;
   line: DraftLine;
   validation: LineValidation;
   bankAccounts: BankAccountOption[];
@@ -725,7 +754,7 @@ function ReferenceFields({
           <p className="mt-1 text-xs text-[var(--color-danger-600)]">Requerido para {line.method === "CARD" ? "tarjeta" : "transferencia"}.</p>
         ) : null}
       </div>
-      {line.method === "CARD" ? <CardSettlementNote /> : null}
+      {line.method === "CARD" ? <CardSettlementNote amount={validation.amount} showCharge={showCardCharge} /> : null}
     </div>
   );
 }
@@ -809,7 +838,7 @@ function LineItem({
             {usdRate ? <span className="text-[0.6875rem] text-[var(--color-text-muted)]">a {numFixed(usdRate, 4)} · sin vuelto en esta forma</span> : null}
           </div>
         ) : (
-          <ReferenceFields line={line} validation={validation} bankAccounts={bankAccounts} onChange={onChange} onTouch={onTouch} onOpenAccountPicker={onOpenAccountPicker} />
+          <ReferenceFields line={line} validation={validation} bankAccounts={bankAccounts} onChange={onChange} onTouch={onTouch} onOpenAccountPicker={onOpenAccountPicker} showCardCharge />
         )}
       </div>
     </div>

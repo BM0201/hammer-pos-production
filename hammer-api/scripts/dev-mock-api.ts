@@ -24,6 +24,7 @@
  */
 import http from "node:http";
 import { resolveUsdTenders } from "../src/modules/payments/usd-tender";
+import { applyCardPrice } from "../src/modules/payments/card-price";
 import { cashDifferenceMessage } from "../src/modules/operations/day-summary";
 import { randomUUID } from "node:crypto";
 import {
@@ -1032,7 +1033,10 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       return send(res, 400, { ok: false, error: { code: (error as Error).message, message: (error as Error).message } });
     }
-    console.log("[mock] cobro", JSON.stringify(tenders));
+    // Igual que submitDirectSale: la parte con tarjeta pierde el 6% de descuento de contado.
+    const cardPrice = applyCardPrice(tenders);
+    tenders = cardPrice.tenders;
+    console.log("[mock] cobro", JSON.stringify(tenders), "extra tarjeta", cardPrice.extra.toFixed(2));
     const cash = [...mockCash.values()].find((c) => c.id === body.cashSessionId);
     if (cash) {
       for (const t of tenders) {
@@ -1042,7 +1046,8 @@ const server = http.createServer(async (req, res) => {
         if (t.receivedUsdAmount != null) cash.usdPayments = (cash.usdPayments ?? 0) + t.receivedUsdAmount;
       }
     }
-    const paid = { ...mockTicketJson(), status: "PAID" };
+    const base = mockTicketJson();
+    const paid = { ...base, status: "PAID", cardPriceAmount: cardPrice.extra.toFixed(2), grandTotal: cardPrice.extra.add(base.grandTotal).toFixed(2) };
     mockTicketSeq += 1;
     mockTicket = { id: `so-mock-${mockTicketSeq}`, orderNumber: `CEN-MOCK-${String(mockTicketSeq).padStart(4, "0")}`, lines: [] };
     return ok(res, paid);

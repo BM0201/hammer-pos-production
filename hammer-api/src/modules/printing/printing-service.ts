@@ -248,6 +248,7 @@ ${settings.showCustomerData && order.customer ? `<p>Cliente: ${escapeHtml(order.
 <tr><td>Subtotal</td><td class="right">${money(order.subtotal)}</td></tr>
 <tr><td>Descuento</td><td class="right">${money(order.discountTotal)}</td></tr>
 ${n(order.transportAmount) > 0 ? `<tr><td>Transporte</td><td class="right">${money(order.transportAmount)}</td></tr>` : ""}
+${n(order.cardPriceAmount) > 0 ? `<tr><td>Pago con tarjeta (sin desc. contado 6%)</td><td class="right">${money(order.cardPriceAmount)}</td></tr>` : ""}
 <tr><td>Impuestos</td><td class="right">${money(order.taxTotal)}</td></tr>
 <tr><td><strong>Total</strong></td><td class="right"><strong>${money(order.grandTotal)}</strong></td></tr>
 </table>

@@ -39,9 +39,9 @@ export function destinationForCondition(condition: ReturnCondition): "SELLABLE" 
 }
 
 /** Espejo de calculateRefundableAmount (sales-returns/service.ts) — solo para el estimado en vivo; el backend vuelve a calcularlo al guardar. */
-export function estimateRefundableAmount(input: { lineSubtotal: number; quantity: number; requestedQty: number }): number {
+export function estimateRefundableAmount(input: { lineSubtotal: number; quantity: number; requestedQty: number; cardRatio?: number }): number {
   if (input.quantity <= 0) return 0;
-  return round2((input.lineSubtotal * input.requestedQty) / input.quantity);
+  return round2(((input.lineSubtotal * input.requestedQty) / input.quantity) * (input.cardRatio ?? 1));
 }
 
 /** TOTAL si se devuelve todo lo disponible de todas las líneas con algo disponible; si no, PARTIAL. */
@@ -67,11 +67,14 @@ const ERROR_MESSAGES: Record<string, string> = {
 export function SaleReturnRequestSheet({
   orderId,
   lines,
+  cardRatio = 1,
   onClose,
   onRequested,
 }: {
   orderId: string;
   lines: SaleReturnCandidateLine[];
+  /** Venta con tarjeta: total cobrado ÷ total de contado (se devuelve lo que pagó). */
+  cardRatio?: number;
   onClose: () => void;
   onRequested: (returnNumber: string) => void;
 }) {
@@ -97,7 +100,7 @@ export function SaleReturnRequestSheet({
   const touched = candidates.filter((c) => c.requestedQty > 0);
   const returnType = deriveReturnType(candidates.map((c) => ({ available: c.available, requestedQty: c.requestedQty })));
   const estimatedTotal = round2(
-    touched.reduce((sum, c) => sum + estimateRefundableAmount({ lineSubtotal: c.lineSubtotal, quantity: c.quantity, requestedQty: c.requestedQty }), 0),
+    touched.reduce((sum, c) => sum + estimateRefundableAmount({ lineSubtotal: c.lineSubtotal, quantity: c.quantity, requestedQty: c.requestedQty, cardRatio }), 0),
   );
   const canConfirm = !saving && touched.length > 0 && reason.trim().length >= 3;
 

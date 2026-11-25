@@ -203,7 +203,7 @@ type OrderDetail = {
     id: string; code: string; name: string; legalName: string;
     taxId: string | null; phone: string | null; email: string | null; address: string | null;
   } | null;
-  totals: { subtotal: number; discountTotal: number; taxTotal: number; transportAmount: number; grandTotal: number };
+  totals: { subtotal: number; discountTotal: number; taxTotal: number; transportAmount: number; cardPriceAmount?: number; grandTotal: number };
   documentMode: string;
   requiresManualInvoice: boolean;
   manualInvoice: {
@@ -773,7 +773,7 @@ function printOrderDetail(d: OrderDetail) {
   <div class="muted">Vendedor: ${esc(d.createdBy?.name ?? "—")}</div>
   <h2>Cliente</h2><div>${esc(d.customer?.name ?? "Consumidor final")}${d.customer?.taxId ? ` · RUC ${esc(d.customer.taxId)}` : ""}${d.customer?.phone ? ` · Tel. ${esc(d.customer.phone)}` : ""}</div>
   <h2>Productos</h2><table><thead><tr><th>Producto</th><th>SKU</th><th class="right">Cant.</th><th class="right">Precio</th><th class="right">Subtotal</th></tr></thead><tbody>${rows}</tbody></table>
-  <div class="totals"><div><span>Subtotal</span><span>${money(d.totals.subtotal)}</span></div>${d.totals.discountTotal > 0 ? `<div><span>Descuento</span><span>-${money(d.totals.discountTotal)}</span></div>` : ""}${d.totals.taxTotal > 0 ? `<div><span>Impuestos</span><span>${money(d.totals.taxTotal)}</span></div>` : ""}${d.totals.transportAmount > 0 ? `<div><span>Transporte</span><span>${money(d.totals.transportAmount)}</span></div>` : ""}<div class="grand"><span>Total</span><span>${money(d.totals.grandTotal)}</span></div></div>
+  <div class="totals"><div><span>Subtotal</span><span>${money(d.totals.subtotal)}</span></div>${d.totals.discountTotal > 0 ? `<div><span>Descuento</span><span>-${money(d.totals.discountTotal)}</span></div>` : ""}${d.totals.taxTotal > 0 ? `<div><span>Impuestos</span><span>${money(d.totals.taxTotal)}</span></div>` : ""}${d.totals.transportAmount > 0 ? `<div><span>Transporte</span><span>${money(d.totals.transportAmount)}</span></div>` : ""}${(d.totals.cardPriceAmount ?? 0) > 0 ? `<div><span>Con tarjeta (sin desc. contado 6%)</span><span>${money(d.totals.cardPriceAmount ?? 0)}</span></div>` : ""}<div class="grand"><span>Total</span><span>${money(d.totals.grandTotal)}</span></div></div>
   <div style="clear:both"></div><h2>Pagos</h2><ul>${pays || "<li>Sin pagos</li>"}</ul>${d.notes ? `<h2>Notas</h2><pre style="white-space:pre-wrap;font-family:inherit">${esc(d.notes)}</pre>` : ""}
 </body></html>`;
   const w = window.open("", "_blank", "width=820,height=900");
@@ -1164,6 +1164,7 @@ function InvoicesManagementCard({
                         {detail.totals.discountTotal > 0 && <TotalRow label="Descuento" value={-detail.totals.discountTotal} />}
                         {detail.totals.taxTotal > 0 && <TotalRow label="Impuestos" value={detail.totals.taxTotal} />}
                         {detail.totals.transportAmount > 0 && <TotalRow label="Transporte" value={detail.totals.transportAmount} />}
+                        {(detail.totals.cardPriceAmount ?? 0) > 0 && <TotalRow label="Con tarjeta (sin desc. contado 6%)" value={detail.totals.cardPriceAmount ?? 0} />}
                         <div className="flex items-center justify-between border-t border-[var(--color-border)] pt-1.5 mt-1.5">
                           <span className="font-semibold text-[var(--color-text)]">Total</span>
                           <span className="font-mono font-bold text-base text-[var(--color-text)]">{money(detail.totals.grandTotal)}</span>

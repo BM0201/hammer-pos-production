@@ -87,6 +87,8 @@ function OrderReadOnlyPanel({ lines, total, transportAmount, onBack }: { lines: 
 export function ChargeDialog({ open, onClose, total, branchId, onConfirm, isSubmitting, ticketLines = [], transportAmount = 0 }: ChargeDialogProps) {
   const [bankAccounts, setBankAccounts] = useState<BankAccountOption[]>([]);
   const dialogRef = useRef<HTMLDivElement>(null);
+  // Lo que suma la tarjeta (sin descuento de contado); 0 si no paga con tarjeta.
+  const [cardExtra, setCardExtra] = useState(0);
 
   useEffect(() => {
     if (!open) return;
@@ -152,7 +154,10 @@ export function ChargeDialog({ open, onClose, total, branchId, onConfirm, isSubm
         <div className="mb-4 flex flex-none items-center justify-between">
           <div>
             <h2 className="text-base font-bold text-[var(--color-text)]">Total a cobrar</h2>
-            <p className="text-xl font-bold tabular-nums text-[var(--color-pay)]">{money(total)}</p>
+            <p className="text-xl font-bold tabular-nums text-[var(--color-pay)]" data-testid="charge-dialog-total">{money(total + cardExtra)}</p>
+            {cardExtra > 0 ? (
+              <p className="text-xs text-[var(--color-text-muted)]">Contado {money(total)} + {money(cardExtra)} con tarjeta</p>
+            ) : null}
           </div>
           <button
             onClick={onClose}
@@ -170,7 +175,7 @@ export function ChargeDialog({ open, onClose, total, branchId, onConfirm, isSubm
         <div className="mt-3 grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
           <OrderReadOnlyPanel lines={ticketLines} total={total} transportAmount={transportAmount} onBack={onClose} />
           <div className="min-h-0 flex-1">
-            <PaymentComposer key={String(open)} total={total} isSubmitting={isSubmitting} onSubmit={onConfirm} bankAccounts={bankAccounts} />
+            <PaymentComposer key={String(open)} total={total} isSubmitting={isSubmitting} onSubmit={onConfirm} bankAccounts={bankAccounts} onCardExtraChange={setCardExtra} />
           </div>
         </div>
       </div>

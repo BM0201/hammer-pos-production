@@ -46,6 +46,9 @@ export function CashierPayments({ branchId }: { branchId: string }) {
   // El control de apertura/cierre de caja vive ahora en la pantalla "Caja".
   const { state: cashSessionState, cashBoxLabel, operatorRequired, requiresCashBoxSelection } = useCashSessionStatus(branchId);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Lo que suma la tarjeta al total de la orden seleccionada (el composer lo informa; se remonta por orden).
+  const [cardExtra, setCardExtra] = useState(0);
+  useEffect(() => setCardExtra(0), [selectedOrderId]);
   const [isLoadingOrders, setIsLoadingOrders] = useState(true);
   const [bankAccounts, setBankAccounts] = useState<BankAccountOption[]>([]);
 
@@ -388,7 +391,8 @@ export function CashierPayments({ branchId }: { branchId: string }) {
                 <div className="space-y-1 rounded-lg bg-[var(--color-surface-muted)] p-3">
                   <div className="text-xs text-[var(--color-text-muted)]">Orden</div>
                   <div className="text-sm font-semibold text-[var(--color-text)]">{selected.orderNumber}</div>
-                  <div className="mt-1 font-mono text-2xl font-bold text-[var(--color-pay)]">C$ {Number(selected.grandTotal).toFixed(2)}</div>
+                  <div className="mt-1 font-mono text-2xl font-bold text-[var(--color-pay)]">C$ {(Number(selected.grandTotal) + cardExtra).toFixed(2)}</div>
+                  {cardExtra > 0 && <div className="text-xs text-[var(--color-text-muted)]">Contado C$ {Number(selected.grandTotal).toFixed(2)} + C$ {cardExtra.toFixed(2)} con tarjeta</div>}
                   {transportAmt > 0 && <div className="text-xs text-[var(--color-text-muted)]">Incluye transporte: C$ {transportAmt.toFixed(2)}</div>}
                 </div>
 
@@ -399,6 +403,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
                     isSubmitting={isSubmitting}
                     onSubmit={(tenders) => { void paySelected(tenders); }}
                     bankAccounts={bankAccounts}
+                    onCardExtraChange={setCardExtra}
                   />
                 ) : (
                   <p className="text-center text-sm text-[var(--color-text-muted)]">

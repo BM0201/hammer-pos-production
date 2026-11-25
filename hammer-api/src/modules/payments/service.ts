@@ -17,6 +17,7 @@ import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
 import { bumpBankAccountUsageTx, getLatestUsdToNioRate, recordSaleTenderEntriesTx } from "@/modules/treasury/service";
 import { resolveUsdTenders } from "@/modules/payments/usd-tender";
+import { applyCardPrice } from "@/modules/payments/card-price";
 
 type PaymentTenderInput = {
   method: PaymentMethod;
@@ -342,6 +343,10 @@ export async function postSaleOrderPayment(input: {
         });
       }
 
+      // Con tarjeta el cliente pierde el 6% de descuento de contado: la línea de tarjeta y la orden suben por esa diferencia.
+      const cardPrice = applyCardPrice(tenderSummary.tenders);
+      const chargedAmount = requestedAmount.add(cardPrice.extra);
+
       const session = await validateCashSessionForOrderTx(tx, {
         cashSessionId: input.cashSessionId,
         branchId: order.branchId,
@@ -457,7 +462,7 @@ export async function postSaleOrderPayment(input: {
             receivedByUserId: input.actorUserId,
             method: tenderSummary.method,
             status: PaymentStatus.POSTED,
-            amount: requestedAmount,
+            amount: chargedAmount,
             referenceNumber: tenderSummary.referenceNumber,
             paidAt: now,
             postedAt: now,
@@ -465,7 +470,7 @@ export async function postSaleOrderPayment(input: {
           },
         });
         await tx.paymentTender.createMany({
-          data: tenderSummary.tenders.map((tender) => ({
+          data: cardPrice.tenders.map((tender) => ({
             paymentId: payment.id,
             operationalDayId: paymentOperationalDayId,
             method: tender.method,
@@ -506,7 +511,7 @@ export async function postSaleOrderPayment(input: {
 
       const updatedOrder = await tx.saleOrder.update({
         where: { id: order.id },
-        data: { status: nextStatus },
+        data: { status: nextStatus, ...(cardPrice.extra.gt(0) ? { cardPriceAmount: cardPrice.extra, grandTotal: chargedAmount } : {}) },
       });
 
       await tx.auditLog.create({

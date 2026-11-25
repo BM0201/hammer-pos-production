@@ -69,6 +69,7 @@ export async function buildOrderDocumentData(orderId: string): Promise<DocumentO
     grandTotal: Number(order.grandTotal),
     requiresTransport: order.requiresTransport,
     transportAmount: Number(order.transportAmount),
+    cardPriceAmount: Number(order.cardPriceAmount),
     paymentMethod: latestPayment?.method ?? null,
     lines: order.lines.map((l) => ({
       sku: l.product.sku,

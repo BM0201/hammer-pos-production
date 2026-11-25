@@ -257,3 +257,15 @@ test("package stock: refundableAmount excluye transporte (solo se calcula sobre 
   assert.equal(amount.toNumber(), 500);
   // El lineSubtotal nunca incluye transportAmount (ver aggregateOrderTotals).
 });
+
+test("devolución de venta con tarjeta: devuelve lo que pagó, con su parte del 6%", () => {
+  // 10 bolsas a C$440 con tarjeta: total C$4,664 (C$264 sin desc. de contado). Devuelve 2.
+  const amount = calculateRefundableAmount({
+    quantity: new Prisma.Decimal(2),
+    originalQuantity: new Prisma.Decimal(10),
+    lineSubtotal: new Prisma.Decimal(4400),
+    grandTotal: new Prisma.Decimal(4664),
+    cardPriceAmount: new Prisma.Decimal(264),
+  });
+  assert.equal(amount.toNumber(), 932.8); // 880 × 1.06
+});

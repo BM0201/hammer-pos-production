@@ -9,6 +9,7 @@ import { apiFetch } from "@/lib/client/api";
 import { openPrintableDocument, printHtml, recordPrintAudit } from "@/lib/printing";
 import { money, usdMoney } from "@/lib/format";
 import type { ComposedTender } from "@/components/payments/payment-composer";
+import { cardCharge } from "@/components/payments/payment-composer";
 
 /**
  * Pantalla 2 · Post-cobro (prompt-pantallas-recorrido-dinero.md). No marca
@@ -126,10 +127,12 @@ export function PrintModal({ orderId, orderNumber, tenders, onClose }: PrintModa
     return () => window.removeEventListener("keydown", onKeydown);
   }, [step, handlePrintTicket, onClose]);
 
-  const total = tenders && tenders.length > 0 ? tenders.reduce((sum, t) => sum + t.amount, 0) : null;
+  // La tarjeta se cobró sin el 6% de descuento de contado (el servidor guardó ese monto).
+  const charged = (t: { method: string; amount: number }) => (t.method === "CARD" ? cardCharge(t.amount) : t.amount);
+  const total = tenders && tenders.length > 0 ? tenders.reduce((sum, t) => sum + charged(t), 0) : null;
   const change = tenders?.find((t) => t.method === "CASH")?.changeAmount ?? 0;
   const breakdown = tenders && tenders.length > 0
-    ? tenders.map((t) => (t.receivedUsdAmount ? `Dólares ${usdMoney(t.receivedUsdAmount)} = ${money(t.receivedAmount)}` : `${METHOD_LABEL[t.method] ?? t.method} ${money(t.amount)}`)).join(" · ")
+    ? tenders.map((t) => (t.receivedUsdAmount ? `Dólares ${usdMoney(t.receivedUsdAmount)} = ${money(t.receivedAmount)}` : `${METHOD_LABEL[t.method] ?? t.method} ${money(charged(t))}`)).join(" · ")
     : null;
 
   return (
