@@ -23,10 +23,12 @@ type BranchRow = {
   grossMarginPercent: number | null;
   cashExpenses: number;
   bankExpenses: number;
+  cardFees: number;
   retainedCashExpenses: number;
   payrollPaid: number;
   operatingExpenses: number;
   cashOverages: number;
+  cashShortages: number;
   operatingProfit: number;
 };
 
@@ -49,7 +51,7 @@ type FinanceSummary = {
     productsWithoutPrice: number;
     productsWithoutCost: number;
   };
-  operatingExpenses: { monthlyTotal: number; periodTotal: number };
+  operatingExpenses: { monthlyTotal: number; periodTotal: number; byCategory: Array<{ category: string; amount: number }> };
   payroll: { payrollTotal: number; employerCostTotal: number; pendingPayrollTotal: number };
   realPerformance: {
     grossSales: number;
@@ -60,11 +62,16 @@ type FinanceSummary = {
     grossMarginPercent: number | null;
     cashExpenses: number;
     bankExpenses: number;
+    cardFees: number;
     retainedCashExpenses: number;
     payrollPaid: number;
     operatingExpenses: number;
     cashOverages: number;
     cashOverageItems: CashOverageItem[];
+    cashShortages: number;
+    cashShortageItems: CashOverageItem[];
+    /** Gastos de cuentas centrales sin sucursal (banco central, comisión de tarjeta). */
+    central: { bankExpenses: number; cardFees: number; operatingExpenses: number };
     expensesBudgetMonthly: number;
     operatingProfit: number;
     estimatedNetProfit: number;
@@ -148,6 +155,39 @@ function PnlRow({
         {percent != null && <span className="ml-2 text-[11px] font-normal" style={{ color: "var(--color-text-muted)" }}>{percent.toFixed(1)}%</span>}
       </span>
     </div>
+  );
+}
+
+/** Cajas con sobrante o faltante del período, para revisar con quien cerró. */
+function CashDifferenceList({ items, kind }: { items: CashOverageItem[]; kind: "overage" | "shortage" }) {
+  if (items.length === 0) return null;
+  const overage = kind === "overage";
+  const noun = overage ? "sobrante" : "faltante";
+  return (
+    <details className="mt-2 rounded-md px-2 py-1.5 text-xs" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+      <summary className="cursor-pointer py-1 font-medium" style={{ color: "var(--color-text-secondary)" }}>
+        Revisar {items.length === 1 ? `1 caja con ${noun}` : `${items.length} cajas con ${noun}`}
+      </summary>
+      <p className="mb-1.5 text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+        {overage
+          ? "Sobró dinero al contar. Si fue un cobro anotado como tarjeta o transferencia que en verdad fue efectivo, o un vuelto mal dado, revísalo con quien cerró."
+          : "Faltó dinero al contar. Si fue un cobro con tarjeta o transferencia anotado como efectivo, corrígelo en el historial de la venta; si fue un gasto sin anotar, regístralo. Si no, revísalo con quien cerró."}
+      </p>
+      <ul className="divide-y" style={{ borderColor: "var(--color-border)" }}>
+        {items.map((o) => (
+          <li key={o.cashSessionId} className="flex items-baseline justify-between gap-3 py-1.5">
+            <span style={{ color: "var(--color-text-secondary)" }}>
+              <b style={{ color: "var(--color-text)" }}>{o.branchCode ?? "—"}</b>
+              {o.cashBoxCode ? ` · ${o.cashBoxCode}` : ""} · {fmtDateTimeShort(o.closedAt)}
+              {o.closedByName ? ` · ${o.closedByName}` : ""}
+            </span>
+            <span className="tabular-nums font-medium" style={{ color: overage ? "var(--color-success-700)" : "var(--color-danger-700)" }}>
+              {overage ? money(o.amount) : `−${money(o.amount)}`}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -267,6 +307,9 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
 
   const inv = data?.inventoryProjection;
   const perf = data?.realPerformance;
+  // El presupuesto configurado trae la planilla del mes; el sugerido por historial no.
+  const budgetPayroll = data?.operatingExpenses.byCategory?.find((c) => c.category === "PAYROLL")?.amount ?? 0;
+  const budgetWithoutPayroll = Math.max(0, (perf?.expensesBudgetMonthly ?? 0) - budgetPayroll);
 
   return (
     <div className="space-y-5">
@@ -435,37 +478,20 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                 <PnlRow label="Utilidad bruta" value={perf.grossProfit} kind="subtotal" percent={perf.grossMarginPercent} />
                 <PnlRow label="Gastos pagados desde caja" value={perf.cashExpenses} kind="minus" />
                 <PnlRow label="Gastos pagados desde banco" value={perf.bankExpenses} kind="minus" />
+                <PnlRow label="Comisión de tarjeta" value={perf.cardFees} kind="minus" />
                 <PnlRow label="Gastos con efectivo retenido" value={perf.retainedCashExpenses} kind="minus" />
                 <PnlRow label="Planilla pagada" value={perf.payrollPaid} kind="minus" />
                 <PnlRow label="Sobrante de caja" value={perf.cashOverages} kind="plus" />
+                <PnlRow label="Faltante de caja" value={perf.cashShortages} kind="minus" />
                 <PnlRow label="Utilidad operativa" value={perf.operatingProfit} kind="total" />
-                {perf.cashOverageItems.length > 0 && (
-                  <details className="mt-2 rounded-md px-2 py-1.5 text-xs" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
-                    <summary className="cursor-pointer py-1 font-medium" style={{ color: "var(--color-text-secondary)" }}>
-                      Revisar {perf.cashOverageItems.length === 1 ? "1 caja con sobrante" : `${perf.cashOverageItems.length} cajas con sobrante`}
-                    </summary>
-                    <p className="mb-1.5 text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                      Sobró dinero al contar. Si fue un cobro anotado como tarjeta o transferencia que en verdad fue efectivo, o un vuelto mal dado, revísalo con quien cerró.
-                    </p>
-                    <ul className="divide-y" style={{ borderColor: "var(--color-border)" }}>
-                      {perf.cashOverageItems.map((o) => (
-                        <li key={o.cashSessionId} className="flex items-baseline justify-between gap-3 py-1.5">
-                          <span style={{ color: "var(--color-text-secondary)" }}>
-                            <b style={{ color: "var(--color-text)" }}>{o.branchCode ?? "—"}</b>
-                            {o.cashBoxCode ? ` · ${o.cashBoxCode}` : ""} · {fmtDateTimeShort(o.closedAt)}
-                            {o.closedByName ? ` · ${o.closedByName}` : ""}
-                          </span>
-                          <span className="tabular-nums font-medium" style={{ color: "var(--color-success-700)" }}>{money(o.amount)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
+                <CashDifferenceList items={perf.cashOverageItems} kind="overage" />
+                <CashDifferenceList items={perf.cashShortageItems} kind="shortage" />
                 <p className="mt-2 text-[10px] leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
                   Gastos de caja = egresos que cada sucursal pagó desde la gaveta abierta · gastos de banco = pagos a
-                  proveedor/gasto desde una cuenta bancaria registrada · efectivo retenido = gastos pagados con dinero
+                  proveedor/gasto desde una cuenta bancaria registrada · comisión de tarjeta = lo que el banco descuenta al liquidar las
+                  ventas con tarjeta (entra cuando se confirma la liquidación) · efectivo retenido = gastos pagados con dinero
                   ya cerrado en caja fuerte, esperando depósito — ninguno incluye planilla (va aparte, a costo empresa) ·
-                  sobrante de caja = lo que sobró al contar las cajas cerradas (contado − esperado), ingreso aparte.
+                  sobrante / faltante de caja = lo que sobró o faltó al contar las cajas cerradas (contado − esperado).
                 </p>
               </div>
 
@@ -485,7 +511,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                         <th className="py-1.5 pr-3 text-right">COGS</th>
                         <th className="py-1.5 pr-3 text-right">Ut. bruta</th>
                         <th className="py-1.5 pr-3 text-right">Margen</th>
-                        <th className="py-1.5 pr-3 text-right" title="Egresos de caja + banco + efectivo retenido + planilla pagada del período">Gastos reales</th>
+                        <th className="py-1.5 pr-3 text-right" title="Egresos de caja + banco + comisión de tarjeta + efectivo retenido + planilla pagada del período">Gastos reales</th>
                         <th className="py-1.5 text-right">Ut. operativa</th>
                       </tr>
                     </thead>
@@ -504,6 +530,20 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                           <td className="py-2 text-right tabular-nums font-bold" style={{ color: b.operatingProfit >= 0 ? "var(--color-success-700)" : "var(--color-danger-700)" }}>{money(b.operatingProfit)}</td>
                         </tr>
                       ))}
+                      {perf.central.operatingExpenses > 0 && (
+                        <tr title="Gastos de cuentas centrales que no son de una sucursal: banco central y comisión de tarjeta">
+                          <td className="py-2 pr-3 font-semibold whitespace-nowrap" style={{ color: "var(--color-text)" }}>
+                            Central <span className="font-normal" style={{ color: "var(--color-text-muted)" }}>sin sucursal</span>
+                          </td>
+                          <td colSpan={5} className="py-2 pr-3 text-right text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+                            {perf.central.cardFees > 0 ? `Comisión de tarjeta ${money(perf.central.cardFees)}` : ""}
+                            {perf.central.cardFees > 0 && perf.central.bankExpenses > 0 ? " · " : ""}
+                            {perf.central.bankExpenses > 0 ? `Banco central ${money(perf.central.bankExpenses)}` : ""}
+                          </td>
+                          <td className="py-2 pr-3 text-right tabular-nums" style={{ color: "var(--color-text-secondary)" }}>{money(perf.central.operatingExpenses)}</td>
+                          <td className="py-2 text-right tabular-nums font-bold" style={{ color: "var(--color-danger-700)" }}>{money(-perf.central.operatingExpenses)}</td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 )}
@@ -526,7 +566,8 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
             <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
               Reglas (todo en base caja, corte mensual hora Managua): ventas netas = pagos cobrados − reembolsos ·
               COGS = costo de salidas por venta − reingresos vendibles por devolución (lo dañado queda como merma) ·
-              utilidad operativa = utilidad bruta − gastos REALES pagados (egresos de caja de sucursal + banco + efectivo retenido + planilla desembolsada) + sobrante de caja.
+              utilidad operativa = utilidad bruta − gastos REALES pagados (egresos de caja de sucursal + banco + comisión de tarjeta + efectivo retenido + planilla desembolsada) + sobrante − faltante de caja.
+              Las sucursales más la fila Central suman el total.
               El presupuesto mensual configurado se compara aparte, no se resta.
             </p>
           </section>
@@ -534,14 +575,13 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
           {/* ── 2. Costos del período: real vs presupuesto ── */}
           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Card icon={Wallet} label="Gastos reales pagados" value={money(perf.operatingExpenses)}
-              hint={`Caja ${money(perf.cashExpenses)} + banco ${money(perf.bankExpenses)} + retenido ${money(perf.retainedCashExpenses)} + planilla ${money(perf.payrollPaid)}`} />
+              hint={`Caja ${money(perf.cashExpenses)} + banco ${money(perf.bankExpenses)} + tarjeta ${money(perf.cardFees)} + retenido ${money(perf.retainedCashExpenses)} + planilla ${money(perf.payrollPaid)}`} />
             <Card icon={Receipt} label="Presupuesto mensual configurado" value={money(perf.expensesBudgetMonthly)}
               tone={perf.expensesBudgetMonthly > 0 && perf.operatingExpenses > perf.expensesBudgetMonthly ? "warn" : "default"}
               hint={perf.expensesBudgetMonthly > 0
-                ? `Ejecutado: ${Math.round((perf.operatingExpenses / perf.expensesBudgetMonthly) * 100)}%` +
-                  (suggestedBudget != null ? ` · Sugerido por historial: ${money(suggestedBudget)}` : "")
+                ? `Ejecutado: ${Math.round((perf.operatingExpenses / perf.expensesBudgetMonthly) * 100)}% · incluye planilla ${money(budgetPayroll)}`
                 : suggestedBudget != null
-                  ? `Sin configurar · Sugerido por historial: ${money(suggestedBudget)}`
+                  ? `Sin configurar · Sugerido por historial (sin planilla): ${money(suggestedBudget)}`
                   : "Sin presupuesto configurado"} />
             <Card icon={Users} label="Planilla pagada (bruto)" value={money(data.payroll.payrollTotal)} hint={`Costo patronal: ${money(data.payroll.employerCostTotal)}`} />
             <Card icon={Landmark} label="Planilla pendiente de pago" value={money(data.payroll.pendingPayrollTotal)} tone={data.payroll.pendingPayrollTotal > 0 ? "warn" : "default"}
@@ -587,15 +627,18 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                       (muy por debajo de lo que el negocio gasta de verdad),
                       el "% ejecutado" alarma sin razón — aquí se muestra la
                       referencia real y a dónde ir a actualizarla. */}
-                  {suggestedBudget != null && suggestedBudget > perf.expensesBudgetMonthly * 1.2 && (
+                  {/* El sugerido por historial no trae planilla: se compara contra el presupuesto SIN planilla. */}
+                  {suggestedBudget != null && suggestedBudget > budgetWithoutPayroll * 1.2 && (
                     <p className="rounded-lg px-3 py-2 text-[11px]" style={{ background: "var(--color-warning-50, #fef3c7)", border: "0.5px solid var(--color-warning-200, #fde68a)", color: "var(--color-warning-700, #b45309)" }}>
-                      El presupuesto configurado ({money(perf.expensesBudgetMonthly)}) quedó por debajo de lo que el negocio
+                      Sin contar planilla, el presupuesto configurado es {money(budgetWithoutPayroll)} y quedó por debajo de lo que el negocio
                       gasta de verdad: el historial de los últimos 6 meses sugiere <b>{money(suggestedBudget)}</b>.
                       Actualízalo en <b>Gastos operativos › Presupuesto</b> (botón “Usar sugerido” por categoría).
                     </p>
                   )}
                   <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                    El “gasto real” suma los egresos de caja de sucursal más la planilla desembolsada; el presupuesto es una referencia y no se resta de la utilidad.
+                    El “gasto real” suma caja, banco, comisión de tarjeta, efectivo retenido y planilla pagada; el presupuesto también incluye la planilla del mes
+                    ({money(budgetPayroll)}). Es una referencia y no se resta de la utilidad.
+                    {suggestedBudget != null ? ` Sugerido por historial, sin planilla: ${money(suggestedBudget)} (configurado sin planilla: ${money(budgetWithoutPayroll)}).` : ""}
                   </p>
                 </div>
               );

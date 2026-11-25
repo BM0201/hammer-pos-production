@@ -567,14 +567,22 @@ function mockFinanceSummary() {
     { cashSessionId: "cs-2", branchId: "br-central", branchCode: "RIV", cashBoxCode: "CAJA-01", closedAt: "2026-11-14T21:30:00Z", closedByName: "Cajera Rivas", amount: 45.5 },
   ];
   const cashOverages = items.reduce((t, i) => t + i.amount, 0);
-  const perf = { grossSales: 420000, refunds: 3000, netSales: 417000, cogs: 310000, grossProfit: 107000, grossMarginPercent: 25.7, cashExpenses: 12000, bankExpenses: 8000,
-    retainedCashExpenses: 1500, payrollPaid: 45000, operatingExpenses: 66500, cashOverages, cashOverageItems: items, expensesBudgetMonthly: 70000,
-    operatingProfit: 107000 - 66500 + cashOverages, estimatedNetProfit: 107000 - 66500 + cashOverages, purchasesPaid: 0, payablesOpen: 0,
+  const shortageItems = [{ cashSessionId: "cs-3", branchId: "br-central", branchCode: "MSY", cashBoxCode: "CAJA-01", closedAt: "2026-11-23T23:10:00Z", closedByName: "Elena Bermúdez", amount: 200 }];
+  const cashShortages = shortageItems.reduce((t, i) => t + i.amount, 0);
+  // Banco de la sucursal 6,500 + comisión de tarjeta 1,500 en la cuenta central (sin sucursal).
+  const branchExpenses = 12000 + 6500 + 1500 + 45000;
+  const central = { bankExpenses: 0, cardFees: 1500, operatingExpenses: 1500 };
+  const profit = 107000 - (branchExpenses + central.operatingExpenses) + cashOverages - cashShortages;
+  const perf = { grossSales: 420000, refunds: 3000, netSales: 417000, cogs: 310000, grossProfit: 107000, grossMarginPercent: 25.7, cashExpenses: 12000, bankExpenses: 6500, cardFees: 1500,
+    retainedCashExpenses: 1500, payrollPaid: 45000, operatingExpenses: branchExpenses + central.operatingExpenses, cashOverages, cashOverageItems: items, cashShortages, cashShortageItems: shortageItems,
+    central, expensesBudgetMonthly: 70000, operatingProfit: profit, estimatedNetProfit: profit, purchasesPaid: 0, payablesOpen: 0,
     byBranch: [{ branchId: "br-central", branchCode: "MSY", branchName: "Masaya", grossSales: 420000, refunds: 3000, netSales: 417000, cogs: 310000, grossProfit: 107000,
-      grossMarginPercent: 25.7, cashExpenses: 12000, bankExpenses: 8000, retainedCashExpenses: 1500, payrollPaid: 45000, operatingExpenses: 66500, cashOverages, operatingProfit: 107000 - 66500 + cashOverages }] };
+      grossMarginPercent: 25.7, cashExpenses: 12000, bankExpenses: 6500, cardFees: 0, retainedCashExpenses: 1500, payrollPaid: 45000, operatingExpenses: branchExpenses,
+      cashOverages, cashShortages, operatingProfit: 107000 - branchExpenses + cashOverages - cashShortages }] };
   return { period: { year: 2026, month: 11 },
     inventoryProjection: { inventoryValue: 0, potentialRevenue: 0, potentialGrossProfit: 0, potentialGrossMarginPercent: null, productsWithoutPrice: 0, productsWithoutCost: 0 },
-    operatingExpenses: { monthlyTotal: 70000, periodTotal: 70000 }, payroll: { payrollTotal: 40000, employerCostTotal: 45000, pendingPayrollTotal: 0 }, realPerformance: perf };
+    operatingExpenses: { monthlyTotal: 70000, periodTotal: 70000, byCategory: [{ category: "PAYROLL", amount: 45000 }, { category: "RENT", amount: 15000 }, { category: "UTILITIES", amount: 10000 }] },
+    payroll: { payrollTotal: 40000, employerCostTotal: 45000, pendingPayrollTotal: 0 }, realPerformance: perf };
 }
 // Ticket de Vender en memoria (uno solo, del usuario de preview): para probar Vender → Cobrar sin base de datos.
 type MockTicketLine = { id: string; productId: string; quantity: number; unitPrice: number };

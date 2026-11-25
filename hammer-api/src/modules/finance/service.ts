@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import { listSupplierPayables } from "@/modules/purchase-orders/payables";
 import { isCountableTreasuryExpenseEntry, payrollEmployerCostPaid } from "@/modules/finance/expense-rules";
-import { getExpenseLedger, type ExpenseLedgerSource } from "@/modules/finance/expense-ledger";
+import { getExpenseLedger } from "@/modules/finance/expense-ledger";
 
 export { isCountableTreasuryExpenseEntry, payrollEmployerCostPaid };
 
@@ -123,8 +123,10 @@ export type FinanceSummary = {
     grossMarginPercent: number | null;
     /** Gastos pagados desde caja de sucursal en el período (luz, agua, compras del momento…), sin planilla. */
     cashExpenses: number;
-    /** prompt-tesoreria-cerrar-circuito.md H-2 — gastos/pagos a proveedor pagados desde una cuenta bancaria registrada (recordAccountPaymentTx), sin planilla. */
+    /** prompt-tesoreria-cerrar-circuito.md H-2 — gastos/pagos a proveedor pagados desde una cuenta bancaria registrada (recordAccountPaymentTx), sin planilla ni comisión de tarjeta. */
     bankExpenses: number;
+    /** Comisión que cobra el banco al liquidar las ventas con tarjeta (CARD_FEE). Línea propia: con tarjeta se cobra 6% más y aquí se ve lo que se va. */
+    cardFees: number;
     /** prompt-tesoreria-cerrar-circuito.md H-3 — gastos pagados con efectivo retenido en caja fuerte (recordRetainedCashExpenseTx), sin anulados. */
     retainedCashExpenses: number;
     /**
@@ -133,12 +135,18 @@ export type FinanceSummary = {
      * INATEC y provisiones). Línea propia — ver computeRealPerformance.
      */
     payrollPaid: number;
-    /** Total de gastos REALES del período = cashExpenses + bankExpenses + retainedCashExpenses + payrollPaid. */
+    /** Total de gastos REALES del período = cashExpenses + bankExpenses + cardFees + retainedCashExpenses + payrollPaid. */
     operatingExpenses: number;
     /** Sobrante de caja: diferencia positiva (contado − esperado, C$) de las cajas cerradas en el período. Ingreso aparte, suma a operatingProfit. */
     cashOverages: number;
     /** Cada caja con sobrante, para que Master la revise. */
     cashOverageItems: CashOverageItem[];
+    /** Faltante de caja: diferencia negativa de las cajas cerradas, en positivo. Esa plata ya contó como venta y no está: resta a operatingProfit. */
+    cashShortages: number;
+    /** Cada caja con faltante (amount en positivo). */
+    cashShortageItems: CashOverageItem[];
+    /** Gastos de cuentas centrales sin sucursal (banco central, comisión de tarjeta): la fila "Central" para que las sucursales sumen el total. */
+    central: { bankExpenses: number; cardFees: number; operatingExpenses: number };
     /** Presupuesto mensual configurado (OperatingExpense) — referencia, no se resta. */
     expensesBudgetMonthly: number;
     operatingProfit: number;
@@ -167,10 +175,12 @@ export type FinanceSummary = {
       grossMarginPercent: number | null;
       cashExpenses: number;
       bankExpenses: number;
+      cardFees: number;
       retainedCashExpenses: number;
       payrollPaid: number;
       operatingExpenses: number;
       cashOverages: number;
+      cashShortages: number;
       operatingProfit: number;
     }>;
   };
@@ -187,18 +197,19 @@ export type CashOverageItem = {
 };
 
 /**
- * Sobrante de caja (pedido 2026-11-21: "la diferencia positiva debe contarse").
+ * Sobrante y faltante de caja (pedido 2026-11-21: "la diferencia positiva debe
+ * contarse"; 2026-11-25: el faltante resta igual, si no la utilidad sale inflada).
  * Solo cajas ya cerradas con conteo real — AUTO_CLOSED_PENDING_REVIEW no tiene
  * conteo todavía. Si Master corrige un cobro después, syncCashSessionSnapshotTx
  * recalcula differenceAmount y esto cambia solo.
  * shortcut: solo C$; un sobrante en dólares no entra todavía, sumarlo cuando haya ventas en US$ reales.
  */
-async function fetchCashOverages(branchId: string | null, start: Date, end: Date, db: DbClient) {
+async function fetchCashDifferences(branchId: string | null, start: Date, end: Date, db: DbClient) {
   return db.cashSession.findMany({
     where: {
       status: { in: ["CLOSED", "AUTO_CLOSED", "PERMANENTLY_CLOSED"] },
       closedAt: { gte: start, lt: end },
-      differenceAmount: { gt: 0 },
+      differenceAmount: { not: 0 },
       ...(branchId ? { physicalCashBox: { branchId } } : {}),
     },
     select: {
@@ -371,7 +382,7 @@ async function computePayroll(branchId: string | null, year: number, month: numb
  *    OperatingExpense categorizadas PAYROLL pagadas desde caja. Así la nómina no
  *    se cuenta dos veces (una por la línea de planilla y otra como gasto de caja).
  */
-type TreasuryExpenseEntry = { amount: number; occurredAt: Date; branchId: string | null; kind: "BANK" | "RETAINED_CASH" };
+type TreasuryExpenseEntry = { amount: number; occurredAt: Date; branchId: string | null; kind: "BANK" | "CARD_FEE" | "RETAINED_CASH" };
 
 /**
  * prompt-tesoreria-cerrar-circuito.md H-2/H-3 — el otro sumidero de gasto
@@ -447,6 +458,7 @@ export async function fetchTreasuryExpenseEntries(
       occurredAt: true,
       expensePaymentId: true,
       purchaseOrderId: true,
+      entryType: true,
       account: { select: { branchId: true, type: true } },
     },
   });
@@ -466,7 +478,7 @@ export async function fetchTreasuryExpenseEntries(
       amount: num(e.amount),
       occurredAt: e.occurredAt,
       branchId: e.account.branchId,
-      kind: e.account.type === "SAFE" ? ("RETAINED_CASH" as const) : ("BANK" as const),
+      kind: e.entryType === "CARD_FEE" ? ("CARD_FEE" as const) : e.account.type === "SAFE" ? ("RETAINED_CASH" as const) : ("BANK" as const),
     }));
 }
 
@@ -478,7 +490,7 @@ export async function computeRealPerformance(
   db: DbClient = prisma,
 ) {
   const branchFilter = branchId ? { branchId } : {};
-  const [payments, refunds, movements, branches, expenseLedger, purchasesPaidAgg, supplierPayables, overages] = await Promise.all([
+  const [payments, refunds, movements, branches, expenseLedger, purchasesPaidAgg, supplierPayables, cashDifferences] = await Promise.all([
     db.payment.findMany({
       where: {
         paidAt: { gte: start, lt: end },
@@ -522,21 +534,23 @@ export async function computeRealPerformance(
     // un período ya cerrado no debe moverse por un pago o recepción
     // posteriores (ver asOf en payables.ts).
     listSupplierPayables({ branchId, onlyOpen: true, asOf: end }, db),
-    fetchCashOverages(branchId, start, end, db),
+    fetchCashDifferences(branchId, start, end, db),
   ]);
+  const overages = cashDifferences.filter((o) => num(o.differenceAmount) > 0);
+  const shortages = cashDifferences.filter((o) => num(o.differenceAmount) < 0);
 
   const branchMeta = new Map(branches.map((b) => [b.id, { code: b.code, name: b.name }]));
 
   type BranchAcc = {
     grossSales: number; refunds: number; cogsOut: number; cogsReturned: number;
-    cashExpenses: number; bankExpenses: number; retainedCashExpenses: number; payrollPaid: number;
-    cashOverages: number;
+    cashExpenses: number; bankExpenses: number; cardFees: number; retainedCashExpenses: number; payrollPaid: number;
+    cashOverages: number; cashShortages: number;
   };
   const perBranch = new Map<string, BranchAcc>();
   const acc = (id: string): BranchAcc => {
     let entry = perBranch.get(id);
     if (!entry) {
-      entry = { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0, cashExpenses: 0, bankExpenses: 0, retainedCashExpenses: 0, payrollPaid: 0, cashOverages: 0 };
+      entry = { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0, cashExpenses: 0, bankExpenses: 0, cardFees: 0, retainedCashExpenses: 0, payrollPaid: 0, cashOverages: 0, cashShortages: 0 };
       perBranch.set(id, entry);
     }
     return entry;
@@ -545,6 +559,7 @@ export async function computeRealPerformance(
   for (const p of payments) acc(p.saleOrder.branchId).grossSales += num(p.amount);
   for (const r of refunds) acc(r.branchId).refunds += num(r.amount);
   for (const o of overages) acc(o.physicalCashBox.branchId).cashOverages += num(o.differenceAmount);
+  for (const o of shortages) acc(o.physicalCashBox.branchId).cashShortages -= num(o.differenceAmount);
   for (const m of movements) {
     const cost = num(m.quantity) * num(m.unitCost);
     if ((SALE_OUT_TYPES as readonly string[]).includes(m.movementType)) acc(m.branchId).cogsOut += cost;
@@ -559,13 +574,19 @@ export async function computeRealPerformance(
   // tiene una sucursal a la que atribuirse — cuenta en el total consolidado,
   // fuera de todo byBranch. Solo puede pasar con BANCO/COMISION_TARJETA: las
   // cuentas SAFE siempre tienen branchId (findSafeAccountForBranch las exige).
+  // 2026-11-25: la comisión de tarjeta va en su propia línea (cardFees), ya no dentro de bankExpenses.
   let unattributedBankExpenses = 0;
-  const BANK_SOURCES: ReadonlySet<ExpenseLedgerSource> = new Set(["BANCO", "COMISION_TARJETA"]);
+  let unattributedCardFees = 0;
   for (const row of expenseLedger.rows) {
     if (row.source === "CAJA") { acc(row.branchId!).cashExpenses += row.amount; continue; }
     if (row.source === "PLANILLA") { acc(row.branchId!).payrollPaid += row.amount; continue; }
     if (row.source === "EFECTIVO_RETENIDO") { acc(row.branchId!).retainedCashExpenses += row.amount; continue; }
-    if (BANK_SOURCES.has(row.source)) {
+    if (row.source === "COMISION_TARJETA") {
+      if (!row.branchId) { unattributedCardFees += row.amount; continue; }
+      acc(row.branchId).cardFees += row.amount;
+      continue;
+    }
+    if (row.source === "BANCO") {
       if (!row.branchId) { unattributedBankExpenses += row.amount; continue; }
       acc(row.branchId).bankExpenses += row.amount;
     }
@@ -576,7 +597,7 @@ export async function computeRealPerformance(
       const netSales = b.grossSales - b.refunds;
       const cogs = b.cogsOut - b.cogsReturned;
       const grossProfit = netSales - cogs;
-      const realExpenses = b.cashExpenses + b.bankExpenses + b.retainedCashExpenses + b.payrollPaid;
+      const realExpenses = b.cashExpenses + b.bankExpenses + b.cardFees + b.retainedCashExpenses + b.payrollPaid;
       return {
         branchId: id,
         branchCode: branchMeta.get(id)?.code ?? null,
@@ -589,11 +610,13 @@ export async function computeRealPerformance(
         grossMarginPercent: netSales > 0 ? Math.round((grossProfit / netSales) * 1000) / 10 : null,
         cashExpenses: round2(b.cashExpenses),
         bankExpenses: round2(b.bankExpenses),
+        cardFees: round2(b.cardFees),
         retainedCashExpenses: round2(b.retainedCashExpenses),
         payrollPaid: round2(b.payrollPaid),
         operatingExpenses: round2(realExpenses),
         cashOverages: round2(b.cashOverages),
-        operatingProfit: round2(grossProfit - realExpenses + b.cashOverages),
+        cashShortages: round2(b.cashShortages),
+        operatingProfit: round2(grossProfit - realExpenses + b.cashOverages - b.cashShortages),
       };
     })
     .sort((a, b) => b.netSales - a.netSales);
@@ -608,11 +631,22 @@ export async function computeRealPerformance(
   // unattributedBankExpenses (cuenta central, sin sucursal) solo suma acá —
   // total > sum(byBranch.bankExpenses) es correcto y esperado cuando existe.
   const bankExpenses = byBranch.reduce((s, b) => s + b.bankExpenses, 0) + unattributedBankExpenses;
+  const cardFees = byBranch.reduce((s, b) => s + b.cardFees, 0) + unattributedCardFees;
   const retainedCashExpenses = byBranch.reduce((s, b) => s + b.retainedCashExpenses, 0);
   const payrollPaid = byBranch.reduce((s, b) => s + b.payrollPaid, 0);
-  const realExpenses = cashExpenses + bankExpenses + retainedCashExpenses + payrollPaid;
+  const realExpenses = cashExpenses + bankExpenses + cardFees + retainedCashExpenses + payrollPaid;
   const cashOverages = byBranch.reduce((s, b) => s + b.cashOverages, 0);
-  const operatingProfit = grossProfit - realExpenses + cashOverages;
+  const cashShortages = byBranch.reduce((s, b) => s + b.cashShortages, 0);
+  const operatingProfit = grossProfit - realExpenses + cashOverages - cashShortages;
+  const differenceItem = (o: (typeof cashDifferences)[number]): CashOverageItem => ({
+    cashSessionId: o.id,
+    branchId: o.physicalCashBox.branchId,
+    branchCode: branchMeta.get(o.physicalCashBox.branchId)?.code ?? null,
+    cashBoxCode: o.physicalCashBox.code ?? null,
+    closedAt: (o.closedAt ?? end).toISOString(),
+    closedByName: o.closedBy ? o.closedBy.fullName ?? o.closedBy.username : null,
+    amount: round2(Math.abs(num(o.differenceAmount))),
+  });
 
   return {
     grossSales: round2(grossSales),
@@ -623,19 +657,19 @@ export async function computeRealPerformance(
     grossMarginPercent,
     cashExpenses: round2(cashExpenses),
     bankExpenses: round2(bankExpenses),
+    cardFees: round2(cardFees),
     retainedCashExpenses: round2(retainedCashExpenses),
     payrollPaid: round2(payrollPaid),
     operatingExpenses: round2(realExpenses),
     cashOverages: round2(cashOverages),
-    cashOverageItems: overages.map((o): CashOverageItem => ({
-      cashSessionId: o.id,
-      branchId: o.physicalCashBox.branchId,
-      branchCode: branchMeta.get(o.physicalCashBox.branchId)?.code ?? null,
-      cashBoxCode: o.physicalCashBox.code ?? null,
-      closedAt: (o.closedAt ?? end).toISOString(),
-      closedByName: o.closedBy ? o.closedBy.fullName ?? o.closedBy.username : null,
-      amount: round2(num(o.differenceAmount)),
-    })),
+    cashOverageItems: overages.map(differenceItem),
+    cashShortages: round2(cashShortages),
+    cashShortageItems: shortages.map(differenceItem),
+    central: {
+      bankExpenses: round2(unattributedBankExpenses),
+      cardFees: round2(unattributedCardFees),
+      operatingExpenses: round2(unattributedBankExpenses + unattributedCardFees),
+    },
     expensesBudgetMonthly: round2(operatingExpenses.monthlyTotal),
     operatingProfit: round2(operatingProfit),
     // Sin impuestos modelados: la utilidad neta estimada = utilidad operativa.
@@ -689,6 +723,8 @@ type FinanceTrendPoint = {
   retainedCashExpenses: number;
   payrollPaid: number;
   cashOverages: number;
+  cardFees: number;
+  cashShortages: number;
   operatingProfit: number;
 };
 
@@ -715,7 +751,7 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
   const { end } = managuaMonthRangeUtc(nowParts.year, nowParts.month);
 
   const branchFilter = branchId ? { branchId } : {};
-  const [payments, refunds, movements, cashExpenseMovs, payrollDisbursed, treasuryExpenseEntries, overages] = await Promise.all([
+  const [payments, refunds, movements, cashExpenseMovs, payrollDisbursed, treasuryExpenseEntries, cashDifferences] = await Promise.all([
     prisma.payment.findMany({
       where: {
         paidAt: { gte: start, lt: end },
@@ -751,20 +787,26 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
       select: { amount: true, paidAt: true, payrollLine: { select: { netPay: true, employerCost: true } } },
     }),
     fetchTreasuryExpenseEntries(branchId, start, end),
-    fetchCashOverages(branchId, start, end, prisma),
+    fetchCashDifferences(branchId, start, end, prisma),
   ]);
 
-  type Acc = { grossSales: number; refunds: number; cogsOut: number; cogsReturned: number; cashExpenses: number; bankExpenses: number; retainedCashExpenses: number; payrollPaid: number; cashOverages: number };
+  type Acc = { grossSales: number; refunds: number; cogsOut: number; cogsReturned: number; cashExpenses: number; bankExpenses: number; cardFees: number; retainedCashExpenses: number; payrollPaid: number; cashOverages: number; cashShortages: number };
   const buckets = new Map<number, Acc>();
   // Pre-crear todos los meses para que la serie no tenga huecos (meses sin ventas = 0).
   for (let idx = startIdx; idx <= endIdx; idx++) {
-    buckets.set(idx, { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0, cashExpenses: 0, bankExpenses: 0, retainedCashExpenses: 0, payrollPaid: 0, cashOverages: 0 });
+    buckets.set(idx, { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0, cashExpenses: 0, bankExpenses: 0, cardFees: 0, retainedCashExpenses: 0, payrollPaid: 0, cashOverages: 0, cashShortages: 0 });
   }
   const at = (d: Date | null): Acc | undefined => (d ? buckets.get(managuaMonthIndex(d)) : undefined);
 
   for (const p of payments) { const b = at(p.paidAt); if (b) b.grossSales += num(p.amount); }
   for (const r of refunds) { const b = at(r.postedAt); if (b) b.refunds += num(r.amount); }
-  for (const o of overages) { const b = at(o.closedAt); if (b) b.cashOverages += num(o.differenceAmount); }
+  for (const o of cashDifferences) {
+    const b = at(o.closedAt);
+    if (!b) continue;
+    const diff = num(o.differenceAmount);
+    if (diff > 0) b.cashOverages += diff;
+    else b.cashShortages -= diff;
+  }
   for (const m of movements) {
     const b = at(m.createdAt);
     if (!b) continue;
@@ -783,6 +825,7 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
     const b = at(e.occurredAt);
     if (!b) continue;
     if (e.kind === "BANK") b.bankExpenses += e.amount;
+    else if (e.kind === "CARD_FEE") b.cardFees += e.amount;
     else b.retainedCashExpenses += e.amount;
   }
 
@@ -792,7 +835,7 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
       const netSales = b.grossSales - b.refunds;
       const cogs = b.cogsOut - b.cogsReturned;
       const grossProfit = netSales - cogs;
-      const operatingProfit = grossProfit - b.cashExpenses - b.bankExpenses - b.retainedCashExpenses - b.payrollPaid + b.cashOverages;
+      const operatingProfit = grossProfit - b.cashExpenses - b.bankExpenses - b.cardFees - b.retainedCashExpenses - b.payrollPaid + b.cashOverages - b.cashShortages;
       return {
         year: Math.floor(idx / 12),
         month: (idx % 12) + 1,
@@ -807,6 +850,8 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
         retainedCashExpenses: round2(b.retainedCashExpenses),
         payrollPaid: round2(b.payrollPaid),
         cashOverages: round2(b.cashOverages),
+        cardFees: round2(b.cardFees),
+        cashShortages: round2(b.cashShortages),
         operatingProfit: round2(operatingProfit),
       };
     });
