@@ -20,7 +20,6 @@ const ERROR_MESSAGES_ES: Record<string, string> = {
   CASH_SESSION_CASH_BOX_INVALID: "La caja física no está activa o no pertenece a la sucursal.",
   CASH_SESSION_NOT_RECONCILING: "La sesión debe estar en conciliación antes de cerrarla.",
   CASH_SESSION_UNRESOLVED_ORDERS: "No puedes cerrar caja con órdenes pendientes de pago o despacho.",
-  CASH_SESSION_HAS_PENDING_PAYMENTS: "Hay pagos pendientes en esta sesión. Procésalos antes de cerrar.",
   CASH_SESSION_DISCREPANCY_REQUIRES_APPROVAL: "La diferencia de caja requiere aprobación de un supervisor.",
   INVALID_CASH_SESSION: "La sesión de caja no es válida para esta operación.",
   CASH_BOX_INACTIVE: "La caja física no está activa. Contacta al administrador.",

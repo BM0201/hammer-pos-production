@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { isMaster } from "@/modules/rbac/guards";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
-import { PaymentStatus, SaleOrderStatus } from "@prisma/client";
+import { SaleOrderStatus } from "@prisma/client";
 import { getOperationalWindowForNow } from "@/modules/operations/service";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, fail } from "@/lib/api/response";
@@ -15,7 +15,6 @@ import { ok, fail } from "@/lib/api/response";
 const CONFLICT_REASONS = new Set([
   "CASH_SESSION_NOT_RECONCILING",
   "CASH_SESSION_UNRESOLVED_ORDERS",
-  "CASH_SESSION_HAS_PENDING_PAYMENTS",
   "STALE_PENDING_PAYMENT_ORDERS",
 ]);
 const CASH_DISCREPANCY_APPROVAL_THRESHOLD = 5;
@@ -98,17 +97,6 @@ export async function POST(request: Request) {
         409,
         stalePendingOrders,
       );
-    }
-
-    const pendingPayments = await prisma.payment.count({
-      where: {
-        cashSessionId: cashSession.id,
-        status: { not: PaymentStatus.POSTED },
-      },
-    });
-
-    if (pendingPayments > 0) {
-      return fail("CONFLICT", "CASH_SESSION_HAS_PENDING_PAYMENTS", 409);
     }
 
     // For manual closes the cashier has physically counted the drawer.

@@ -329,7 +329,6 @@ export function toHttpErrorResponse(error: unknown) {
       error.message === "CASH_SESSION_NOT_RECONCILING"
       || error.message === "CASH_SESSION_NOT_PENDING_AUTO_REVIEW"
       || error.message === "CASH_SESSION_UNRESOLVED_ORDERS"
-      || error.message === "CASH_SESSION_HAS_PENDING_PAYMENTS"
       || error.message === "CASH_SESSION_DISCREPANCY_REQUIRES_APPROVAL"
     ) {
       return errJson("CONFLICT", error.message, 409);

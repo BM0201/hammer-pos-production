@@ -493,17 +493,6 @@ export async function requestCloseCashSession(input: {
       throw err;
     }
 
-    const pendingPayments = await tx.payment.count({
-      where: {
-        cashSessionId: session.id,
-        status: { not: PaymentStatus.POSTED },
-      },
-    });
-
-    if (pendingPayments > 0) {
-      throw new Error("CASH_SESSION_HAS_PENDING_PAYMENTS");
-    }
-
     const updated = await tx.cashSession.update({
       where: { id: session.id },
       data: {
@@ -637,17 +626,6 @@ export async function closeCashSession(input: {
         pendingOrders: pendingOrderList,
       });
       throw err;
-    }
-
-    const pendingPayments = await tx.payment.count({
-      where: {
-        cashSessionId: session.id,
-        status: { not: PaymentStatus.POSTED },
-      },
-    });
-
-    if (pendingPayments > 0) {
-      throw new Error("CASH_SESSION_HAS_PENDING_PAYMENTS");
     }
 
     const { openingAmount, postedCashPayments, refundsOrWithdrawals, cashChange, expectedCash, expectedUsd } =
