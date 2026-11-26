@@ -48,13 +48,15 @@ export function useAuthHeartbeat({
       void sendHeartbeat();
     };
 
-    maybeSend();
+    // El primer latido espera 3 s: al abrir, la red es para los datos de la pantalla.
+    const first = window.setTimeout(() => maybeSend(), 3_000);
     const interval = window.setInterval(() => maybeSend(), 120_000);
     const onFocus = () => maybeSend(5_000);
     window.addEventListener("focus", onFocus);
 
     return () => {
       stopped = true;
+      window.clearTimeout(first);
       window.clearInterval(interval);
       window.removeEventListener("focus", onFocus);
     };

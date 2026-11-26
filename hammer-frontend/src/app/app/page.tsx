@@ -1,40 +1,22 @@
 "use client";
 
-import { useEffect } from "react";
+import { useContext, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { SessionContext } from "@/lib/client/session";
 import { resolveRoleHome } from "@/modules/rbac/role-routing";
 
+/**
+ * Inicio de la app (la tablet abre en "/" → "/app"): manda a cada quien a su
+ * pantalla. La sesión ya la trajo el layout de /app (si no hay, el layout
+ * manda al login), así que no se vuelve a pedir al servidor.
+ */
 export default function AppIndexPage() {
   const router = useRouter();
+  const session = useContext(SessionContext);
 
   useEffect(() => {
-    let cancelled = false;
-    apiFetch("/api/auth/session")
-      .then(async (r) => {
-        if (!r.ok) {
-          if (!cancelled) router.replace("/login");
-          return null;
-        }
-        return r.json();
-      })
-      .then((raw) => {
-        if (cancelled || !raw) return;
-        const payload = unwrapApiData(raw);
-        if (!payload.authenticated || !payload.user) {
-          router.replace("/login");
-          return;
-        }
-        const home = resolveRoleHome(payload.user.roleCode, payload.user.globalRoles ?? []);
-        router.replace(home);
-      })
-      .catch(() => {
-        if (!cancelled) router.replace("/login");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
+    if (session) router.replace(resolveRoleHome(session.roleCode, session.globalRoles ?? []));
+  }, [session, router]);
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-[var(--color-page-bg)]">

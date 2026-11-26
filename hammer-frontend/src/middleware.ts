@@ -38,8 +38,8 @@ import { NextResponse, type NextRequest } from "next/server";
  *    (HSTS, X-Frame-Options, etc.) still live in next.config.ts.
  *
  * Role-based redirects (master vs branch vs sysadmin) live in
- * `src/app/app/page.tsx`, which calls `GET /api/auth/session` and routes
- * the user to the correct landing page.
+ * `src/app/app/page.tsx`, which reads the session the /app layout already
+ * fetched and routes the user to the correct landing page.
  */
 // Páginas públicas (sin cookie de sesión): /login, /unauthorized, /forbidden,
 // /health. No viven bajo /app, así que el gate de cookie no las toca; sí

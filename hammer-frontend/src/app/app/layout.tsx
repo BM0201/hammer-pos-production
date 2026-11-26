@@ -28,6 +28,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionPayload | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Una sola vez al abrir la app: antes dependía de pathname y volvía a pedir
+  // la sesión (y re-dibujaba toda la app) en cada cambio de página.
   useEffect(() => {
     let cancelled = false;
     apiFetch("/api/auth/session")
@@ -42,10 +44,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         if (cancelled) return;
         const data = unwrapApiData(payload as ApiResponse<{ authenticated: boolean; user: SessionPayload & { mustChangePassword?: boolean } }>);
         if (data?.authenticated && data.user) {
-          if (data.user.mustChangePassword && pathname !== "/app/change-password") {
-            router.replace("/app/change-password");
-            return;
-          }
           setSession({
             ...data.user,
             sessionVersion: data.user.sessionVersion ?? 0,
@@ -63,9 +61,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [router, pathname]);
+  }, [router]);
 
-  if (loading || !session) {
+  const mustChangePassword = Boolean(session?.mustChangePassword) && pathname !== "/app/change-password";
+  useEffect(() => {
+    if (mustChangePassword) router.replace("/app/change-password");
+  }, [mustChangePassword, router]);
+
+  if (loading || !session || mustChangePassword) {
     return <HammerSplash />;
   }
 

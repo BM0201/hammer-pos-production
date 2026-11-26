@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 /* Misma paleta que login/page.tsx, en sus dos variantes — el splash se pinta
    ANTES de que AppLayout resuelva la sesión, así que no puede depender de las
@@ -36,6 +36,12 @@ const NODES = [
   { cx:  6, cy: 64 },
 ];
 
+/** Paleta como variables CSS: el script pre-paint ya puso data-theme en <html>,
+ *  así el servidor y el cliente pintan el mismo HTML (leerlo en JS rompía la
+ *  hidratación y el splash se quedaba claro en modo oscuro). */
+const vars = (p: Record<string, string>) => Object.entries(p).map(([k, v]) => `--sp-${k}:${v};`).join("");
+const PALETTE_CSS = `.hm-splash{${vars(LIGHT)}}html[data-theme="dark"] .hm-splash{${vars(DARK)}}`;
+
 /**
  * Pantalla de carga de Hammer.
  * Misma estética que la animación de login: fondo cálido, triángulo con punto
@@ -48,20 +54,6 @@ const NODES = [
  */
 export function HammerSplash() {
   const dotRef = useRef<SVGCircleElement>(null);
-  // Lazy initializer obligatorio: leerlo en un useEffect introduce el mismo
-  // frame de retraso (un flash claro) que este componente existe para eliminar.
-  const [pal, setPal] = useState(() =>
-    typeof document !== "undefined" && document.documentElement.dataset.theme === "dark" ? DARK : LIGHT,
-  );
-
-  useEffect(() => {
-    const obs = new MutationObserver(() =>
-      setPal(document.documentElement.dataset.theme === "dark" ? DARK : LIGHT),
-    );
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    return () => obs.disconnect();
-  }, []);
-
   useEffect(() => {
     const dot = dotRef.current;
     if (!dot) return;
@@ -85,19 +77,20 @@ export function HammerSplash() {
   return (
     <div
       role="status"
+      className="hm-splash"
       aria-label="Cargando el sistema"
       style={{
         position: "fixed",
         inset: 0,
         zIndex: 200,
-        background: pal.base,
+        background: "var(--sp-base)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
       }}
     >
-      <style>{`
+      <style>{PALETTE_CSS + `
         @keyframes hmSplashSlide {
           0%   { transform: translateX(-100%); }
           100% { transform: translateX(260%); }
@@ -109,7 +102,7 @@ export function HammerSplash() {
         aria-hidden
         style={{
           position: "absolute", inset: 0, pointerEvents: "none",
-          backgroundImage: `radial-gradient(circle, ${pal.dots} 1px, transparent 1px)`,
+          backgroundImage: `radial-gradient(circle, var(--sp-dots) 1px, transparent 1px)`,
           backgroundSize: "20px 20px",
           opacity: 0.4,
         }}
@@ -119,7 +112,7 @@ export function HammerSplash() {
         aria-hidden
         style={{
           position: "absolute", inset: 0, pointerEvents: "none",
-          backgroundImage: `linear-gradient(${pal.border} 1px, transparent 1px), linear-gradient(90deg, ${pal.border} 1px, transparent 1px)`,
+          backgroundImage: `linear-gradient(var(--sp-border) 1px, transparent 1px), linear-gradient(90deg, var(--sp-border) 1px, transparent 1px)`,
           backgroundSize: "80px 80px",
           opacity: 0.14,
         }}
@@ -134,19 +127,19 @@ export function HammerSplash() {
         aria-hidden
         style={{ position: "relative", zIndex: 1 }}
       >
-        <line x1="36" y1="12" x2="66" y2="64" stroke={pal.border} strokeWidth="1.5" />
-        <line x1="66" y1="64" x2="6"  y2="64" stroke={pal.border} strokeWidth="1.5" />
-        <line x1="6"  y1="64" x2="36" y2="12" stroke={pal.border} strokeWidth="1.5" />
-        <circle cx="36" cy="12" r="6" fill={pal.ink} />
-        <circle cx="66" cy="64" r="5" fill={pal.ink3} />
-        <circle cx="6"  cy="64" r="5" fill={pal.ink3} />
+        <line x1="36" y1="12" x2="66" y2="64" style={{ stroke: "var(--sp-border)" }} strokeWidth="1.5" />
+        <line x1="66" y1="64" x2="6"  y2="64" style={{ stroke: "var(--sp-border)" }} strokeWidth="1.5" />
+        <line x1="6"  y1="64" x2="36" y2="12" style={{ stroke: "var(--sp-border)" }} strokeWidth="1.5" />
+        <circle cx="36" cy="12" r="6" style={{ fill: "var(--sp-ink)" }} />
+        <circle cx="66" cy="64" r="5" style={{ fill: "var(--sp-ink3)" }} />
+        <circle cx="6"  cy="64" r="5" style={{ fill: "var(--sp-ink3)" }} />
         <circle
           ref={dotRef}
           cx="36"
           cy="12"
           r="3"
-          fill={pal.accent}
           style={{
+            fill: "var(--sp-accent)",
             transition: "cx 540ms cubic-bezier(0.4,0,0.2,1), cy 540ms cubic-bezier(0.4,0,0.2,1)",
           }}
         />
@@ -158,7 +151,7 @@ export function HammerSplash() {
           position: "absolute",
           bottom: 0, left: 0, right: 0,
           height: "2px",
-          background: pal.surface,
+          background: "var(--sp-surface)",
           overflow: "hidden",
         }}
       >
@@ -166,7 +159,7 @@ export function HammerSplash() {
           style={{
             height: "100%",
             width: "38%",
-            background: `linear-gradient(90deg, ${pal.accentLo}, ${pal.accent})`,
+            background: `linear-gradient(90deg, var(--sp-accentLo), var(--sp-accent))`,
             borderRadius: "0 2px 2px 0",
             animation: "hmSplashSlide 1.4s cubic-bezier(0.4,0,0.2,1) infinite",
           }}

@@ -86,27 +86,15 @@ export default function CashDestinationPage() {
   const [bankAccounts, setBankAccounts] = useState<BankAccountOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeSheet, setActiveSheet] = useState<SheetKind | null>(null);
-  const [selfFullName, setSelfFullName] = useState("");
   // Hora del conteo de cierre: no se muestra cuánto hay hasta que la gaveta se cuente.
   const [blindCount, setBlindCount] = useState(false);
 
   const selfUserId = sessionState.status === "authenticated" ? sessionState.session.userId : "";
 
-  // fullName no viaja en el JWT de sesión (solo username) — se resuelve una
-  // vez contra /api/auth/session, mismo patrón que idle-lock.tsx, para poder
-  // mostrar "Lo llevás vos: {nombre}" (D.2) en vez de un username interno.
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch("/api/auth/session", { suppressAuthRedirect: true })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((raw) => {
-        if (cancelled || !raw) return;
-        const data = unwrapApiData(raw) as { user?: { fullName?: string | null; username?: string } } | null;
-        if (data?.user) setSelfFullName(data.user.fullName || data.user.username || "");
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
+  // fullName viene en la respuesta de /api/auth/session que ya trajo el layout: no hace falta pedirla otra vez.
+  const selfFullName = sessionState.status === "authenticated"
+    ? ((sessionState.session as { fullName?: string | null }).fullName || sessionState.session.username || "")
+    : "";
 
   const load = useCallback(async () => {
     if (!branchId) return;

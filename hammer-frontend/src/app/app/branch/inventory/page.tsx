@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { InventoryAdmin } from "@/components/inventory/inventory-admin";
 import { CAPABILITIES, canInBranch } from "@/modules/rbac/policies";
-import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
+import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { SessionContext } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
-import type { SessionPayload } from "@/types/auth";
 
 type Branch = { id: string; code: string; name: string };
 
 export default function BranchInventoryPage() {
-  const [session, setSession] = useState<SessionPayload | null>(null);
+  // La sesión ya la trajo el layout de /app.
+  const session = useContext(SessionContext);
   const [branch, setBranch] = useState<Branch | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -19,22 +20,9 @@ export default function BranchInventoryPage() {
     let cancelled = false;
     (async () => {
       try {
-        const sessionRes = await apiFetch("/api/auth/session");
-        if (!sessionRes.ok) {
-          throw new Error("No session");
-        }
-        const sessionJson = await sessionRes.json();
-        const sessionData = unwrapApiData(sessionJson as ApiResponse<{ authenticated: boolean; user: SessionPayload }>);
-        if (!sessionData.authenticated || !sessionData.user) {
-          throw new Error("No session");
-        }
-        const userSession: SessionPayload = {
-          ...sessionData.user,
-          sessionVersion: sessionData.user.sessionVersion ?? 0,
-          exp: sessionData.user.exp ?? Math.floor(Date.now() / 1000) + 3600,
-        };
+        if (!session) throw new Error("No session");
 
-        const branchId = getActiveBranchId(userSession.branchIds, userSession.primaryBranchId);
+        const branchId = getActiveBranchId(session.branchIds, session.primaryBranchId);
         if (!branchId) {
           if (!cancelled) {
             setError("No tienes una sucursal asignada.");
@@ -58,7 +46,6 @@ export default function BranchInventoryPage() {
           return;
         }
         if (!cancelled) {
-          setSession(userSession);
           setBranch(matched);
           setLoading(false);
         }
@@ -72,7 +59,7 @@ export default function BranchInventoryPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [session]);
 
   if (loading) {
     return <p className="text-[var(--color-text-muted)] animate-pulse">Cargando…</p>;

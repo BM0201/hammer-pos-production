@@ -6,7 +6,7 @@ export default function manifest(): MetadataRoute.Manifest {
     id: "/",
     name: "H.A.M.M.E.R. — POS / ERP",
     short_name: "Hammer",
-    start_url: "/",
+    start_url: "/app",
     scope: "/",
     display: "fullscreen",
     background_color: "#EDECEA",
