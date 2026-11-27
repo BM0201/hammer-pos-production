@@ -23,12 +23,13 @@ export type DecisionGroupData = {
   productIds: string[];
   help: string;
   /** Lo que Brain aprendió de tus respuestas a este tipo (brain/learning.ts). */
-  learning?: { level: "LEARNING" | "USEFUL" | "NORMAL" | "NOT_USEFUL"; text: string };
+  learning?: { level: "LEARNING" | "USEFUL" | "NORMAL" | "NOT_USEFUL" | "IGNORED"; text: string };
 };
 
 const LEARNING_CHIP: Partial<Record<NonNullable<DecisionGroupData["learning"]>["level"], { label: string; className: string }>> = {
   USEFUL: { label: "Te sirve", className: "text-[var(--color-success-700)]" },
   NOT_USEFUL: { label: "Casi nunca te sirve", className: "text-[var(--color-text-muted)]" },
+  IGNORED: { label: "Nadie la atiende", className: "text-[var(--color-text-muted)]" },
 };
 
 export type InboxItem = {

@@ -2,7 +2,8 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
 import { getProductStockConversionsBatch } from "@/modules/inventory/unit-conversion";
-import { riskScoreFor, severityForDeviation } from "@/modules/brain/scoring";
+import { riskScoreFor, severityForDeviation, severityRank } from "@/modules/brain/scoring";
+import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 import type { BrainDecisionDraft, BrainDetectorContext } from "@/modules/brain/types";
 
 /**
@@ -114,8 +115,15 @@ export function evaluateWacAgainstSiblingBranches(input: { wac: number; siblingW
 
 /* ── Detector (DB) ────────────────────────────────────────────────────── */
 
+/** Con el WAC apagado (no mueve precios ni costos) un WAC raro es dato a limpiar, no una emergencia: tope MEDIA. */
+export function wacSeverityShown(severity: BrainDecisionDraft["severity"], wacDrivesCost: boolean): BrainDecisionDraft["severity"] {
+  return wacDrivesCost || severityRank(severity) <= severityRank("MEDIUM") ? severity : "MEDIUM";
+}
+
 export async function detectWacHealthDecisions(ctx: BrainDetectorContext): Promise<BrainDecisionDraft[]> {
   const decisions: BrainDecisionDraft[] = [];
+  const wacDrivesCost = await isWacDrivesCostChainEnabled(prisma);
+  const wacOffNote = wacDrivesCost ? "" : " Hoy no cambia precios ni costos (el WAC está apagado).";
 
   const balances = await prisma.inventoryBalance.findMany({
     where: {
@@ -170,13 +178,13 @@ export async function detectWacHealthDecisions(ctx: BrainDetectorContext): Promi
     // Regla 1 — venta por debajo del WAC.
     const priceCheck = evaluateWacAgainstSalePrice({ wac, effectivePrice: effective.effectivePrice === null ? null : n(effective.effectivePrice) });
     if (priceCheck.isSuspicious && priceCheck.excessPercent !== null) {
-      const severity = severityForDeviation(priceCheck.excessPercent, WAC_ABOVE_PRICE_TOLERANCE);
+      const severity = wacSeverityShown(severityForDeviation(priceCheck.excessPercent, WAC_ABOVE_PRICE_TOLERANCE), wacDrivesCost);
       const effectivePriceNum = n(effective.effectivePrice);
       decisions.push({
         category: "INVENTORY",
         severity,
         title: `WAC por encima del precio de venta: ${label}`,
-        description: `${balance.branch.code}: WAC C$${wac.toFixed(2)} supera el precio de venta vigente C$${effectivePriceNum.toFixed(2)} por ${(priceCheck.excessPercent * 100).toFixed(1)}% — umbral ${(WAC_ABOVE_PRICE_TOLERANCE * 100).toFixed(0)}%.`,
+        description: `${balance.branch.code}: WAC C$${wac.toFixed(2)} supera el precio de venta vigente C$${effectivePriceNum.toFixed(2)} por ${(priceCheck.excessPercent * 100).toFixed(1)}% — umbral ${(WAC_ABOVE_PRICE_TOLERANCE * 100).toFixed(0)}%.${wacOffNote}`,
         recommendation: "Revisar si el WAC está contaminado (factor de fusión, movimiento mal tecleado) antes de reactivar wac_drives_cost_chain — con el flag prendido, este producto se vendería a pérdida.",
         branchId: balance.branchId,
         productId: balance.productId,
@@ -207,12 +215,12 @@ export async function detectWacHealthDecisions(ctx: BrainDetectorContext): Promi
       lastPurchaseCost: effective.lastPurchaseCost === null || effective.lastPurchaseCost === undefined ? null : n(effective.lastPurchaseCost),
     });
     if (costChainCheck.isSuspicious && costChainCheck.deviationPercent !== null && costChainCheck.referenceCost !== null) {
-      const severity = severityForDeviation(costChainCheck.deviationPercent, WAC_VS_COST_CHAIN_TOLERANCE);
+      const severity = wacSeverityShown(severityForDeviation(costChainCheck.deviationPercent, WAC_VS_COST_CHAIN_TOLERANCE), wacDrivesCost);
       decisions.push({
         category: "INVENTORY",
         severity,
         title: `WAC se aleja del costo registrado: ${label}`,
-        description: `${balance.branch.code}: WAC C$${wac.toFixed(2)} se desvía ${(costChainCheck.deviationPercent * 100).toFixed(1)}% de ${costChainCheck.referenceSource} (C$${costChainCheck.referenceCost.toFixed(2)}) — umbral ${(WAC_VS_COST_CHAIN_TOLERANCE * 100).toFixed(0)}%.`,
+        description: `${balance.branch.code}: WAC C$${wac.toFixed(2)} se desvía ${(costChainCheck.deviationPercent * 100).toFixed(1)}% de ${costChainCheck.referenceSource} (C$${costChainCheck.referenceCost.toFixed(2)}) — umbral ${(WAC_VS_COST_CHAIN_TOLERANCE * 100).toFixed(0)}%.${wacOffNote}`,
         recommendation: "Comparar contra facturas de compra reales antes de reactivar wac_drives_cost_chain — una desviación así de grande suele ser un factor de conversión mal cargado.",
         branchId: balance.branchId,
         productId: balance.productId,
@@ -240,12 +248,12 @@ export async function detectWacHealthDecisions(ctx: BrainDetectorContext): Promi
     const siblings = (siblingsByCanonicalId.get(canonicalId) ?? []).filter((s) => s.branchId !== balance.branchId);
     const siblingCheck = evaluateWacAgainstSiblingBranches({ wac, siblingWacs: siblings.map((s) => s.wac) });
     if (siblingCheck.isSuspicious && siblingCheck.deviationPercent !== null && siblingCheck.siblingAverageWac !== null) {
-      const severity = severityForDeviation(siblingCheck.deviationPercent, WAC_SIBLING_BRANCH_TOLERANCE);
+      const severity = wacSeverityShown(severityForDeviation(siblingCheck.deviationPercent, WAC_SIBLING_BRANCH_TOLERANCE), wacDrivesCost);
       decisions.push({
         category: "INVENTORY",
         severity,
         title: `WAC distinto entre sucursales: ${label}`,
-        description: `${balance.branch.code}: WAC C$${wac.toFixed(2)} se desvía ${(siblingCheck.deviationPercent * 100).toFixed(1)}% del promedio de ${siblingCheck.siblingCount} sucursal(es) hermana(s) (C$${siblingCheck.siblingAverageWac.toFixed(2)}: ${siblings.map((s) => `${s.branchCode}=C$${s.wac.toFixed(2)}`).join(", ")}) — umbral ${(WAC_SIBLING_BRANCH_TOLERANCE * 100).toFixed(0)}%.`,
+        description: `${balance.branch.code}: WAC C$${wac.toFixed(2)} se desvía ${(siblingCheck.deviationPercent * 100).toFixed(1)}% del promedio de ${siblingCheck.siblingCount} sucursal(es) hermana(s) (C$${siblingCheck.siblingAverageWac.toFixed(2)}: ${siblings.map((s) => `${s.branchCode}=C$${s.wac.toFixed(2)}`).join(", ")}) — umbral ${(WAC_SIBLING_BRANCH_TOLERANCE * 100).toFixed(0)}%.${wacOffNote}`,
         recommendation: "Confirmar si la diferencia es una compra real más cara/barata en esta sucursal o un dato contaminado — mismo chequeo que fix-fusion-canonical-cost.ts --source=sibling-branch, acá disparado solo.",
         branchId: balance.branchId,
         productId: balance.productId,

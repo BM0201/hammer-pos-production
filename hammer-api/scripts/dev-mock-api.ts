@@ -1830,10 +1830,10 @@ const server = http.createServer(async (req, res) => {
     if (path === "/api/master/brain/inbox") {
       const types = [...new Set(visible.map((d) => d.type))];
       // Lo aprendido, de muestra: el 1er tipo te sirve, el 2do casi nunca, el resto aprendiendo.
-      const mockRecords = [{ acted: 8, notApplicable: 2, measuredGood: 3, measuredBad: 1 }, { acted: 1, notApplicable: 7, measuredGood: 0, measuredBad: 0 }];
+      const mockRecords = [{ acted: 8, notApplicable: 2, measuredGood: 3, measuredBad: 1, ignored: 0 }, { acted: 0, notApplicable: 0, measuredGood: 0, measuredBad: 0, ignored: 9 }];
       const groups = types.map((type, i) => {
         const ds = visible.filter((d) => d.type === type);
-        const verdict = verdictFor(mockRecords[i] ?? { acted: 2, notApplicable: 0, measuredGood: 0, measuredBad: 0 });
+        const verdict = verdictFor(mockRecords[i] ?? { acted: 2, notApplicable: 0, measuredGood: 0, measuredBad: 0, ignored: 0 });
         const { entry } = enrich(ds[0]);
         return { type, typeLabel: entry.label, area: entry.area, cta: entry.cta, groupHref: entry.href({ branchId: null, productId: null, evidence: {}, action: {} }), severity: ds[0].severity, count: ds.length, branches: branches.filter((b) => ds.some((d) => d.branchId === b.id)), impactAmount: ds.reduce((s, d) => s + d.impact, 0), oldestDetectedAt: ds[0].createdAt, hasReappeared: false, productIds: ds.map((d) => d.productId).filter(Boolean), help: buildDecisionSuggestion({ proposedActionType: type, category: ds[0].category, status: "CLOSED", href: null, evidence: {}, action: {} }).help, learning: { level: verdict.level, text: verdict.text } };
       });

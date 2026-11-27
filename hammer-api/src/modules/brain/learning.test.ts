@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { adjustPriority, verdictFor, verdictForScope, learningKey, type LearningBook } from "@/modules/brain/learning";
 import { judgePriceChange, summarizeLines } from "@/modules/brain/outcomes";
 
-const rec = (acted: number, notApplicable: number, measuredGood = 0, measuredBad = 0) => ({ acted, notApplicable, measuredGood, measuredBad });
+const rec = (acted: number, notApplicable: number, measuredGood = 0, measuredBad = 0, ignored = 0) => ({ acted, notApplicable, measuredGood, measuredBad, ignored });
 
 describe("lo que Brain aprende de tus respuestas", () => {
   it("con menos de 5 respuestas no saca conclusiones", () => {
@@ -39,6 +39,16 @@ describe("lo que Brain aprende de tus respuestas", () => {
     assert.equal(verdictForScope(book, key, "MSY").level, "NOT_USEFUL");
     assert.equal(verdictForScope(book, key, "RIV").level, "USEFUL"); // pocas propias → usa todas
     assert.equal(verdictForScope(book, key, null).level, "USEFUL");
+  });
+
+  it("lo que nadie toca en 30 días también le enseña: baja aunque nadie conteste", () => {
+    const v = verdictFor(rec(0, 0, 0, 0, 12));
+    assert.equal(v.level, "IGNORED");
+    assert.equal(v.priorityFactor, 0.7);
+    assert.match(v.text, /12 llevan más de 30 días abiertas/);
+    assert.equal(verdictFor(rec(0, 0, 0, 0, 3)).level, "LEARNING");
+    // Si actuás en la mayoría, lo ignorado no la hunde.
+    assert.equal(verdictFor(rec(8, 0, 0, 0, 2)).level, "USEFUL");
   });
 
   it("una CRÍTICA nunca baja de prioridad", () => {

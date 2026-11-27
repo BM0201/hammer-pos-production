@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  wacSeverityShown,
   evaluateWacAgainstSalePrice,
   evaluateWacAgainstCostChain,
   pickCostChainReference,
@@ -130,4 +131,11 @@ test("el umbral de la regla 1 es el mismo FACTOR_TOLERANCE (15%) que fix-fusion-
 test("los umbrales de las reglas 2 y 3 son más laxos que el de la regla 1, en ese orden", () => {
   assert.ok(WAC_VS_COST_CHAIN_TOLERANCE > WAC_ABOVE_PRICE_TOLERANCE);
   assert.ok(WAC_SIBLING_BRANCH_TOLERANCE > WAC_VS_COST_CHAIN_TOLERANCE);
+});
+
+test("con el WAC apagado nada del WAC pasa de MEDIA; prendido manda la desviación", () => {
+  assert.equal(wacSeverityShown("CRITICAL", false), "MEDIUM");
+  assert.equal(wacSeverityShown("HIGH", false), "MEDIUM");
+  assert.equal(wacSeverityShown("LOW", false), "LOW");
+  assert.equal(wacSeverityShown("CRITICAL", true), "CRITICAL");
 });

@@ -135,7 +135,7 @@ export type InboxGroup = {
   learning: { level: LearningLevel; text: string };
 };
 
-const LEARNING_ORDER: Record<LearningLevel, number> = { USEFUL: 2, NORMAL: 1, LEARNING: 1, NOT_USEFUL: 0 };
+const LEARNING_ORDER: Record<LearningLevel, number> = { USEFUL: 2, NORMAL: 1, LEARNING: 1, NOT_USEFUL: 0, IGNORED: 0 };
 
 export async function getBrainInbox(filters: InboxFilters, db: Db = prisma): Promise<{ groups: InboxGroup[]; areas: Array<{ area: DecisionArea; count: number; criticalCount: number }> }> {
   const where = buildWhere(filters);

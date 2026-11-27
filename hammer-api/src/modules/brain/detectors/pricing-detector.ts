@@ -405,14 +405,15 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
     if (commercial.combinedClass === "CZ" && n(balance.quantityOnHand) > 0) {
       decisions.push({
         category: "PRICING",
-        severity: "HIGH",
+        // C = poco valor: revisar su política es limpieza, no urgencia (eran 234 productos en ALTA).
+        severity: "LOW",
         title: `Politica CZ con stock: ${balance.product.sku}`,
         description: `${balance.product.name} esta clasificado CZ y mantiene stock en ${balance.branch.code}.`,
         recommendation: "Revisar politica de precio/stock: vender bajo pedido, liquidar o reducir reposicion.",
         branchId: balance.branchId,
         productId: balance.productId,
         confidenceScore: 0.75,
-        riskScore: riskScoreFor("HIGH", 0.75),
+        riskScore: riskScoreFor("LOW", 0.75),
         proposedActionType: "REVIEW_CZ_STOCK_PRICE_POLICY",
         evidenceJson: { stock: n(balance.quantityOnHand), commercialIntelligence: commercial, categoryPolicy: policy.categoryPolicy },
         sourceJson: { detector: "pricing-detector" },
